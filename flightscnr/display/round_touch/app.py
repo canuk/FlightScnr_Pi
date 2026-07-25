@@ -63,6 +63,9 @@ SCREEN_TRACKED = "tracked"
 SCREEN_WIFI_SETUP = "wifi_setup"
 
 SECONDARY_TIMEOUT_S = 45
+# FLIGHTSCNR_FRAME_DEBUG=1 logs draw cost and achieved frame interval every 2s.
+# The sweep turns 60°/s, so anything past ~20ms/frame shows as a stepping beam.
+FRAME_DEBUG = os.environ.get("FLIGHTSCNR_FRAME_DEBUG", "").lower() in ("1", "true", "yes")
 BOOT_SPLASH_S = 3
 AUTO_IDLE_MIN_RADAR_S = 5
 OFF_HOURS_TOUCH_WAKE_S = 300
@@ -168,6 +171,10 @@ class RoundTouchDisplay:
         self._pan_drag_start = None
         self._long_press_pan = long_press_pan.LongPressPanController()
         self._pan_drag_was_active = False
+        self._frame_draws: list[float] = []
+        self._frame_gaps: list[float] = []
+        self._frame_prev_at = 0.0
+        self._frame_log_at = 0.0
         self._rgb_slider_channel: int | None = None
         self._brightness_slider_active = False
         self._vfr_opacity_slider_active = False
@@ -378,10 +385,11 @@ class RoundTouchDisplay:
             self._present()
             return
 
+        bezel_applied = False
         if self.screen == SCREEN_WIFI_SETUP:
             wifi_setup_screen.draw_wifi_setup(self.surface)
         elif self.screen == SCREEN_RADAR:
-            radar.draw_radar(
+            bezel_applied = radar.draw_radar(
                 self.surface,
                 self._radar_flights(),
                 calibrate=self._calibrating_facing,
@@ -434,7 +442,9 @@ class RoundTouchDisplay:
         remaining = self._timeout_remaining_fraction()
         if remaining is not None:
             draw.draw_timeout_ring(self.surface, remaining)
-        draw.apply_round_bezel(self.surface)
+            bezel_applied = False
+        if not bezel_applied:
+            draw.apply_round_bezel(self.surface)
         self._present()
 
     def _timeout_duration_s(self) -> float | None:
@@ -463,9 +473,43 @@ class RoundTouchDisplay:
         elapsed = time.time() - self._secondary_activity
         return max(0.0, (timeout_s - elapsed) / timeout_s)
 
+    def _note_frame_time(self, draw_s: float) -> None:
+        """Log draw cost and achieved interval every 2s (FLIGHTSCNR_FRAME_DEBUG=1)."""
+        now = time.perf_counter()
+        if self._frame_prev_at:
+            self._frame_gaps.append(now - self._frame_prev_at)
+        self._frame_prev_at = now
+        self._frame_draws.append(draw_s)
+        if now - self._frame_log_at < 2.0:
+            return
+        self._frame_log_at = now
+        draws = sorted(self._frame_draws)
+        gaps = sorted(self._frame_gaps)
+        self._frame_draws = []
+        self._frame_gaps = []
+        if not draws or not gaps:
+            return
+        avg_gap = sum(gaps) / len(gaps)
+        logger.info(
+            "[frame] screen=%s n=%d draw avg=%.1f p95=%.1f max=%.1fms | "
+            "interval avg=%.1f p95=%.1fms (%.0f fps, %.2f°/frame)",
+            self.screen,
+            len(draws),
+            sum(draws) / len(draws) * 1000.0,
+            draws[min(len(draws) - 1, int(len(draws) * 0.95))] * 1000.0,
+            draws[-1] * 1000.0,
+            avg_gap * 1000.0,
+            gaps[min(len(gaps) - 1, int(len(gaps) * 0.95))] * 1000.0,
+            1.0 / avg_gap if avg_gap else 0.0,
+            360.0 * avg_gap / (theme.SWEEP_PERIOD_MS / 1000.0),
+        )
+
     def _safe_draw(self):
+        started = time.perf_counter() if FRAME_DEBUG else 0.0
         try:
             self._draw()
+            if FRAME_DEBUG:
+                self._note_frame_time(time.perf_counter() - started)
         except Exception as exc:
             self._fatal_error = str(exc)
             logger.exception("Display draw failed")

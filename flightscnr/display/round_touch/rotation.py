@@ -57,6 +57,9 @@ def present(display: pygame.Surface, frame: pygame.Surface) -> None:
         return
 
     rotated = pygame.transform.rotate(frame, -rotation)
+    if display.get_size() == rotated.get_size():
+        display.blit(rotated, (0, 0))
+        return
     display.fill((0, 0, 0))
     display.blit(rotated, _center_offset(display, rotated))
 

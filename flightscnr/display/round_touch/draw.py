@@ -8,7 +8,7 @@ from display.round_touch import theme
 
 _font_cache = {}
 _sweep_overlay: pygame.Surface | None = None
-_sweep_overlay_side = 0
+_sweep_overlay_size = (0, 0)
 
 
 def load_font(size: int, bold=False) -> pygame.font.Font:
@@ -135,15 +135,18 @@ def draw_dashed_line(surface, start, end, color, width=2):
         pos += pattern
 
 
-def _sweep_overlay_surface(side: int) -> pygame.Surface:
-    """Reusable clearable alpha surface for the sweep wedge."""
-    global _sweep_overlay, _sweep_overlay_side
-    side = max(8, int(side))
-    if _sweep_overlay is None or _sweep_overlay_side != side:
-        _sweep_overlay = pygame.Surface((side, side), pygame.SRCALPHA)
-        _sweep_overlay_side = side
-    else:
-        _sweep_overlay.fill((0, 0, 0, 0))
+def _sweep_overlay_surface(width: int, height: int) -> pygame.Surface:
+    """Reusable SRCALPHA buffer; grows as needed, cleared by the caller."""
+    global _sweep_overlay, _sweep_overlay_size
+    width = max(8, int(width))
+    height = max(8, int(height))
+    ow, oh = _sweep_overlay_size
+    if _sweep_overlay is None or width > ow or height > oh:
+        # Pad a bit so we don't realloc every other frame as the AABB breathes.
+        nw = max(width, ow) + 16
+        nh = max(height, oh) + 16
+        _sweep_overlay = pygame.Surface((nw, nh), pygame.SRCALPHA)
+        _sweep_overlay_size = (nw, nh)
     return _sweep_overlay
 
 
@@ -155,9 +158,14 @@ def draw_sweep_line(
     *,
     trail_color=None,
     trail_deg: float = 18.0,
-    trail_steps: int = 48,
+    trail_steps: int = 20,
 ):
-    """Soft alpha wedge + bright leading edge (avoids blocky discrete rays)."""
+    """Soft translucent wedge + bright tip, clipped to the wedge AABB.
+
+    Full-circle SRCALPHA blits were ~6ms/frame on the Pi (choppy). Opaque pie
+    slices were cheap but looked harsh. Drawing the soft alpha fan into a tight
+    bounding box (~1–2ms) keeps the look without stalling the frame loop.
+    """
     cx, cy = float(theme.CENTER_X), float(theme.CENTER_Y)
     radius = float(theme.SWEEP_RADIUS)
     width = max(1, int(width))
@@ -177,67 +185,69 @@ def draw_sweep_line(
     def _lerp_rgb(a, b, t: float):
         return tuple(int(round(a[i] + (b[i] - a[i]) * t)) for i in range(3))
 
-    # Local overlay centered on the radar so we only clear a circle-sized buffer.
-    side = int(math.ceil(radius * 2)) + 4
-    overlay = _sweep_overlay_surface(side)
-    ox = int(round(cx - side / 2.0))
-    oy = int(round(cy - side / 2.0))
-    lcx = cx - ox
-    lcy = cy - oy
+    # Axis-aligned bounds of the tip + trail arc (continuous angles, no wrap).
+    pts = [(cx, cy)]
+    sample_n = 8
+    for i in range(sample_n + 1):
+        pts.append(_endpoint(angle_deg - trail_deg * (i / sample_n)))
+    edge_span = max(0.8, min(2.2, trail_deg * 0.08))
+    pts.append(_endpoint(angle_deg + edge_span * 0.2))
+    xs = [p[0] for p in pts]
+    ys = [p[1] for p in pts]
+    pad = 4
+    x0 = int(math.floor(min(xs))) - pad
+    y0 = int(math.floor(min(ys))) - pad
+    x1 = int(math.ceil(max(xs))) + pad
+    y1 = int(math.ceil(max(ys))) + pad
+    box_w = max(1, x1 - x0)
+    box_h = max(1, y1 - y0)
 
-    def _local_endpoint(deg: float) -> tuple[float, float]:
+    overlay = _sweep_overlay_surface(box_w, box_h)
+    overlay.fill((0, 0, 0, 0), rect=pygame.Rect(0, 0, box_w, box_h))
+    lcx = cx - x0
+    lcy = cy - y0
+
+    def _local(deg: float) -> tuple[float, float]:
         x, y = _endpoint(deg)
-        return (x - ox, y - oy)
+        return (x - x0, y - y0)
 
-    steps = max(24, int(trail_steps))
-    # Filled pie slices with alpha falloff — denser than discrete opaque lines.
-    # Keep angles continuous (no % 360) so slices near 0° don't wrap the long way.
+    steps = max(12, int(trail_steps))
     for i in range(steps):
         t0 = i / steps
         t1 = (i + 1) / steps
         ang0 = angle_deg - trail_deg * t0
         ang1 = angle_deg - trail_deg * t1
-        # Stronger near the tip; soft fade into the trail color.
         fade = (1.0 - t0) ** 1.35
         rgb = _lerp_rgb(color, trail, min(1.0, t0 * 0.85))
         alpha = max(0, min(220, int(round(200 * fade))))
         if alpha < 4:
             continue
-        p0 = _local_endpoint(ang0)
-        p1 = _local_endpoint(ang1)
         pygame.draw.polygon(
             overlay,
             (*rgb, alpha),
-            [(lcx, lcy), p0, p1],
+            [(lcx, lcy), _local(ang0), _local(ang1)],
         )
 
-    # Bright leading edge (narrow wedge + antialiased spine).
-    tip = angle_deg
-    edge_span = max(0.8, min(2.2, trail_deg * 0.08))
-    tip0 = tip + edge_span * 0.15
-    tip1 = tip - edge_span
     tip_rgb = tuple(min(255, int(c) + 28) for c in color[:3])
     pygame.draw.polygon(
         overlay,
         (*tip_rgb, 235),
-        [(lcx, lcy), _local_endpoint(tip0), _local_endpoint(tip1)],
+        [(lcx, lcy), _local(angle_deg + edge_span * 0.15), _local(angle_deg - edge_span)],
     )
-    # Hairline AA spine for a crisp sweep tip on large radii.
-    x1, y1 = _local_endpoint(tip)
-    pygame.draw.aaline(overlay, tip_rgb, (lcx, lcy), (x1, y1))
-    # Slight thickness without jagged pygame.draw.line: parallel AA offsets.
+    tip = _local(angle_deg)
+    pygame.draw.aaline(overlay, tip_rgb, (lcx, lcy), tip)
     if width >= 2:
-        rad = math.radians(tip - 90.0)
+        rad = math.radians(angle_deg - 90.0)
         nx, ny = -math.sin(rad), math.cos(rad)
-        for off in (0.6, 1.2):
-            a = (lcx + nx * off, lcy + ny * off)
-            b = (x1 + nx * off, y1 + ny * off)
-            c = (lcx - nx * off, lcy - ny * off)
-            d = (x1 - nx * off, y1 - ny * off)
-            pygame.draw.aaline(overlay, tip_rgb, a, b)
-            pygame.draw.aaline(overlay, tip_rgb, c, d)
+        for off in (0.6, 1.1):
+            pygame.draw.aaline(
+                overlay,
+                tip_rgb,
+                (lcx + nx * off, lcy + ny * off),
+                (tip[0] + nx * off, tip[1] + ny * off),
+            )
 
-    surface.blit(overlay, (ox, oy))
+    surface.blit(overlay, (x0, y0), area=pygame.Rect(0, 0, box_w, box_h))
 
 
 def draw_error(surface: pygame.Surface, message: str):
@@ -309,17 +319,53 @@ def draw_timeout_ring(surface: pygame.Surface, remaining_fraction: float) -> Non
 
 _bezel_overlay = None
 _bezel_key = None
+_bezel_rects: list[pygame.Rect] = []
 
 
 def invalidate_bezel_cache() -> None:
-    global _bezel_overlay, _bezel_key
+    global _bezel_overlay, _bezel_key, _bezel_rects
     _bezel_overlay = None
     _bezel_key = None
+    _bezel_rects = []
+
+
+def _bezel_band_rects(size, cx: int, cy: int, radius: int) -> list[pygame.Rect]:
+    """Horizontal bands covering every pixel outside the visible circle.
+
+    Each band uses the row furthest from the centre, so the rects always reach
+    at least as far in as the circle does anywhere in that band.
+    """
+    width, height = size
+    bands = 12
+    # Overlap inwards to absorb rounding between sqrt() here and pygame's
+    # rasterized circle. Overlapping is free: the overlay is transparent there.
+    pad = 3
+    rects: list[pygame.Rect] = []
+    for i in range(bands):
+        y0 = height * i // bands
+        y1 = height * (i + 1) // bands
+        dy = max(abs(y0 - cy), abs(y1 - 1 - cy))
+        inside = radius * radius - dy * dy
+        if inside <= 0:
+            rects.append(pygame.Rect(0, y0, width, y1 - y0))
+            continue
+        half = math.sqrt(inside)
+        left = max(0, int(math.floor(cx - half)) + pad)
+        right = min(width, int(math.ceil(cx + half)) - pad)
+        if left > 0:
+            rects.append(pygame.Rect(0, y0, left, y1 - y0))
+        if right < width:
+            rects.append(pygame.Rect(right, y0, width - right, y1 - y0))
+    return rects
 
 
 def apply_round_bezel(surface: pygame.Surface):
-    """Mask corners outside the round visible area."""
-    global _bezel_overlay, _bezel_key
+    """Mask everything outside the round visible area.
+
+    Blits only the border band. A full-screen alpha blit is ~4.3 ms/frame on
+    the Pi, which alone eats a quarter of the sweep's 16 ms frame budget.
+    """
+    global _bezel_overlay, _bezel_key, _bezel_rects
     size = surface.get_size()
     key = (size, theme.CENTER_X, theme.CENTER_Y, theme.VISIBLE_RADIUS, theme.BG)
     if _bezel_overlay is None or _bezel_key != key:
@@ -331,5 +377,9 @@ def apply_round_bezel(surface: pygame.Surface):
             (theme.CENTER_X, theme.CENTER_Y),
             theme.VISIBLE_RADIUS,
         )
+        _bezel_rects = _bezel_band_rects(
+            size, theme.CENTER_X, theme.CENTER_Y, theme.VISIBLE_RADIUS
+        )
         _bezel_key = key
-    surface.blit(_bezel_overlay, (0, 0))
+    for rect in _bezel_rects:
+        surface.blit(_bezel_overlay, rect.topleft, area=rect)

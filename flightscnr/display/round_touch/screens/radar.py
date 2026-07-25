@@ -16,6 +16,14 @@ _sweep_angle = 0.0
 _sweep_last_ms = 0
 _backdrop: pygame.Surface | None = None
 _backdrop_key = None
+_backdrop_gen = 0
+_frame_layer: pygame.Surface | None = None
+_frame_layer_key = None
+_frame_layer_at = 0.0
+# How often the fire/aircraft layer is rebuilt. The beam wants ~60fps, but
+# redrawing every icon and tag costs ~6ms, so aircraft refresh at 10Hz instead —
+# a 300kt target moves under 2px in that time.
+_FRAME_LAYER_TTL_S = 0.1
 
 
 def _init_sweep():
@@ -24,6 +32,15 @@ def _init_sweep():
     _sweep_last_ms = time.time() * 1000
     _backdrop = None
     _backdrop_key = None
+    invalidate_frame_layer()
+
+
+def invalidate_frame_layer() -> None:
+    """Force the fire/aircraft layer to rebuild on the next radar frame."""
+    global _frame_layer, _frame_layer_key, _frame_layer_at
+    _frame_layer = None
+    _frame_layer_key = None
+    _frame_layer_at = 0.0
 
 
 def tick_sweep():
@@ -66,7 +83,7 @@ def _backdrop_cache_key(*, pan_mode: bool, calibrate: bool):
 
 def _ensure_backdrop(*, calibrate: bool, pan_mode: bool, pan_offset) -> pygame.Surface | None:
     """Cached map + precip + grid (no aircraft / sweep) for cheaper radar frames."""
-    global _backdrop, _backdrop_key
+    global _backdrop, _backdrop_key, _backdrop_gen
     key = _backdrop_cache_key(pan_mode=pan_mode, calibrate=calibrate)
     if key is None:
         return None
@@ -80,7 +97,42 @@ def _ensure_backdrop(*, calibrate: bool, pan_mode: bool, pan_offset) -> pygame.S
     _draw_grid(surf, calibrate=False)
     _backdrop = surf
     _backdrop_key = key
+    _backdrop_gen += 1
     return _backdrop
+
+
+def _ensure_frame_layer(backdrop, flights, offset) -> pygame.Surface | None:
+    """Cached backdrop + fires + aircraft, so sweep frames only redraw the beam.
+
+    Returns None when there is no cached backdrop to build on (pan/calibrate),
+    leaving the caller to draw straight onto the frame.
+    """
+    global _frame_layer, _frame_layer_key, _frame_layer_at
+    if backdrop is None:
+        return None
+
+    now = time.time()
+    key = (theme.SIZE, _backdrop_gen)
+    if (
+        _frame_layer is not None
+        and _frame_layer_key == key
+        and _frame_layer.get_size() == (theme.SIZE, theme.SIZE)
+        and (now - _frame_layer_at) < _FRAME_LAYER_TTL_S
+    ):
+        return _frame_layer
+
+    if _frame_layer is None or _frame_layer.get_size() != (theme.SIZE, theme.SIZE):
+        _frame_layer = pygame.Surface((theme.SIZE, theme.SIZE))
+    _frame_layer.blit(backdrop, (0, 0))
+    wildfire_overlay.draw_fires(_frame_layer, pan_offset=offset)
+    _draw_flights(_frame_layer, flights)
+    # Bake the round mask in here: aircraft and tags are the only things that
+    # reach past the rim, and everything drawn on top of this layer (sweep,
+    # rim flash, status, attribution) stays inside the visible circle.
+    draw.apply_round_bezel(_frame_layer)
+    _frame_layer_key = key
+    _frame_layer_at = now
+    return _frame_layer
 
 
 def draw_radar(
@@ -92,8 +144,10 @@ def draw_radar(
     pan_mode: bool = False,
     pan_offset: tuple[int, int] | None = None,
     pan_release_to_save: bool = False,
-):
+) -> bool:
+    """Draw the radar. Returns True when the round bezel is already applied."""
     alert_prefs.reload()
+    bezel_applied = False
     offset = pan_offset if pan_mode else None
     backdrop = None if (pan_mode or calibrate) else _ensure_backdrop(
         calibrate=calibrate,
@@ -122,8 +176,13 @@ def draw_radar(
     elif calibrate:
         _draw_facing_calibrate_overlay(surface)
     else:
-        wildfire_overlay.draw_fires(surface, pan_offset=offset)
-        _draw_flights(surface, flights)
+        layer = _ensure_frame_layer(backdrop, flights, offset)
+        if layer is not None:
+            surface.blit(layer, (0, 0))
+            bezel_applied = True
+        else:
+            wildfire_overlay.draw_fires(surface, pan_offset=offset)
+            _draw_flights(surface, flights)
         if settings.show_sweep_line():
             sweep = (_sweep_angle - settings.effective_facing_deg()) % 360.0
             draw.draw_sweep_line(
@@ -137,6 +196,8 @@ def draw_radar(
             _draw_alert_rim_flash(surface)
         _draw_status(surface, flights)
         _draw_map_attribution(surface)
+
+    return bezel_applied
 
 
 def _draw_grid(surface, *, calibrate: bool = False):
