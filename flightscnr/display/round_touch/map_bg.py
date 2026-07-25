@@ -67,7 +67,7 @@ CARTO_TILE_WORKERS = 4
 OSM_TILE_WORKERS = 2
 VFR_TILE_WORKERS = 4
 CACHE_TTL_S = 7 * 24 * 3600
-CACHE_STYLE_VERSION = 17  # bump when map tint/placement/styles change
+CACHE_STYLE_VERSION = 18  # bump when map tint/placement/styles change
 
 
 _lock = threading.Lock()
@@ -188,6 +188,39 @@ def _zoom_for_scale(home_lat: float, px_per_km: float, style: str | None = None)
             best_err = err
             best_z = z
     return best_z
+
+
+def _basemap_render_scale(
+    home_lat: float,
+    scale_index: int,
+    zoom: int,
+    style: str | None = None,
+) -> float:
+    """Resize factor so tile imagery matches the selected radar range.
+
+    FAA VFR sectionals cap at zoom 12, so at tight ranges the raw tiles are far
+    coarser than the chosen band (e.g. ~30 m/px vs ~9 m/px at 2 mi). Scaling the
+    chart — and the matching aircraft/overlay placement — by this factor keeps a
+    "2 mi" selection meaning 2 mi on both the rings and the chart.
+
+    Only VFR is scaled; dark/light have enough zoom levels to match closely and
+    should stay pixel-crisp.
+    """
+    style = normalize_map_style(style) if style else _resolved_style()
+    if style != "vfr":
+        return 1.0
+    if scale_index < 0 or scale_index >= len(scale.SCALE_BANDS):
+        return 1.0
+    outer_km = scale.SCALE_BANDS[scale_index]["label_km"]
+    target_m_per_px = outer_km * 1000.0 / theme.GRID_OUTER_RADIUS
+    if target_m_per_px <= 0:
+        return 1.0
+    tile_m_per_px = _meters_per_pixel(home_lat, zoom)
+    factor = tile_m_per_px / target_m_per_px
+    # Guard against pathological values; keep within a sane resize range.
+    if not (0.05 < factor < 20.0):
+        return 1.0
+    return factor
 
 
 def _lon_to_tile_x(lon: float, zoom: int) -> int:
@@ -469,6 +502,7 @@ def _build_background(scale_index: int, style: str | None = None) -> pygame.Surf
     outer_km = scale.SCALE_BANDS[scale_index]["label_km"]
     px_per_km = theme.GRID_OUTER_RADIUS / outer_km
     zoom = _zoom_for_scale(home_lat, px_per_km, provider)
+    render_scale = _basemap_render_scale(home_lat, scale_index, zoom, provider)
 
     span_km = theme.VISIBLE_RADIUS / px_per_km
     lat_delta = span_km / 110.574
@@ -491,6 +525,10 @@ def _build_background(scale_index: int, style: str | None = None) -> pygame.Surf
     ]
     tiles = _fetch_tile_coords(zoom, coords, provider)
 
+    scaled = abs(render_scale - 1.0) > 1e-3
+    # +1px overlap so scaled tile seams do not leave gaps after rounding.
+    scaled_side = max(1, int(math.ceil(TILE_SIZE * render_scale)) + 1) if scaled else TILE_SIZE
+
     canvas = pygame.Surface((diameter, diameter))
     canvas.fill(theme.BG)
     for ty in range(y_min, y_max + 1):
@@ -500,17 +538,21 @@ def _build_background(scale_index: int, style: str | None = None) -> pygame.Surf
                 continue
             nw_lat, nw_lon = _tile_nw_lat_lon(zoom, tx, ty)
             tile_px, tile_py = _mercator_pixel(nw_lat, nw_lon, zoom)
-            px = center + int(round(tile_px - home_px))
-            py = center + int(round(tile_py - home_py))
+            px = center + int(round((tile_px - home_px) * render_scale))
+            py = center + int(round((tile_py - home_py) * render_scale))
+            if scaled:
+                tile = pygame.transform.smoothscale(tile, (scaled_side, scaled_side))
             canvas.blit(tile, (px, py))
 
     logger.info(
-        "Built radar map background (%s, scale %d, %d tiles, zoom %d, ~%.1f km span)",
+        "Built radar map background (%s, scale %d, %d tiles, zoom %d, "
+        "~%.1f km span, render_scale %.2f)",
         provider,
         scale_index,
         len(coords),
         zoom,
         span_km,
+        render_scale,
     )
     canvas = _style_for_radar(canvas, provider)
     canvas = _apply_circle_mask(canvas)
@@ -784,11 +826,12 @@ def lat_lon_to_basemap_screen(
     zoom = _basemap_zoom_for_home(home_lat)
     if zoom is None:
         return None
+    render_scale = _basemap_render_scale(home_lat, scale.active_index(), zoom)
     home_px, home_py = _mercator_pixel(home_lat, home_lon, zoom)
     mx, my = _mercator_pixel(lat_f, lon_f, zoom)
     # Image coords: +x east, +y south (Mercator tile space), matching _build_background.
-    vx = mx - home_px
-    vy = my - home_py
+    vx = (mx - home_px) * render_scale
+    vy = (my - home_py) * render_scale
     try:
         facing = float(settings.effective_facing_deg() or 0.0)
     except Exception:
@@ -828,6 +871,7 @@ def basemap_screen_to_lat_lon(
     zoom = _basemap_zoom_for_home(home_lat)
     if zoom is None:
         return None
+    render_scale = _basemap_render_scale(home_lat, scale.active_index(), zoom)
     vx = float(x) - theme.CENTER_X
     vy = float(y) - theme.CENTER_Y
     try:
@@ -840,6 +884,9 @@ def basemap_screen_to_lat_lon(
         sin_a = math.sin(rad)
         # Inverse of the CCW facing rotation applied in lat_lon_to_basemap_screen.
         vx, vy = vx * cos_a + vy * sin_a, -vx * sin_a + vy * cos_a
+    if render_scale:
+        vx /= render_scale
+        vy /= render_scale
     home_px, home_py = _mercator_pixel(home_lat, home_lon, zoom)
     return _mercator_pixel_to_lat_lon(home_px + vx, home_py + vy, zoom)
 
