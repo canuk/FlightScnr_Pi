@@ -54,6 +54,8 @@ _defaults = {
     "show_sweep": True,
     "show_precipitation": True,
     "show_wildfires": False,
+    # Airport ground vehicles (GRND/GVEH/… icon category) on the radar.
+    "show_ground_vehicles": True,
     "scale_index": 1,
     "theme_index": color_presets.DEFAULT_THEME_INDEX,
     "theme_custom": False,
@@ -311,6 +313,11 @@ def _load():
         migrated = True
     else:
         state["show_wildfires"] = bool(state.get("show_wildfires"))
+    if "show_ground_vehicles" not in data:
+        state["show_ground_vehicles"] = True
+        migrated = True
+    else:
+        state["show_ground_vehicles"] = bool(state.get("show_ground_vehicles"))
     if color_presets.migrate_theme_index(state):
         migrated = True
     if migrated:
@@ -340,6 +347,7 @@ def _settings_snapshot(state: dict) -> tuple:
         state.get("show_sweep"),
         state.get("show_precipitation"),
         state.get("show_wildfires"),
+        state.get("show_ground_vehicles"),
         state.get("min_height_ft"),
         state.get("max_height_ft"),
         state.get("brightness_percent"),
@@ -570,6 +578,20 @@ def toggle_show_wildfires():
 
 def set_show_wildfires(enabled: bool):
     _state["show_wildfires"] = bool(enabled)
+    _save(_state)
+
+
+def show_ground_vehicles() -> bool:
+    return bool(_state.get("show_ground_vehicles", True))
+
+
+def toggle_show_ground_vehicles():
+    _state["show_ground_vehicles"] = not show_ground_vehicles()
+    _save(_state)
+
+
+def set_show_ground_vehicles(enabled: bool):
+    _state["show_ground_vehicles"] = bool(enabled)
     _save(_state)
 
 

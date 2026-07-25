@@ -58,6 +58,7 @@ OPTIONS_ACTIONS = (
     "vfr_opacity",
     "precipitation",
     "wildfires",
+    "ground_vehicles",
     "idle_clock",
 )
 
@@ -451,6 +452,7 @@ def _options_row_labels() -> list[str]:
     aircraft_tag = "on" if settings.show_aircraft_tag() else "off"
     precip = "on" if settings.show_precipitation() else "off"
     wildfires = "on" if settings.show_wildfires() else "off"
+    ground_veh = "on" if settings.show_ground_vehicles() else "off"
     idle = "on" if settings.auto_idle_clock_enabled() else "off"
     return [
         f"Traffic: {settings.traffic_mode_label()}",
@@ -461,6 +463,7 @@ def _options_row_labels() -> list[str]:
         "",  # VFR opacity slider
         f"Precipitation: {precip}",
         f"Wildfires: {wildfires}",
+        f"Ground vehicles: {ground_veh}",
         f"Idle clock: {idle}",
     ]
 

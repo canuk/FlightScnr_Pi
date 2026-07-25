@@ -598,6 +598,8 @@ class RoundTouchDisplay:
             wildfire_overlay.invalidate()
             if settings.show_wildfires():
                 wildfire_overlay.request_refresh(force=True)
+        elif action == "ground_vehicles":
+            settings.toggle_show_ground_vehicles()
         elif action == "map_style":
             settings.cycle_map_style()
         elif action == "vfr_opacity":

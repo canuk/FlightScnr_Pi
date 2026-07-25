@@ -220,6 +220,16 @@ def _above_min_height(flight) -> bool:
     if flight.get("kind") == "vessel":
         return vessel_declutter.should_show_on_radar(flight)
     try:
+        from display.round_touch import aircraft_type_icons, settings
+
+        if (
+            not settings.show_ground_vehicles()
+            and aircraft_type_icons.is_ground_vehicle(flight)
+        ):
+            return False
+    except Exception:
+        pass
+    try:
         from config import passes_altitude_filter
         return passes_altitude_filter(flight.get("altitude"))
     except ImportError:

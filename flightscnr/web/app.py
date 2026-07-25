@@ -637,6 +637,7 @@ def radar_json():
             "show_sweep_line": settings.show_sweep_line(),
             "show_precipitation": settings.show_precipitation(),
             "show_wildfires": settings.show_wildfires(),
+            "show_ground_vehicles": settings.show_ground_vehicles(),
             "traffic_mode": settings.traffic_mode(),
             "ais_enabled": settings.ais_enabled(),
             "map_style": settings.map_style(),
@@ -721,6 +722,8 @@ def radar_save():
         wildfire_overlay.invalidate()
         if settings.show_wildfires():
             wildfire_overlay.request_refresh(force=True)
+    if "show_ground_vehicles" in data:
+        settings.set_show_ground_vehicles(bool(data.get("show_ground_vehicles")))
     if "map_style" in data:
         settings.set_map_style(str(data.get("map_style") or ""))
     if "vfr_map_opacity" in data:

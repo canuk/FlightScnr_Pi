@@ -181,6 +181,11 @@
                 <span class="switch"><input id="show_wildfires" type="checkbox"><span class="track"></span></span>
             </div>
             <p class="hint">In California: <a href="https://www.fire.ca.gov/incidents" target="_blank" rel="noopener">CAL FIRE</a> (no API key). Rest of USA/Canada: <a href="https://data-nifc.opendata.arcgis.com/" target="_blank" rel="noopener">NIFC WFIGS</a> / <a href="https://fire.airnow.gov/" target="_blank" rel="noopener">AirNow</a> large fires (no API key). Outside USA/Canada: <a href="https://firms.modaps.eosdis.nasa.gov/api/area/" target="_blank" rel="noopener">NASA FIRMS</a> hotspots (free <a href="https://firms.modaps.eosdis.nasa.gov/api/map_key/" target="_blank" rel="noopener">MAP_KEY</a> in API Keys). Tap a fire for details. Refreshes every 15 minutes and on recenter.</p>
+            <div class="chk">
+                <label for="show_ground_vehicles">Show ground vehicles</label>
+                <span class="switch"><input id="show_ground_vehicles" type="checkbox"><span class="track"></span></span>
+            </div>
+            <p class="hint">Airport ground vehicles (tugs, service vans, ARFF, etc.) when ADS-B reports type codes like GRND/GVEH/SERV. Turn off to declutter the radar near airports.</p>
             <label for="traffic_mode">Radar traffic</label>
             <select id="traffic_mode">
                 <option value="aircraft">Aircraft only</option>
@@ -651,6 +656,7 @@ async function loadAll() {
         $("show_sweep").checked = !!r.show_sweep_line;
         $("show_precip").checked = r.show_precipitation !== false;
         if ($("show_wildfires")) $("show_wildfires").checked = !!r.show_wildfires;
+        if ($("show_ground_vehicles")) $("show_ground_vehicles").checked = r.show_ground_vehicles !== false;
         $("traffic_mode").value = r.traffic_mode || (r.ais_enabled ? "both" : "aircraft");
     } catch (_) {}
 
@@ -765,6 +771,7 @@ async function saveRadar() {
                 show_sweep_line: $("show_sweep").checked,
                 show_precipitation: $("show_precip").checked,
                 show_wildfires: $("show_wildfires") ? $("show_wildfires").checked : false,
+                show_ground_vehicles: $("show_ground_vehicles") ? $("show_ground_vehicles").checked : true,
                 map_style: $("map_style").value,
                 vfr_map_opacity: Number($("vfr_opacity") ? $("vfr_opacity").value : 45),
                 traffic_mode: $("traffic_mode").value,
@@ -834,6 +841,7 @@ async function saveAndReloadSettings() {
                 show_sweep_line: $("show_sweep").checked,
                 show_precipitation: $("show_precip").checked,
                 show_wildfires: $("show_wildfires") ? $("show_wildfires").checked : false,
+                show_ground_vehicles: $("show_ground_vehicles") ? $("show_ground_vehicles").checked : true,
                 map_style: $("map_style").value,
                 vfr_map_opacity: Number($("vfr_opacity") ? $("vfr_opacity").value : 45),
                 traffic_mode: $("traffic_mode").value,

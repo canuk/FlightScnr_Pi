@@ -745,34 +745,45 @@ def draw_background(surface: pygame.Surface, pan_offset: tuple[int, int] | None 
     surface.blit(rotated, rect)
 
 
-def lat_lon_to_basemap_screen(lat: float, lon: float) -> tuple[int, int] | None:
-    """Map WGS84 → radar pixels using the same Mercator math as the basemap.
-
-    Aircraft still use flat-earth ``geo.lat_lon_to_screen``; overlays that must
-    sit on roads/coastline (e.g. FIRMS) should use this so they do not drift
-    from the tile imagery away from the radar center.
-    """
-    try:
-        from config import LOCATION_HOME, location_configured
-        from display.round_touch import scale, settings
-    except ImportError:
-        return None
-    if not location_configured():
-        return None
-    try:
-        home_lat = float(LOCATION_HOME[0])
-        home_lon = float(LOCATION_HOME[1])
-        lat_f = float(lat)
-        lon_f = float(lon)
-    except (TypeError, ValueError):
-        return None
+def _basemap_zoom_for_home(home_lat: float) -> int | None:
     idx = scale.active_index()
     if idx < 0 or idx >= len(scale.SCALE_BANDS):
         return None
     outer_km = scale.SCALE_BANDS[idx]["label_km"]
     px_per_km = theme.GRID_OUTER_RADIUS / outer_km
-    provider = _resolved_style()
-    zoom = _zoom_for_scale(home_lat, px_per_km, provider)
+    return _zoom_for_scale(home_lat, px_per_km, _resolved_style())
+
+
+def lat_lon_to_basemap_screen(
+    lat: float,
+    lon: float,
+    *,
+    center_lat: float | None = None,
+    center_lon: float | None = None,
+) -> tuple[int, int] | None:
+    """Map WGS84 → radar pixels using the same Mercator math as the basemap.
+
+    Prefer this (via ``geo.lat_lon_to_screen``) whenever the tile basemap is on
+    so aircraft and overlays sit on roads/coastline instead of drifting from the
+    flat-earth radar projection away from the radar center.
+    """
+    try:
+        from config import LOCATION_HOME, location_configured
+        from display.round_touch import settings
+    except ImportError:
+        return None
+    if not location_configured() and center_lat is None:
+        return None
+    try:
+        home_lat = float(LOCATION_HOME[0] if center_lat is None else center_lat)
+        home_lon = float(LOCATION_HOME[1] if center_lon is None else center_lon)
+        lat_f = float(lat)
+        lon_f = float(lon)
+    except (TypeError, ValueError):
+        return None
+    zoom = _basemap_zoom_for_home(home_lat)
+    if zoom is None:
+        return None
     home_px, home_py = _mercator_pixel(home_lat, home_lon, zoom)
     mx, my = _mercator_pixel(lat_f, lon_f, zoom)
     # Image coords: +x east, +y south (Mercator tile space), matching _build_background.
@@ -792,6 +803,52 @@ def lat_lon_to_basemap_screen(lat: float, lon: float) -> tuple[int, int] | None:
         theme.CENTER_X + int(round(vx)),
         theme.CENTER_Y + int(round(vy)),
     )
+
+
+def basemap_screen_to_lat_lon(
+    x: float,
+    y: float,
+    *,
+    center_lat: float | None = None,
+    center_lon: float | None = None,
+) -> tuple[float, float] | None:
+    """Inverse of ``lat_lon_to_basemap_screen`` (facing-aware Mercator)."""
+    try:
+        from config import LOCATION_HOME, location_configured
+        from display.round_touch import settings
+    except ImportError:
+        return None
+    if not location_configured() and center_lat is None:
+        return None
+    try:
+        home_lat = float(LOCATION_HOME[0] if center_lat is None else center_lat)
+        home_lon = float(LOCATION_HOME[1] if center_lon is None else center_lon)
+    except (TypeError, ValueError):
+        return None
+    zoom = _basemap_zoom_for_home(home_lat)
+    if zoom is None:
+        return None
+    vx = float(x) - theme.CENTER_X
+    vy = float(y) - theme.CENTER_Y
+    try:
+        facing = float(settings.effective_facing_deg() or 0.0)
+    except Exception:
+        facing = 0.0
+    if abs(facing) >= 0.05:
+        rad = math.radians(facing)
+        cos_a = math.cos(rad)
+        sin_a = math.sin(rad)
+        # Inverse of the CCW facing rotation applied in lat_lon_to_basemap_screen.
+        vx, vy = vx * cos_a + vy * sin_a, -vx * sin_a + vy * cos_a
+    home_px, home_py = _mercator_pixel(home_lat, home_lon, zoom)
+    return _mercator_pixel_to_lat_lon(home_px + vx, home_py + vy, zoom)
+
+
+def _mercator_pixel_to_lat_lon(px: float, py: float, zoom: int) -> tuple[float, float]:
+    n = 2.0 ** zoom
+    lon = px / (n * TILE_SIZE) * 360.0 - 180.0
+    lat = math.degrees(math.atan(math.sinh(math.pi * (1.0 - 2.0 * py / (n * TILE_SIZE)))))
+    return lat, lon
 
 
 def attribution_text() -> str | None:

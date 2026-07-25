@@ -85,7 +85,36 @@ def inner_ring_max_km():
     )
 
 
+def _use_basemap_projection() -> bool:
+    """True when the tile basemap is enabled — match Mercator placement."""
+    try:
+        from display.round_touch import map_bg
+
+        return bool(map_bg._enabled())
+    except Exception:
+        return False
+
+
 def lat_lon_to_screen(lat: float, lon: float):
+    """WGS84 → radar pixels.
+
+    With the map basemap on, use Web Mercator (same as tiles) so aircraft sit on
+    roads/aprons at high zoom. With the map off, use flat-earth ENU.
+    """
+    if _use_basemap_projection():
+        try:
+            from display.round_touch import map_bg
+
+            pos = map_bg.lat_lon_to_basemap_screen(
+                lat,
+                lon,
+                center_lat=LOCATION_HOME[0],
+                center_lon=LOCATION_HOME[1],
+            )
+            if pos is not None:
+                return pos
+        except Exception:
+            pass
     dx_km, dy_km, _ = local_offset_km(lat, lon)
     return enu_to_screen(dx_km, dy_km)
 
@@ -96,6 +125,20 @@ def screen_to_lat_lon(x: float, y: float, center_lat=None, center_lon=None):
         center_lat = LOCATION_HOME[0]
     if center_lon is None:
         center_lon = LOCATION_HOME[1]
+    if _use_basemap_projection():
+        try:
+            from display.round_touch import map_bg
+
+            pos = map_bg.basemap_screen_to_lat_lon(
+                x,
+                y,
+                center_lat=float(center_lat),
+                center_lon=float(center_lon),
+            )
+            if pos is not None:
+                return pos
+        except Exception:
+            pass
     facing = settings.effective_facing_deg()
     outer_km = scale.active_band()["label_km"]
     px_per_km = theme.GRID_OUTER_RADIUS / outer_km
@@ -114,13 +157,17 @@ def screen_to_lat_lon(x: float, y: float, center_lat=None, center_lon=None):
 
 
 def beyond_ring_position(lat: float, lon: float):
-    dx_km, dy_km, dist_km = local_offset_km(lat, lon)
+    _, _, dist_km = local_offset_km(lat, lon)
     if dist_km < 0.01 or dist_km <= inner_ring_max_km():
         return None
     rim_r = theme.VISIBLE_RADIUS - theme.BEYOND_RING_MARGIN
-    facing = settings.effective_facing_deg()
-    rdx, rdy = rotate_offset(dx_km, dy_km, facing)
-    angle = math.atan2(rdx, rdy)
-    x = theme.CENTER_X + int(round(math.sin(angle) * rim_r))
-    y = theme.CENTER_Y - int(round(math.cos(angle) * rim_r))
+    # Project with the same math as in-range icons, then clamp to the rim.
+    sx, sy = lat_lon_to_screen(lat, lon)
+    dx = float(sx) - theme.CENTER_X
+    dy = float(sy) - theme.CENTER_Y
+    hyp = math.hypot(dx, dy)
+    if hyp < 0.01:
+        return None
+    x = theme.CENTER_X + int(round(rim_r * dx / hyp))
+    y = theme.CENTER_Y + int(round(rim_r * dy / hyp))
     return x, y

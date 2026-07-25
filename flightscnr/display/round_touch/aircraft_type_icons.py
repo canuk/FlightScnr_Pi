@@ -52,6 +52,7 @@ _CATEGORY_SIZE_SCALE = {
     "balloon": 0.5,
     "airship": 0.75,
     "glider": 0.75,
+    "ground_veh": 0.25,
     "unknown": 1.0,
 }
 
@@ -178,6 +179,13 @@ def icon_category(flight: dict | None) -> str:
         pass
 
     return _DEFAULT_CATEGORY
+
+
+def is_ground_vehicle(flight: dict | None) -> bool:
+    """True for airport ground vehicles (tugs, service vans, ARFF, etc.)."""
+    if not flight or flight.get("kind") == "vessel":
+        return False
+    return icon_category(flight) == "ground_veh"
 
 
 def _icon_path(category: str) -> str | None:
