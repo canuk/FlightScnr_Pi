@@ -53,6 +53,11 @@ sys.modules["display.round_touch.pinch_handler"] = pinch_handler
 rotation_stub = types.ModuleType("display.round_touch.rotation")
 rotation_stub.to_logical = lambda x, y: (float(x), float(y))
 sys.modules["display.round_touch.rotation"] = rotation_stub
+# Keep package attribute in sync — replacing sys.modules alone is not enough
+# once a prior test imported the real rotation module onto the package.
+sys.modules["display.round_touch"].rotation = rotation_stub
+sys.modules["display.round_touch"].input_handler = input_handler
+sys.modules["display.round_touch"].pinch_handler = pinch_handler
 
 gesture_handler = _load_module(
     "gesture_test_gesture_handler",

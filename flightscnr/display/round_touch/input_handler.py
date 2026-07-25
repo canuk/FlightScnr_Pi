@@ -114,6 +114,7 @@ class TouchInput:
         self._pending_swipe_end = None
         self._pending_tap = None
         self._pending_scroll_dy = 0
+        self._suppress_finish = False
 
     def _clear_pending(self):
         self._pending_swipe = SWIPE_NONE
@@ -121,6 +122,16 @@ class TouchInput:
         self._pending_swipe_end = None
         self._pending_tap = None
         self._pending_scroll_dy = 0
+
+    def max_travel(self) -> float:
+        """Max distance from press origin during the active contact."""
+        return float(self._max_dist)
+
+    def suppress_finish_result(self):
+        """Keep drag tracking, but emit neither tap nor swipe on release."""
+        self._suppress_finish = True
+        self._clear_pending()
+
 
     def _track_point(self, pos):
         if self._start is None:
@@ -152,12 +163,18 @@ class TouchInput:
         threshold = _gesture_threshold_px()
         total = math.hypot(ex - sx, ey - sy)
         travel = max(self._max_dist, total)
+        suppress = self._suppress_finish
+        self._suppress_finish = False
 
         self._start = None
         self._drag_end = None
         self._last_motion = None
         self._max_dist = 0.0
         self._active_fid = None
+
+        if suppress:
+            self._clear_pending()
+            return
 
         if travel < threshold:
             self._pending_swipe = SWIPE_NONE
@@ -198,6 +215,7 @@ class TouchInput:
         self._last_motion = None
         self._max_dist = 0.0
         self._active_fid = None
+        self._suppress_finish = False
         self._clear_pending()
 
     def handle_event(self, event: pygame.event.Event):

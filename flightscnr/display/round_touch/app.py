@@ -20,6 +20,7 @@ from display.round_touch import (
     ghost_touch_filter,
     gesture_handler,
     input_handler,
+    long_press_pan,
     map_bg,
     nav,
     pinch_handler,
@@ -165,6 +166,8 @@ class RoundTouchDisplay:
         self._panning_map = False
         self._pan_offset = (0, 0)
         self._pan_drag_start = None
+        self._long_press_pan = long_press_pan.LongPressPanController()
+        self._pan_drag_was_active = False
         self._rgb_slider_channel: int | None = None
         self._brightness_slider_active = False
         self._vfr_opacity_slider_active = False
@@ -384,6 +387,7 @@ class RoundTouchDisplay:
                 calibrate=self._calibrating_facing,
                 pan_mode=self._panning_map,
                 pan_offset=self._pan_offset if self._panning_map else None,
+                pan_release_to_save=self._long_press_pan.from_long_press,
             )
         elif self.screen == SCREEN_FLIGHT:
             self._scroll.max_offset = flight_detail.draw_flight_detail(
@@ -637,13 +641,20 @@ class RoundTouchDisplay:
         self._facing_drag_angle = None
         self._refresh_flights()
 
-    def _begin_map_pan(self):
-        """Enter map-pan mode: drag map, tap center to set new radar home."""
+    def _begin_map_pan(self, *, from_long_press: bool = False):
+        """Enter map-pan mode: drag map, then save (tap center or release)."""
         if self._calibrating_facing:
             self._cancel_facing_calibrate()
         self._panning_map = True
         self._pan_offset = (0, 0)
         self._pan_drag_start = None
+        self._pan_drag_was_active = False
+        self._long_press_pan.clear_candidate()
+        if from_long_press:
+            self._long_press_pan.begin_from_long_press()
+            self.input.suppress_finish_result()
+        else:
+            self._long_press_pan.clear_from_long_press()
         self.flights = []
         self._open_screen(SCREEN_RADAR)
 
@@ -653,6 +664,8 @@ class RoundTouchDisplay:
         self._panning_map = False
         self._pan_offset = (0, 0)
         self._pan_drag_start = None
+        self._pan_drag_was_active = False
+        self._long_press_pan.clear_from_long_press()
         self._refresh_flights()
 
     def _save_map_pan(self):
@@ -678,6 +691,8 @@ class RoundTouchDisplay:
         self._panning_map = False
         self._pan_offset = (0, 0)
         self._pan_drag_start = None
+        self._pan_drag_was_active = False
+        self._long_press_pan.clear_from_long_press()
 
         def _after_recenter():
             try:
@@ -691,14 +706,58 @@ class RoundTouchDisplay:
         self.overhead.grab_data()
         self._refresh_flights()
 
+    def _intentional_hold_active(self) -> bool:
+        """Ghost filter: allow still finger during long-press candidate / pan."""
+        return self._long_press_pan.intentional_hold_active(
+            travel_px=self.input.max_travel(),
+            threshold_px=float(input_handler.gesture_threshold_px()),
+        )
+
+    def _tick_long_press_pan(self) -> bool:
+        """Arm map pan after a still hold on radar. Returns True if newly armed."""
+        second_finger = self.gestures.pinch.finger_count() > 1
+        if self._long_press_pan.should_arm(
+            is_dragging=self.input.is_dragging(),
+            travel_px=self.input.max_travel(),
+            threshold_px=float(input_handler.gesture_threshold_px()),
+            second_finger=second_finger,
+            modal_active=self._radar_modal_active(),
+            on_radar=self.screen == SCREEN_RADAR,
+        ):
+            self._begin_map_pan(from_long_press=True)
+            return True
+        return False
+
+    def _finish_long_press_pan_if_needed(self) -> bool:
+        """On finger-up after long-press pan: save if dragged, else cancel."""
+        if not self._long_press_pan.from_long_press or not self._panning_map:
+            return False
+        if self.input.is_dragging():
+            return False
+        if not self._pan_drag_was_active and self._pan_drag_start is None:
+            # Armed but finger never reported a drag sample — still finish on up.
+            pass
+        action = self._long_press_pan.release_action(self._pan_offset)
+        if action == "save":
+            self._save_map_pan()
+        elif action == "cancel":
+            self._cancel_map_pan()
+        else:
+            return False
+        self._note_activity()
+        return True
+
     def _update_map_pan_drag(self) -> bool:
         """Translate finger motion into a live map pixel offset."""
         if not self._panning_map or self.screen != SCREEN_RADAR:
             self._pan_drag_start = None
+            self._pan_drag_was_active = False
             return False
         if not self.input.is_dragging():
+            finished = self._finish_long_press_pan_if_needed()
             self._pan_drag_start = None
-            return False
+            self._pan_drag_was_active = False
+            return finished
         pos = self.input.drag_pos()
         if pos is None:
             return False
@@ -709,9 +768,13 @@ class RoundTouchDisplay:
                 self._pan_offset[0],
                 self._pan_offset[1],
             )
+            self._pan_drag_was_active = True
+            self._long_press_pan.note_pan_drag_active()
             return False
         sx, sy, ox0, oy0 = self._pan_drag_start
         self._pan_offset = (ox0 + (pos[0] - sx), oy0 + (pos[1] - sy))
+        self._pan_drag_was_active = True
+        self._long_press_pan.note_pan_drag_active()
         return True
 
     @staticmethod
@@ -1778,6 +1841,7 @@ class RoundTouchDisplay:
                             event,
                             self.gestures.touch.cancel_gesture,
                             self.gestures.touch.is_dragging,
+                            allow_intentional_hold=self._intentional_hold_active,
                         ):
                             continue
                         self._note_off_hours_override()
@@ -1809,10 +1873,17 @@ class RoundTouchDisplay:
                                     # First finger only — later fingers are pinch partners.
                                     if self.gestures.pinch.finger_count() == 0:
                                         self.gestures.on_pointer_down()
+                                        if not self._radar_modal_active():
+                                            self._long_press_pan.on_pointer_down()
+                                    else:
+                                        self._long_press_pan.clear_candidate()
                                 else:
                                     self.gestures.on_pointer_down()
+                                    if not self._radar_modal_active():
+                                        self._long_press_pan.on_pointer_down()
                             elif ptr_up:
                                 self.gestures.on_pointer_up()
+                                self._long_press_pan.on_pointer_up()
                             elif (
                                 input_handler.use_finger_events()
                                 and event.type == pygame.MOUSEBUTTONUP
@@ -1821,16 +1892,26 @@ class RoundTouchDisplay:
                                 and not self.gestures.pinch.is_pinching()
                             ):
                                 self.gestures.on_pointer_up()
+                                self._long_press_pan.on_pointer_up()
                         self.gestures.handle_input_event(event)
                         if (
                             self.screen == SCREEN_RADAR
                             and not self._radar_modal_active()
                             and gesture_handler.RadarGestureHandler.is_finger_event(event)
                         ):
+                            if (
+                                event.type == pygame.FINGERDOWN
+                                and self.gestures.pinch.finger_count() > 1
+                            ):
+                                self._long_press_pan.clear_candidate()
                             scale_delta = self.gestures.handle_finger_event(event)
                             if scale_delta:
                                 self._apply_scale_step(scale_delta)
                         self._handle_navigation()
+
+                if self._tick_long_press_pan():
+                    self._safe_draw()
+                    self._last_radar_draw = time.time()
 
                 if (
                     self._update_facing_drag()

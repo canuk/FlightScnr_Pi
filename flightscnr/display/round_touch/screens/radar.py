@@ -91,6 +91,7 @@ def draw_radar(
     calibrate: bool = False,
     pan_mode: bool = False,
     pan_offset: tuple[int, int] | None = None,
+    pan_release_to_save: bool = False,
 ):
     alert_prefs.reload()
     offset = pan_offset if pan_mode else None
@@ -115,7 +116,9 @@ def draw_radar(
     wildfire_overlay.request_refresh()
 
     if pan_mode:
-        _draw_map_pan_overlay(surface, pan_offset=offset)
+        _draw_map_pan_overlay(
+            surface, pan_offset=offset, release_to_save=pan_release_to_save
+        )
     elif calibrate:
         _draw_facing_calibrate_overlay(surface)
     else:
@@ -381,16 +384,18 @@ def _light_basemap() -> bool:
         return False
 
 
-# Curated colors for busy pale charts (VFR / light CARTO) — not just darkened neon.
-_LIGHT_MAP_ICON = (15, 23, 42)          # near-black slate (silhouette)
-_LIGHT_MAP_TRACKED = (21, 128, 61)      # deep green
-_LIGHT_MAP_CALLSIGN = (15, 23, 42)      # near-black
+# High-contrast overlay for busy pale charts (VFR / light CARTO).
+# Near-black silhouettes drown in sectional ink (airspace, labels); amber
+# matches dark-radar traffic and stays off the chart's blue/green palette.
+_LIGHT_MAP_ICON = (234, 88, 12)         # vivid amber-orange
+_LIGHT_MAP_TRACKED = (22, 163, 74)      # vivid green (tracked)
+_LIGHT_MAP_CALLSIGN = (15, 23, 42)      # near-black tags
 _LIGHT_MAP_TYPE = (30, 64, 175)         # indigo
 _LIGHT_MAP_ALT_UP = (14, 116, 144)      # deep teal
 _LIGHT_MAP_ALT_DOWN = (126, 34, 206)    # deep purple
-_LIGHT_MAP_VESSEL_PARKED = (71, 85, 105)
-_LIGHT_MAP_ALERT_MIL = (185, 28, 28)    # keep alerts punchy
-_LIGHT_MAP_ALERT_OTHER = (29, 78, 216)
+_LIGHT_MAP_VESSEL_PARKED = (100, 116, 139)
+_LIGHT_MAP_ALERT_MIL = (220, 38, 38)    # keep alerts punchy
+_LIGHT_MAP_ALERT_OTHER = (37, 99, 235)
 _LIGHT_MAP_HALO = (255, 255, 255)
 
 
@@ -426,14 +431,16 @@ def _overlay_color_for_basemap(color: tuple) -> tuple:
 
 
 def _draw_light_map_icon_halo(surface, x: int, y: int, *, compact: bool) -> None:
-    """White soft disc behind icons so slate silhouettes read on busy charts."""
+    """White soft disc behind icons so amber traffic reads on busy charts."""
     if not _light_basemap():
         return
-    r = theme.s(11) if compact else theme.s(15)
-    halo = pygame.Surface((r * 2 + 2, r * 2 + 2), pygame.SRCALPHA)
-    pygame.draw.circle(halo, (*_LIGHT_MAP_HALO, 210), (r + 1, r + 1), r)
-    pygame.draw.circle(halo, (*_LIGHT_MAP_HALO, 90), (r + 1, r + 1), r + 1)
-    surface.blit(halo, (int(x) - r - 1, int(y) - r - 1))
+    r = theme.s(12) if compact else theme.s(16)
+    side = r * 2 + 4
+    halo = pygame.Surface((side, side), pygame.SRCALPHA)
+    cx = cy = side // 2
+    pygame.draw.circle(halo, (*_LIGHT_MAP_HALO, 230), (cx, cy), r)
+    pygame.draw.circle(halo, (*_LIGHT_MAP_HALO, 100), (cx, cy), r + 1)
+    surface.blit(halo, (int(x) - cx, int(y) - cy))
 
 
 def _flight_icon_color(flight, *, compact: bool):
@@ -575,7 +582,12 @@ def _draw_alert_rim_flash(surface):
     )
 
 
-def _draw_map_pan_overlay(surface, pan_offset: tuple[int, int] | None = None):
+def _draw_map_pan_overlay(
+    surface,
+    pan_offset: tuple[int, int] | None = None,
+    *,
+    release_to_save: bool = False,
+):
     """Tips while dragging the map to set a new radar center."""
     title = draw.load_font(theme.s(14), bold=True)
     font = draw.load_font(theme.s(11))
@@ -587,12 +599,20 @@ def _draw_map_pan_overlay(surface, pan_offset: tuple[int, int] | None = None):
         theme.CENTER_Y - oy,
     )
     center_line = f"{preview_lat:.5f}, {preview_lon:.5f}"
-    lines = [
-        ("Set radar center", title, theme.LABEL),
-        ("Drag map · tap center to save", font, theme.HINT),
-        ("Tap rim to cancel", font, theme.MUTED),
-        (center_line, font, theme.MUTED),
-    ]
+    if release_to_save:
+        lines = [
+            ("Set radar center", title, theme.LABEL),
+            ("Drag map · release to save", font, theme.HINT),
+            ("Release without moving to cancel", font, theme.MUTED),
+            (center_line, font, theme.MUTED),
+        ]
+    else:
+        lines = [
+            ("Set radar center", title, theme.LABEL),
+            ("Drag map · tap center to save", font, theme.HINT),
+            ("Tap rim to cancel", font, theme.MUTED),
+            (center_line, font, theme.MUTED),
+        ]
     pad_x = theme.s(8)
     pad_y = theme.s(6)
     gap = theme.s(1)

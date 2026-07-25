@@ -7,6 +7,8 @@ from display.round_touch import theme
 
 
 _font_cache = {}
+_sweep_overlay: pygame.Surface | None = None
+_sweep_overlay_side = 0
 
 
 def load_font(size: int, bold=False) -> pygame.font.Font:
@@ -133,6 +135,18 @@ def draw_dashed_line(surface, start, end, color, width=2):
         pos += pattern
 
 
+def _sweep_overlay_surface(side: int) -> pygame.Surface:
+    """Reusable clearable alpha surface for the sweep wedge."""
+    global _sweep_overlay, _sweep_overlay_side
+    side = max(8, int(side))
+    if _sweep_overlay is None or _sweep_overlay_side != side:
+        _sweep_overlay = pygame.Surface((side, side), pygame.SRCALPHA)
+        _sweep_overlay_side = side
+    else:
+        _sweep_overlay.fill((0, 0, 0, 0))
+    return _sweep_overlay
+
+
 def draw_sweep_line(
     surface,
     angle_deg: float,
@@ -140,11 +154,11 @@ def draw_sweep_line(
     width=2,
     *,
     trail_color=None,
-    trail_deg: float = 14.0,
-    trail_steps: int = 16,
+    trail_deg: float = 18.0,
+    trail_steps: int = 48,
 ):
-    """Bright leading edge plus a short fade trail so low FPS still looks smooth."""
-    cx, cy = theme.CENTER_X, theme.CENTER_Y
+    """Soft alpha wedge + bright leading edge (avoids blocky discrete rays)."""
+    cx, cy = float(theme.CENTER_X), float(theme.CENTER_Y)
     radius = float(theme.SWEEP_RADIUS)
     width = max(1, int(width))
 
@@ -153,26 +167,77 @@ def draw_sweep_line(
         # Presets like all-green have identical trail — darken toward BG.
         trail = tuple(max(0, int(c * 0.22)) for c in color)
 
-    def _endpoint(deg: float) -> tuple[int, int]:
+    def _endpoint(deg: float) -> tuple[float, float]:
         rad = math.radians(deg - 90.0)
         return (
-            int(round(cx + radius * math.cos(rad))),
-            int(round(cy + radius * math.sin(rad))),
+            cx + radius * math.cos(rad),
+            cy + radius * math.sin(rad),
         )
 
-    def _lerp(a, b, t: float):
+    def _lerp_rgb(a, b, t: float):
         return tuple(int(round(a[i] + (b[i] - a[i]) * t)) for i in range(3))
 
-    steps = max(4, int(trail_steps))
-    for i in range(steps, 0, -1):
-        t = i / steps
-        ang = (angle_deg - trail_deg * t) % 360.0
-        # Near the tip stay closer to the accent; fall off toward trail/bg.
-        col = _lerp(color, trail, min(1.0, t * 0.92))
-        w = max(1, int(round(width * (1.0 - 0.45 * t))))
-        pygame.draw.line(surface, col, (cx, cy), _endpoint(ang), w)
+    # Local overlay centered on the radar so we only clear a circle-sized buffer.
+    side = int(math.ceil(radius * 2)) + 4
+    overlay = _sweep_overlay_surface(side)
+    ox = int(round(cx - side / 2.0))
+    oy = int(round(cy - side / 2.0))
+    lcx = cx - ox
+    lcy = cy - oy
 
-    pygame.draw.line(surface, color, (cx, cy), _endpoint(angle_deg % 360.0), width)
+    def _local_endpoint(deg: float) -> tuple[float, float]:
+        x, y = _endpoint(deg)
+        return (x - ox, y - oy)
+
+    steps = max(24, int(trail_steps))
+    # Filled pie slices with alpha falloff — denser than discrete opaque lines.
+    # Keep angles continuous (no % 360) so slices near 0° don't wrap the long way.
+    for i in range(steps):
+        t0 = i / steps
+        t1 = (i + 1) / steps
+        ang0 = angle_deg - trail_deg * t0
+        ang1 = angle_deg - trail_deg * t1
+        # Stronger near the tip; soft fade into the trail color.
+        fade = (1.0 - t0) ** 1.35
+        rgb = _lerp_rgb(color, trail, min(1.0, t0 * 0.85))
+        alpha = max(0, min(220, int(round(200 * fade))))
+        if alpha < 4:
+            continue
+        p0 = _local_endpoint(ang0)
+        p1 = _local_endpoint(ang1)
+        pygame.draw.polygon(
+            overlay,
+            (*rgb, alpha),
+            [(lcx, lcy), p0, p1],
+        )
+
+    # Bright leading edge (narrow wedge + antialiased spine).
+    tip = angle_deg
+    edge_span = max(0.8, min(2.2, trail_deg * 0.08))
+    tip0 = tip + edge_span * 0.15
+    tip1 = tip - edge_span
+    tip_rgb = tuple(min(255, int(c) + 28) for c in color[:3])
+    pygame.draw.polygon(
+        overlay,
+        (*tip_rgb, 235),
+        [(lcx, lcy), _local_endpoint(tip0), _local_endpoint(tip1)],
+    )
+    # Hairline AA spine for a crisp sweep tip on large radii.
+    x1, y1 = _local_endpoint(tip)
+    pygame.draw.aaline(overlay, tip_rgb, (lcx, lcy), (x1, y1))
+    # Slight thickness without jagged pygame.draw.line: parallel AA offsets.
+    if width >= 2:
+        rad = math.radians(tip - 90.0)
+        nx, ny = -math.sin(rad), math.cos(rad)
+        for off in (0.6, 1.2):
+            a = (lcx + nx * off, lcy + ny * off)
+            b = (x1 + nx * off, y1 + ny * off)
+            c = (lcx - nx * off, lcy - ny * off)
+            d = (x1 - nx * off, y1 - ny * off)
+            pygame.draw.aaline(overlay, tip_rgb, a, b)
+            pygame.draw.aaline(overlay, tip_rgb, c, d)
+
+    surface.blit(overlay, (ox, oy))
 
 
 def draw_error(surface: pygame.Surface, message: str):

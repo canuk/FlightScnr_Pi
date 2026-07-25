@@ -164,7 +164,13 @@ class GhostTouchFilter:
         self._drop_phantom_finger(fid)
         self._maybe_cancel(cancel_gesture, is_dragging)
 
-    def _update_finger_motion(self, fid: int, pos: tuple[int, int], now: float) -> None:
+    def _update_finger_motion(
+        self,
+        fid: int,
+        pos: tuple[int, int],
+        now: float,
+        allow_intentional_hold: Callable[[], bool] | None,
+    ) -> None:
         track = self._fingers[fid]
         if track.last != pos:
             track.path_length += math.hypot(pos[0] - track.last[0], pos[1] - track.last[1])
@@ -177,7 +183,11 @@ class GhostTouchFilter:
         held_ms = (now - track.down_at) * 1000.0
         hot = _in_hot_corner(track.anchor)
         stuck_ms = _HOT_STUCK_MS if hot else _STUCK_MS
-        if track.max_radius < stuck and held_ms >= stuck_ms:
+        if (
+            track.max_radius < stuck
+            and held_ms >= stuck_ms
+            and not (allow_intentional_hold and allow_intentional_hold())
+        ):
             track.phantom = True
         if hot and track.max_radius < stuck and track.path_length > stuck * 1.6:
             track.phantom = True
@@ -188,6 +198,7 @@ class GhostTouchFilter:
         cancel_gesture: Callable[[], None],
         is_dragging: Callable[[], bool] | None,
         now: float,
+        allow_intentional_hold: Callable[[], bool] | None,
     ) -> bool:
         fid = int(event.finger_id)
         pos = _logical_xy(event)
@@ -211,7 +222,7 @@ class GhostTouchFilter:
                 self._quiet_until = now + (_QUIET_MS / 1000.0)
                 self._maybe_cancel(cancel_gesture, is_dragging)
                 return False
-            self._update_finger_motion(fid, pos, now)
+            self._update_finger_motion(fid, pos, now, allow_intentional_hold)
             if track.phantom:
                 self._drop_phantom_finger(fid)
                 return False
@@ -264,6 +275,7 @@ class GhostTouchFilter:
         cancel_gesture: Callable[[], None],
         is_dragging: Callable[[], bool] | None,
         now: float,
+        allow_intentional_hold: Callable[[], bool] | None,
     ) -> bool:
         pos = _logical_xy(event) if event.type != pygame.MOUSEMOTION or event.buttons[0] else None
         if pos is not None and self._hot_corner_blocked(pos, now):
@@ -307,7 +319,11 @@ class GhostTouchFilter:
             anchor = self._anchor or pos
             hot = _in_hot_corner(anchor)
             stuck_ms = _HOT_STUCK_MS if hot else _STUCK_MS
-            if held_ms >= stuck_ms and self._max_radius < stuck:
+            if (
+                held_ms >= stuck_ms
+                and self._max_radius < stuck
+                and not (allow_intentional_hold and allow_intentional_hold())
+            ):
                 self._mark_pointer_phantom(cancel_gesture, is_dragging, "stuck pointer")
             if hot and self._max_radius < stuck and self._path_length > stuck * 1.6:
                 self._mark_pointer_phantom(
@@ -326,7 +342,13 @@ class GhostTouchFilter:
             anchor = self._anchor or pos
             micro = self._max_radius < stuck
             hot = _in_hot_corner(anchor)
-            if self._phantom or (self._tracking and micro and (held_ms >= _STUCK_MS or hot)):
+            hold_ok = allow_intentional_hold and allow_intentional_hold()
+            if self._phantom or (
+                self._tracking
+                and micro
+                and (held_ms >= _STUCK_MS or hot)
+                and not hold_ok
+            ):
                 self._maybe_cancel(cancel_gesture, is_dragging)
                 self._quiet_until = now + (_QUIET_MS / 1000.0)
                 self._reset_pointer()
@@ -341,6 +363,8 @@ class GhostTouchFilter:
         event: pygame.event.Event,
         cancel_gesture: Callable[[], None],
         is_dragging: Callable[[], bool] | None = None,
+        *,
+        allow_intentional_hold: Callable[[], bool] | None = None,
     ) -> bool:
         """Return True when the event should reach gesture handling."""
         if not enabled():
@@ -348,9 +372,13 @@ class GhostTouchFilter:
 
         now = time.time()
         if _is_finger_event(event):
-            return self._allow_finger(event, cancel_gesture, is_dragging, now)
+            return self._allow_finger(
+                event, cancel_gesture, is_dragging, now, allow_intentional_hold
+            )
         if _is_pointer_event(event):
             if _use_finger_events():
                 return True
-            return self._allow_pointer(event, cancel_gesture, is_dragging, now)
+            return self._allow_pointer(
+                event, cancel_gesture, is_dragging, now, allow_intentional_hold
+            )
         return True
