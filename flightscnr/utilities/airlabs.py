@@ -25,6 +25,18 @@ _API_BASE = "https://airlabs.co/api/v9"
 # Shared by tracked pre-departure lookup and flight detail enrichment (5-minute TTL).
 _cache = {}
 _CACHE_TTL = 300  # 5 minutes
+_CACHE_MAX = 128
+
+
+def _cache_put(callsign, value):
+    """Store with pruning — expired keys were never removed (24/7 leak)."""
+    now = time()
+    if len(_cache) >= _CACHE_MAX:
+        for k in [k for k, (_, ts) in list(_cache.items()) if now - ts >= _CACHE_TTL]:
+            _cache.pop(k, None)
+        while len(_cache) >= _CACHE_MAX:
+            _cache.pop(min(_cache, key=lambda k: _cache[k][1]), None)
+    _cache[callsign] = (value, now)
 
 # Try config first, fall back to env var
 try:
@@ -95,7 +107,7 @@ def get_flight_schedule(callsign):
         schedules = data.get("response", [])
         if not schedules:
             logger.info(f"AirLabs: No schedule found for {callsign}")
-            _cache[callsign] = (None, time())
+            _cache_put(callsign, None)
             return None
 
         # Pick the next upcoming segment (smallest dep_time_ts in the future)
@@ -126,14 +138,14 @@ def get_flight_schedule(callsign):
             "duration": best.get("duration"),
         }
         logger.info(f"AirLabs: Found {result['flight_number']} {result['origin']}→{result['destination']} status={result['status']}")
-        _cache[callsign] = (result, time())
+        _cache_put(callsign, result)
         return result
 
     except requests.exceptions.Timeout:
         logger.warning("AirLabs: Request timed out")
-        _cache[callsign] = (None, time())
+        _cache_put(callsign, None)
         return None
     except Exception as e:
         logger.warning(f"AirLabs: Error looking up {callsign}: {e}")
-        _cache[callsign] = (None, time())
+        _cache_put(callsign, None)
         return None

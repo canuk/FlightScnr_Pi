@@ -787,15 +787,22 @@ async function saveRadar() {
 async function saveDump1090() {
     clearStatus("dump1090-status");
     try {
+        const enabled = $("dump1090_enabled") ? $("dump1090_enabled").checked : false;
+        const url = $("dump1090_url") ? $("dump1090_url").value.trim() : "";
         await jsonFetch("/api-keys", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
-                dump1090_enabled: $("dump1090_enabled") ? $("dump1090_enabled").checked : false,
-                dump1090_url: $("dump1090_url") ? $("dump1090_url").value.trim() : "",
+                dump1090_enabled: enabled,
+                dump1090_url: url,
             }),
         });
-        showStatus("dump1090-status", "Local ADS-B settings saved.");
+        showStatus(
+            "dump1090-status",
+            enabled
+                ? "Local ADS-B saved — display picks it up on the next data cycle."
+                : "Local ADS-B disabled."
+        );
         await loadAll();
     } catch (e) {
         showStatus("dump1090-status", e.message, true);

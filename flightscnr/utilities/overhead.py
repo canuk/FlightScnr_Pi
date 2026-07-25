@@ -448,6 +448,7 @@ def _adsbdb_aircraft(registration):
         logger.debug(f"adsbdb aircraft error for {registration}: {e}")
         # Cache error for 5 minutes to avoid hammering
         _aircraft_cache[registration] = {"data": {}, "ts": time() - _CACHE_TTL + 300}
+        _evict_aircraft_cache()
         return {}
 
 
@@ -465,14 +466,32 @@ def _log_route_audit(callsign, aircraft_type, distance, source, origin, destinat
         pass
 
 
+# The radar layer asks for the tracked callsign per aircraft per rebuild
+# (10Hz); rereading the JSON from SD card each time caused visible frame
+# spikes. Stat at most twice a second and reread only when mtime changes.
+_tracked_cache = {"at": 0.0, "mtime": None, "value": ""}
+
+
 def load_tracked_callsign():
-    """Read the tracked callsign from tracked_flight.json."""
+    """Read the tracked callsign from tracked_flight.json (mtime-cached)."""
+    now = time()
+    if now - _tracked_cache["at"] < 0.5:
+        return _tracked_cache["value"]
+    _tracked_cache["at"] = now
+    try:
+        mtime = os.path.getmtime(TRACKED_FILE)
+    except OSError:
+        mtime = None
+    if mtime == _tracked_cache["mtime"]:
+        return _tracked_cache["value"]
+    _tracked_cache["mtime"] = mtime
     try:
         with open(TRACKED_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
-            return data.get("callsign", "").strip().upper()
+            _tracked_cache["value"] = data.get("callsign", "").strip().upper()
     except (FileNotFoundError, json.JSONDecodeError):
-        return ""
+        _tracked_cache["value"] = ""
+    return _tracked_cache["value"]
 
 
 def _load_counter_log() -> dict:
@@ -981,6 +1000,9 @@ class Overhead:
                             "callsign": display_cs,
                             "registration": registration,
                             "icao_hex": icao_hex,
+                            # Stable id when callsign/hex/reg are blank (common for
+                            # anonymous FR24 tracks like the BE20 with no Mode-S).
+                            "flight_id": (getattr(f, "flight_id", None) or "").strip(),
                             "distance_origin": dist_o,
                             "distance_destination": dist_d,
                             "distance": distance_from_flight_to_home(f),
@@ -1024,10 +1046,32 @@ class Overhead:
                 import config as _cfg
 
                 adsb_on = bool(getattr(_cfg, "ADSB_ENABLED", ADSB_ENABLED))
-                dump_on = bool(getattr(_cfg, "DUMP1090_ENABLED", DUMP1090_ENABLED))
             except Exception:
                 adsb_on = ADSB_ENABLED
-                dump_on = DUMP1090_ENABLED
+            # Portal saves dump1090 into secrets.json from the web process; the
+            # display process must re-read it each cycle (config is import-time).
+            dump_url = None
+            try:
+                from secrets_store import dump1090_settings
+
+                d1090 = dump1090_settings()
+                dump_on = bool(d1090.get("DUMP1090_ENABLED"))
+                dump_url = (d1090.get("DUMP1090_URL") or "").strip() or None
+                try:
+                    import config as _cfg
+
+                    _cfg.DUMP1090_ENABLED = dump_on
+                    if dump_url:
+                        _cfg.DUMP1090_URL = dump_url
+                except Exception:
+                    pass
+            except Exception:
+                try:
+                    import config as _cfg
+
+                    dump_on = bool(getattr(_cfg, "DUMP1090_ENABLED", DUMP1090_ENABLED))
+                except Exception:
+                    dump_on = DUMP1090_ENABLED
             use_adsb_cloud = adsb_on and location_configured()
             use_dump1090 = dump_on and location_configured()
             if use_adsb_cloud or use_dump1090:
@@ -1054,6 +1098,7 @@ class Overhead:
                         LOCATION_DEFAULT[1],
                         search_radius_nm,
                         MIN_ALTITUDE,
+                        url=dump_url,
                     )
                     stats["dump1090_raw"] = len(dump_entries)
                 else:
@@ -1063,6 +1108,7 @@ class Overhead:
                     "plane_latitude", "plane_longitude", "altitude",
                     "heading", "ground_speed", "vertical_speed",
                     "squawk", "db_flags", "icao_hex", "registration", "callsign", "plane",
+                    "adsb_category",
                 )
                 from utilities.aircraft_alert import (
                     apply_adsb_alert_fields,
@@ -1383,6 +1429,7 @@ class Overhead:
         try:
             with open(TRACKED_FILE, "w", encoding="utf-8") as f:
                 json.dump({"callsign": ""}, f)
+            _tracked_cache["at"] = 0.0
             print("Tracked flight ended — auto-cleared.")
         except Exception as e:
             print(f"Failed to auto-clear tracked flight: {e}")

@@ -131,6 +131,7 @@ def _to_entry(
     squawk = _normalize_squawk(plane.get("squawk"))
     icao_hex = (plane.get("hex") or "").strip().upper()
     registration = (plane.get("r") or "").strip().upper()
+    adsb_category = str(plane.get("category") or "").strip().upper()
 
     return {
         "callsign": callsign,
@@ -148,6 +149,7 @@ def _to_entry(
         "vertical_speed": vert,
         "squawk": squawk,
         "db_flags": 0,
+        "adsb_category": adsb_category,
         "data_source": "dump1090",
     }
 

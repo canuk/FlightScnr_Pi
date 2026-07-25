@@ -26,13 +26,18 @@ class TTLCache:
         hit = cache.get("key")  # returns value or None if expired
     """
 
-    def __init__(self, default_ttl: float = 3600.0):
+    def __init__(self, default_ttl: float = 3600.0, max_entries: int = 256):
         """
         :param default_ttl: Default time-to-live in seconds for cached entries.
+        :param max_entries: Hard cap on stored entries; oldest-expiring entries
+            are evicted first. Expired entries were previously removed only on
+            a get() of the same key, so one-shot keys (e.g. transient flight
+            ids) accumulated forever in 24/7 processes.
         """
         self._store: dict[str, tuple[Any, float]] = {}  # key -> (value, expiry_ts)
         self._lock = threading.Lock()
         self._default_ttl = default_ttl
+        self._max_entries = max(1, int(max_entries))
 
     @property
     def default_ttl(self) -> float:
@@ -61,8 +66,17 @@ class TTLCache:
         :param ttl: Optional TTL override (seconds). Uses default_ttl if None.
         """
         ttl = ttl if ttl is not None else self._default_ttl
+        now = time.time()
         with self._lock:
-            self._store[key] = (value, time.time() + ttl)
+            self._store[key] = (value, now + ttl)
+            if len(self._store) > self._max_entries:
+                # Drop expired entries first, then oldest-expiring.
+                expired = [k for k, (_, exp) in self._store.items() if now > exp]
+                for k in expired:
+                    del self._store[k]
+                while len(self._store) > self._max_entries:
+                    oldest = min(self._store, key=lambda k: self._store[k][1])
+                    del self._store[oldest]
 
     def has(self, key: str) -> bool:
         """Check if a key exists and is not expired."""
@@ -111,8 +125,8 @@ class FR24Cache:
     FEED_POLL_INTERVAL = 90.0  # Minimum 90 seconds between feed polls
 
     def __init__(self):
-        self._feed_cache = TTLCache(default_ttl=self.FEED_TTL)
-        self._detail_cache = TTLCache(default_ttl=self.FLIGHT_DETAIL_TTL)
+        self._feed_cache = TTLCache(default_ttl=self.FEED_TTL, max_entries=16)
+        self._detail_cache = TTLCache(default_ttl=self.FLIGHT_DETAIL_TTL, max_entries=64)
         # Per-key rate limiting: tracks last poll time per cache key
         self._per_key_last_poll: dict[str, float] = {}
         self._per_key_lock = threading.Lock()

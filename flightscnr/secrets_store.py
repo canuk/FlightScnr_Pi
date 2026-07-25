@@ -200,20 +200,25 @@ def bootstrap_secrets() -> None:
 
 
 def dump1090_settings() -> dict:
-    """Current dump1090 portal/settings values."""
+    """Current dump1090 portal/settings values.
+
+    Prefer secrets.json over process env: bootstrap may leave DUMP1090_ENABLED=False
+    in the display process env, and a truthy \"False\" string would otherwise
+    permanently shadow a later portal save.
+    """
     bootstrap_secrets()
     file_vals = load_secrets_json()
-    enabled = _to_bool(
-        os.environ.get("DUMP1090_ENABLED")
-        or file_vals.get("DUMP1090_ENABLED")
-        or "False",
-        False,
-    )
-    url = (
-        os.environ.get("DUMP1090_URL")
-        or file_vals.get("DUMP1090_URL")
-        or "http://127.0.0.1:8080/data/aircraft.json"
-    ).strip()
+    if "DUMP1090_ENABLED" in file_vals:
+        enabled = _to_bool(file_vals.get("DUMP1090_ENABLED"), False)
+    else:
+        enabled = _to_bool(os.environ.get("DUMP1090_ENABLED", "False"), False)
+    if "DUMP1090_URL" in file_vals and str(file_vals.get("DUMP1090_URL") or "").strip():
+        url = str(file_vals.get("DUMP1090_URL")).strip()
+    else:
+        url = (
+            os.environ.get("DUMP1090_URL")
+            or "http://127.0.0.1:8080/data/aircraft.json"
+        ).strip()
     return {
         "DUMP1090_ENABLED": enabled,
         "DUMP1090_URL": url or "http://127.0.0.1:8080/data/aircraft.json",
@@ -284,6 +289,22 @@ def save_secrets_from_portal(payload: dict) -> dict[str, str]:
     Save API keys from web portal. Empty string keeps the previous value
     unless clear_missing=True in payload.
     """
+    # Fail closed if an existing secrets file cannot be read — otherwise a
+    # permission error yields {} and the next write wipes all API keys.
+    if os.path.isfile(SECRETS_JSON_PATH):
+        try:
+            with open(SECRETS_JSON_PATH, encoding="utf-8") as fh:
+                json.load(fh)
+        except PermissionError as exc:
+            raise PermissionError(
+                f"Cannot read {SECRETS_JSON_PATH}; refusing to overwrite "
+                "and wipe existing secrets"
+            ) from exc
+        except (OSError, json.JSONDecodeError) as exc:
+            raise OSError(
+                f"Cannot load {SECRETS_JSON_PATH}; refusing to overwrite"
+            ) from exc
+
     current = load_secrets_json()
     clear = bool(payload.get("clear_missing"))
     updated: dict[str, str] = dict(_load_secrets_file_raw())

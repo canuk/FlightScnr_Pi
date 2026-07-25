@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 import json
 import os
+import time as time_module
 
 try:
     from config import NIGHT_BRIGHTNESS, NIGHT_END, NIGHT_START, BRIGHTNESS_NIGHT
@@ -102,11 +103,25 @@ def _load() -> dict:
 
 
 _state = _load()
+# prefs() is on the display hot loop (~60Hz via _apply_brightness); rereading
+# the JSON from SD card each call cost milliseconds. Stat at most twice a
+# second and reload only when the file mtime changes.
+_state_checked_at = 0.0
+_state_mtime: float | None = None
 
 
 def prefs() -> dict:
-    global _state
-    _state = _load()
+    global _state, _state_checked_at, _state_mtime
+    now = time_module.monotonic()
+    if now - _state_checked_at >= 0.5:
+        _state_checked_at = now
+        try:
+            mtime = os.path.getmtime(PREFS_PATH)
+        except OSError:
+            mtime = None
+        if mtime != _state_mtime:
+            _state_mtime = mtime
+            _state = _load()
     return dict(_state)
 
 

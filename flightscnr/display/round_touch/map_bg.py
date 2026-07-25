@@ -72,6 +72,10 @@ CACHE_STYLE_VERSION = 18  # bump when map tint/placement/styles change
 
 _lock = threading.Lock()
 _surfaces: dict[tuple, pygame.Surface] = {}
+# Keys already promoted with convert_alpha(). pygame's convert_alpha() always
+# allocates a new Surface, so calling it every get_background() churned ids and
+# invalidated the radar backdrop cache (~every frame).
+_display_converted: set[tuple] = set()
 _fetch_threads: dict[tuple, threading.Thread] = {}
 
 
@@ -631,6 +635,7 @@ def _load_cache(key: tuple) -> pygame.Surface | None:
 def _remember_surface(key: tuple, surface: pygame.Surface):
     with _lock:
         _surfaces[key] = surface
+        _display_converted.discard(key)
 
 
 def _fetch_running(key: tuple) -> bool:
@@ -741,7 +746,19 @@ def invalidate():
     with _lock:
         _surfaces.clear()
         _fetch_threads.clear()
+        _display_converted.clear()
     clear_vfr_opacity_blit_cache()
+
+
+def cache_token() -> object:
+    """Stable token for radar backdrop invalidation (changes with map content)."""
+    if not _enabled():
+        return None
+    key = _cache_key()
+    if key is None:
+        return None
+    with _lock:
+        return (key, id(_surfaces.get(key)) if key in _surfaces else 0)
 
 
 def get_background() -> pygame.Surface | None:
@@ -754,11 +771,15 @@ def get_background() -> pygame.Surface | None:
         surface = _surfaces.get(key)
         if surface is None:
             return None
-        # Promote to display format on the main thread once display exists.
-        converted = _as_display_surface(surface, alpha=True)
-        if converted is not surface:
-            _surfaces[key] = converted
-        return converted
+        # Promote to display format once on the main thread. Re-converting every
+        # call allocates a new Surface and breaks callers that key on id().
+        if key not in _display_converted:
+            converted = _as_display_surface(surface, alpha=True)
+            if converted is not surface:
+                _surfaces[key] = converted
+                surface = converted
+            _display_converted.add(key)
+        return surface
 
 
 def draw_background(surface: pygame.Surface, pan_offset: tuple[int, int] | None = None):

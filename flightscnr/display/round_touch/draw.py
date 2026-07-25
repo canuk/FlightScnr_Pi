@@ -7,8 +7,23 @@ from display.round_touch import theme
 
 
 _font_cache = {}
+_text_cache: dict = {}
+_TEXT_CACHE_MAX = 512
 _sweep_overlay: pygame.Surface | None = None
 _sweep_overlay_size = (0, 0)
+
+
+def render_text_cached(font: "pygame.font.Font", text: str, color) -> pygame.Surface:
+    """font.render with memoization — radar tags re-render the same strings
+    ~10x/s during layer rebuilds, which costs real milliseconds on a Pi."""
+    key = (id(font), text, tuple(color))
+    surf = _text_cache.get(key)
+    if surf is None:
+        if len(_text_cache) >= _TEXT_CACHE_MAX:
+            _text_cache.clear()
+        surf = font.render(text, True, color)
+        _text_cache[key] = surf
+    return surf
 
 
 def load_font(size: int, bold=False) -> pygame.font.Font:
@@ -157,23 +172,27 @@ def draw_sweep_line(
     width=2,
     *,
     trail_color=None,
-    trail_deg: float = 18.0,
-    trail_steps: int = 20,
+    trail_deg: float = 30.0,
+    trail_steps: int = 40,
+    origin: tuple[float, float] | None = None,
+    radius: float | None = None,
 ):
-    """Soft translucent wedge + bright tip, clipped to the wedge AABB.
+    """Soft translucent afterglow wedge — same hue, alpha falloff only.
 
-    Full-circle SRCALPHA blits were ~6ms/frame on the Pi (choppy). Opaque pie
-    slices were cheap but looked harsh. Drawing the soft alpha fan into a tight
-    bounding box (~1–2ms) keeps the look without stalling the frame loop.
+    Matches the common “feathered radar sweep” look: bright leading edge with a
+    long translucent trail that fades out, not a dark opaque pie slice.
+    Clipped to the wedge AABB so the alpha blit stays cheap on the Pi.
     """
-    cx, cy = float(theme.CENTER_X), float(theme.CENTER_Y)
-    radius = float(theme.SWEEP_RADIUS)
+    if origin is None:
+        cx, cy = float(theme.CENTER_X), float(theme.CENTER_Y)
+    else:
+        cx, cy = float(origin[0]), float(origin[1])
+    if radius is None:
+        radius = float(theme.SWEEP_RADIUS)
+    else:
+        radius = float(radius)
     width = max(1, int(width))
-
-    trail = trail_color if trail_color is not None else theme.SWEEP_TRAIL
-    if sum(abs(int(trail[i]) - int(color[i])) for i in range(3)) < 40:
-        # Presets like all-green have identical trail — darken toward BG.
-        trail = tuple(max(0, int(c * 0.22)) for c in color)
+    accent = tuple(max(0, min(255, int(c))) for c in color[:3])
 
     def _endpoint(deg: float) -> tuple[float, float]:
         rad = math.radians(deg - 90.0)
@@ -182,23 +201,24 @@ def draw_sweep_line(
             cy + radius * math.sin(rad),
         )
 
-    def _lerp_rgb(a, b, t: float):
-        return tuple(int(round(a[i] + (b[i] - a[i]) * t)) for i in range(3))
-
     # Axis-aligned bounds of the tip + trail arc (continuous angles, no wrap).
-    pts = [(cx, cy)]
-    sample_n = 8
+    edge_span = max(0.9, min(2.4, trail_deg * 0.06))
+    pts = [(cx, cy), _endpoint(angle_deg + edge_span * 0.25)]
+    sample_n = 10
     for i in range(sample_n + 1):
         pts.append(_endpoint(angle_deg - trail_deg * (i / sample_n)))
-    edge_span = max(0.8, min(2.2, trail_deg * 0.08))
-    pts.append(_endpoint(angle_deg + edge_span * 0.2))
     xs = [p[0] for p in pts]
     ys = [p[1] for p in pts]
-    pad = 4
+    pad = 5
     x0 = int(math.floor(min(xs))) - pad
     y0 = int(math.floor(min(ys))) - pad
     x1 = int(math.ceil(max(xs))) + pad
     y1 = int(math.ceil(max(ys))) + pad
+    # Clip to the destination surface so display-space draws stay in bounds.
+    x0 = max(0, x0)
+    y0 = max(0, y0)
+    x1 = min(surface.get_width(), x1)
+    y1 = min(surface.get_height(), y1)
     box_w = max(1, x1 - x0)
     box_h = max(1, y1 - y0)
 
@@ -211,35 +231,50 @@ def draw_sweep_line(
         x, y = _endpoint(deg)
         return (x - x0, y - y0)
 
-    steps = max(12, int(trail_steps))
+    # Wide, very faint wash — gives the soft “glow over the map” of the reference.
+    wash_steps = max(10, trail_steps // 3)
+    for i in range(wash_steps):
+        t0 = i / wash_steps
+        t1 = (i + 1) / wash_steps
+        fade = (1.0 - t0) ** 1.6
+        alpha = max(0, min(70, int(round(55 * fade))))
+        if alpha < 3:
+            continue
+        pygame.draw.polygon(
+            overlay,
+            (*accent, alpha),
+            [(lcx, lcy), _local(angle_deg - trail_deg * t0), _local(angle_deg - trail_deg * t1)],
+        )
+
+    # Denser body — fine radial slices so the trail reads as feathered rays, not bands.
+    steps = max(24, int(trail_steps))
     for i in range(steps):
         t0 = i / steps
         t1 = (i + 1) / steps
-        ang0 = angle_deg - trail_deg * t0
-        ang1 = angle_deg - trail_deg * t1
-        fade = (1.0 - t0) ** 1.35
-        rgb = _lerp_rgb(color, trail, min(1.0, t0 * 0.85))
-        alpha = max(0, min(220, int(round(200 * fade))))
+        # Stay on the accent hue; only alpha dies out (reference look).
+        fade = (1.0 - t0) ** 2.25
+        alpha = max(0, min(200, int(round(185 * fade))))
         if alpha < 4:
             continue
         pygame.draw.polygon(
             overlay,
-            (*rgb, alpha),
-            [(lcx, lcy), _local(ang0), _local(ang1)],
+            (*accent, alpha),
+            [(lcx, lcy), _local(angle_deg - trail_deg * t0), _local(angle_deg - trail_deg * t1)],
         )
 
-    tip_rgb = tuple(min(255, int(c) + 28) for c in color[:3])
+    # Bright leading edge (narrow wedge + AA spine).
+    tip_rgb = tuple(min(255, int(c) + 40) for c in accent)
     pygame.draw.polygon(
         overlay,
-        (*tip_rgb, 235),
-        [(lcx, lcy), _local(angle_deg + edge_span * 0.15), _local(angle_deg - edge_span)],
+        (*tip_rgb, 245),
+        [(lcx, lcy), _local(angle_deg + edge_span * 0.2), _local(angle_deg - edge_span * 0.85)],
     )
     tip = _local(angle_deg)
     pygame.draw.aaline(overlay, tip_rgb, (lcx, lcy), tip)
     if width >= 2:
         rad = math.radians(angle_deg - 90.0)
         nx, ny = -math.sin(rad), math.cos(rad)
-        for off in (0.6, 1.1):
+        for off in (0.55, 1.05):
             pygame.draw.aaline(
                 overlay,
                 tip_rgb,
@@ -248,6 +283,7 @@ def draw_sweep_line(
             )
 
     surface.blit(overlay, (x0, y0), area=pygame.Rect(0, 0, box_w, box_h))
+    return pygame.Rect(x0, y0, box_w, box_h)
 
 
 def draw_error(surface: pygame.Surface, message: str):

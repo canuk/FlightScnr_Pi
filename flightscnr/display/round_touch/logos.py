@@ -125,5 +125,7 @@ def load_logo_surface(icao: str, height: int) -> pygame.Surface | None:
         except OSError:
             surface = None
 
+    if len(_cache) >= 128:
+        _cache.clear()  # keyed per airline seen; bound it for 24/7 uptime
     _cache[key] = surface
     return surface

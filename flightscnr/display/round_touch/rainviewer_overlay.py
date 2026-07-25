@@ -76,6 +76,23 @@ def _cache_key_for_scale(scale_index: int, frame_time: int) -> tuple | None:
     )
 
 
+def _store_surface(key: tuple, surface: pygame.Surface) -> None:
+    """Cache a frame surface and evict stale ones.
+
+    Keys embed the RainViewer frame timestamp, so without eviction every
+    ~10min frame pinned another ~2MB surface forever (~280MB/day leak).
+    Only the newest frame is ever drawn; older frames and other centers
+    are dead weight.
+    """
+    with _lock:
+        stale = [
+            k for k in _surfaces if k[3] != key[3] or k[0] != key[0] or k[1] != key[1]
+        ]
+        for k in stale:
+            del _surfaces[k]
+        _surfaces[key] = surface
+
+
 def _cache_path_for_key(key: tuple) -> str:
     lat, lon, scale_idx, frame_time = key
     return os.path.join(
@@ -288,8 +305,7 @@ def _start_fetch(key: tuple, host: str, path: str) -> None:
             if surface is None:
                 return
             _save_disk(surface, key)
-            with _lock:
-                _surfaces[key] = surface
+            _store_surface(key, surface)
             _prune_old_cache(key[3])
         finally:
             with _lock:
@@ -324,8 +340,7 @@ def _ensure_current_frame_async() -> None:
                     return
             disk = _load_disk(key)
             if disk is not None:
-                with _lock:
-                    _surfaces[key] = disk
+                _store_surface(key, disk)
                 return
             _start_fetch(key, host, path)
         finally:
@@ -359,8 +374,7 @@ def request_overlay() -> None:
             if not cached:
                 disk = _load_disk(key)
                 if disk is not None:
-                    with _lock:
-                        _surfaces[key] = disk
+                    _store_surface(key, disk)
     if _metadata_stale() or get_overlay() is None:
         _ensure_current_frame_async()
 
@@ -373,6 +387,21 @@ def invalidate() -> None:
         global _meta, _meta_ts
         _meta = None
         _meta_ts = 0.0
+
+
+def cache_token() -> object:
+    """Stable token for radar backdrop invalidation (changes with precip frame)."""
+    if not _enabled():
+        return None
+    frame = _latest_frame(_cached_metadata())
+    if frame is None:
+        return ("none",)
+    _, _, frame_time = frame
+    key = _cache_key_for_scale(scale.active_index(), frame_time)
+    if key is None:
+        return None
+    with _lock:
+        return (key, id(_surfaces.get(key)) if key in _surfaces else 0)
 
 
 def get_overlay() -> pygame.Surface | None:

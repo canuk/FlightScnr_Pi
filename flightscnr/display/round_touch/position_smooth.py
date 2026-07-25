@@ -12,9 +12,13 @@ from typing import Any
 
 
 # Stop extrapolating if the track hasn't been observed recently.
-_STALE_S = 8.0
-# Cap how far ahead of the last report we push (covers a missed poll).
-_MAX_EXTRAPOLATE_S = 5.0
+# Must exceed FR24's live-feed cache TTL (~90s): with no ADS-B, the same
+# lat/lon is re-delivered every poll until the feed refreshes, and a short
+# stale window made markers freeze after a few seconds.
+_STALE_S = 100.0
+# Cap how far ahead of the last *new* fix we push. ADS-B updates every ~2s so
+# this rarely matters there; FR24-only coverage needs the full feed interval.
+_MAX_EXTRAPOLATE_S = 90.0
 # Ignore tiny speeds (parked vessels / floating noise).
 _MIN_SPEED_KT = 1.0
 # If a new fix disagrees with the coasted position by more than this, snap.
@@ -46,6 +50,10 @@ def _identity(flight: dict) -> str | None:
     ).strip().upper()
     if callsign:
         return f"cs:{callsign}"
+    # Anonymous FR24 live-feed tracks often have type only (no Mode-S / callsign).
+    flight_id = str(flight.get("flight_id") or "").strip().lower()
+    if flight_id:
+        return f"fid:{flight_id}"
     return None
 
 
@@ -161,6 +169,26 @@ class PositionSmoother:
                 or age < 0
                 or age > _STALE_S
             ):
+                # Past the coast window: hold the last extrapolated point rather
+                # than snapping back to the stale report (which looks like a jump).
+                if (
+                    age > _STALE_S
+                    and use_heading is not None
+                    and use_speed is not None
+                    and use_speed >= _MIN_SPEED_KT
+                ):
+                    slat, slon = offset_lat_lon(
+                        track["lat"],
+                        track["lon"],
+                        use_heading,
+                        use_speed,
+                        _MAX_EXTRAPOLATE_S,
+                    )
+                    held = dict(flight)
+                    held["plane_latitude"] = slat
+                    held["plane_longitude"] = slon
+                    out.append(held)
+                    continue
                 out.append(flight)
                 continue
 

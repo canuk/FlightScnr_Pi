@@ -31,6 +31,9 @@ _HELICOPTER_PREFIXES = ("EC", "AS", "AW", "R4", "R6", "MI", "KA", "BK", "MD5")
 
 _DEFAULT_CATEGORY = "large-jet-2"
 
+# ADS-B emitter categories: C1 surface emergency, C2 surface service vehicle.
+_GROUND_ADSB_CATEGORIES = frozenset({"C1", "C2"})
+
 # Size relative to the base draw size after alpha-crop (1.0 = theme size).
 _CATEGORY_SIZE_SCALE = {
     "large-jet-4": 0.75,
@@ -40,10 +43,10 @@ _CATEGORY_SIZE_SCALE = {
     "business-jet": 0.5,
     "turboprop": 0.75,
     "small-prop-single": 0.5,
-    "small-prop-twin": 0.75,
+    "small-prop-twin": 0.5,
     "cargo": 0.75,
-    "helicopter": 0.75,
-    "military-helicopter": 0.75,
+    "helicopter": 0.5,
+    "military-helicopter": 0.5,
     "military-fighter": 0.75,
     "military-transport": 0.75,
     "fighter": 0.75,
@@ -156,6 +159,29 @@ def _military_category(plane_type: str, mapped: str | None) -> str:
     return "military-transport"
 
 
+def _adsb_category(flight: dict) -> str:
+    raw = (
+        flight.get("adsb_category")
+        or flight.get("category")
+        or ""
+    )
+    return str(raw).strip().upper()
+
+
+def _looks_like_ops_vehicle(flight: dict) -> bool:
+    """Airport ops vans often use OPS## callsigns with no ICAO type code."""
+    callsign = (
+        flight.get("callsign")
+        or flight.get("flight_number")
+        or flight.get("flight")
+        or ""
+    )
+    cs = "".join(str(callsign).upper().split())
+    if len(cs) >= 4 and cs.startswith("OPS") and cs[3:].isdigit():
+        return True
+    return False
+
+
 def icon_category(flight: dict | None) -> str:
     """Resolve adsb-tracker icon category for a flight dict."""
     flight = flight or {}
@@ -166,6 +192,9 @@ def icon_category(flight: dict | None) -> str:
     # over helicopter / military heuristics.
     if mapped:
         return mapped
+
+    if _adsb_category(flight) in _GROUND_ADSB_CATEGORIES or _looks_like_ops_vehicle(flight):
+        return "ground_veh"
 
     if _is_helicopter_type(plane_type):
         return "helicopter"
@@ -185,6 +214,10 @@ def is_ground_vehicle(flight: dict | None) -> bool:
     """True for airport ground vehicles (tugs, service vans, ARFF, etc.)."""
     if not flight or flight.get("kind") == "vessel":
         return False
+    if _adsb_category(flight) in _GROUND_ADSB_CATEGORIES:
+        return True
+    if _looks_like_ops_vehicle(flight):
+        return True
     return icon_category(flight) == "ground_veh"
 
 
@@ -274,6 +307,10 @@ def get_icon_surface(category: str, size: int, color: tuple) -> pygame.Surface |
     image = _crop_to_alpha(image)
     image = _fit_to_side(image, side)
     tinted = _colorize(image, color)
+    # The theme RGB slider mints a new color tuple per drag step, so this key
+    # space is unbounded; clear-and-refill like draw._text_cache.
+    if len(_surface_cache) >= 256:
+        _surface_cache.clear()
     _surface_cache[key] = tinted
     return tinted
 

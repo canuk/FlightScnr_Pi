@@ -15,7 +15,18 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+# Keyed by photo path: one entry per unique aircraft viewed, so cap it —
+# each surface is a few hundred KB and the process runs 24/7.
 _cache: dict[tuple[str, int, int], pygame.Surface | None] = {}
+_CACHE_MAX = 24
+
+
+def _cache_put(key, surface):
+    if len(_cache) >= _CACHE_MAX:
+        # FIFO: drop the oldest half; detail screens only need recent photos.
+        for old in list(_cache)[: _CACHE_MAX // 2]:
+            del _cache[old]
+    _cache[key] = surface
 
 
 def load_photo_surface(
@@ -39,7 +50,7 @@ def load_photo_surface(
         image = Image.open(path).convert("RGBA")
         src_w, src_h = image.size
         if src_h <= 0 or src_w <= 0:
-            _cache[key] = None
+            _cache_put(key, None)
             return None
         try:
             resample = Image.Resampling.LANCZOS
@@ -68,7 +79,7 @@ def load_photo_surface(
         logger.debug("Aircraft photo load failed %s: %s", path, exc)
         surface = None
 
-    _cache[key] = surface
+    _cache_put(key, surface)
     return surface
 
 

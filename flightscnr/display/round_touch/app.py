@@ -17,6 +17,7 @@ from utilities.route_enrichment import (
 )
 from display.round_touch import (
     draw,
+    frame_debug,
     ghost_touch_filter,
     gesture_handler,
     input_handler,
@@ -175,6 +176,10 @@ class RoundTouchDisplay:
         self._frame_gaps: list[float] = []
         self._frame_prev_at = 0.0
         self._frame_log_at = 0.0
+        self._jank_2x = 0
+        self._jank_3x = 0
+        self._jank_log_at = 0.0
+        self._prewarm_thread: Thread | None = None
         self._rgb_slider_channel: int | None = None
         self._brightness_slider_active = False
         self._vfr_opacity_slider_active = False
@@ -314,6 +319,9 @@ class RoundTouchDisplay:
         ).strip().upper()
         if callsign:
             return f"cs:{callsign}"
+        flight_id = str(flight.get("flight_id") or "").strip().lower()
+        if flight_id:
+            return f"fid:{flight_id}"
         return None
 
     def _ordered_flights(self):
@@ -369,6 +377,45 @@ class RoundTouchDisplay:
             self._selected_flight_id = self._flight_identity(ordered[0])
 
     def _present(self):
+        # Fast radar path: reuse a cached rotated static layer and only redraw
+        # the sweep wedge in display space (skips a full-frame rotate/tick).
+        if (
+            self.screen == SCREEN_RADAR
+            and settings.show_sweep_line()
+            and not self._calibrating_facing
+            and not self._panning_map
+            and not aircraft_alert.rim_flash_active()
+        ):
+            layer, layer_gen = radar.frame_layer_snapshot()
+            if layer is not None:
+                if FRAME_DEBUG:
+                    _t = time.perf_counter()
+                    rotation.present_radar_sweep(
+                        self._display,
+                        layer,
+                        layer_gen,
+                        radar.current_sweep_angle(),
+                        theme.SWEEP,
+                    )
+                    self._stage("4_present", time.perf_counter() - _t)
+                else:
+                    rotation.present_radar_sweep(
+                        self._display,
+                        layer,
+                        layer_gen,
+                        radar.current_sweep_angle(),
+                        theme.SWEEP,
+                    )
+                return
+
+        if FRAME_DEBUG:
+            _t = time.perf_counter()
+            rotation.present(self._display, self.surface)
+            self._stage("4a_rotate", time.perf_counter() - _t)
+            _t = time.perf_counter()
+            pygame.display.flip()
+            self._stage("4b_flip", time.perf_counter() - _t)
+            return
         rotation.present(self._display, self.surface)
         pygame.display.flip()
 
@@ -389,14 +436,21 @@ class RoundTouchDisplay:
         if self.screen == SCREEN_WIFI_SETUP:
             wifi_setup_screen.draw_wifi_setup(self.surface)
         elif self.screen == SCREEN_RADAR:
+            _t = time.perf_counter()
+            radar_flights = self._radar_flights()
+            if FRAME_DEBUG:
+                self._stage("1_flights", time.perf_counter() - _t)
+                _t = time.perf_counter()
             bezel_applied = radar.draw_radar(
                 self.surface,
-                self._radar_flights(),
+                radar_flights,
                 calibrate=self._calibrating_facing,
                 pan_mode=self._panning_map,
                 pan_offset=self._pan_offset if self._panning_map else None,
                 pan_release_to_save=self._long_press_pan.from_long_press,
             )
+            if FRAME_DEBUG:
+                self._stage("2_radar", time.perf_counter() - _t)
         elif self.screen == SCREEN_FLIGHT:
             self._scroll.max_offset = flight_detail.draw_flight_detail(
                 self.surface,
@@ -443,9 +497,15 @@ class RoundTouchDisplay:
         if remaining is not None:
             draw.draw_timeout_ring(self.surface, remaining)
             bezel_applied = False
+        _t = time.perf_counter()
         if not bezel_applied:
             draw.apply_round_bezel(self.surface)
+        if FRAME_DEBUG:
+            self._stage("3_bezel", time.perf_counter() - _t)
+            _t = time.perf_counter()
         self._present()
+        if FRAME_DEBUG:
+            self._stage("4_present", time.perf_counter() - _t)
 
     def _timeout_duration_s(self) -> float | None:
         """Active secondary-screen timeout in seconds, or None if no countdown."""
@@ -473,13 +533,42 @@ class RoundTouchDisplay:
         elapsed = time.time() - self._secondary_activity
         return max(0.0, (timeout_s - elapsed) / timeout_s)
 
+    def _stage(self, name: str, seconds: float) -> None:
+        frame_debug.stage(name, seconds)
+
     def _note_frame_time(self, draw_s: float) -> None:
         """Log draw cost and achieved interval every 2s (FLIGHTSCNR_FRAME_DEBUG=1)."""
         now = time.perf_counter()
+        gap = (now - self._frame_prev_at) if self._frame_prev_at else 0.0
         if self._frame_prev_at:
-            self._frame_gaps.append(now - self._frame_prev_at)
+            self._frame_gaps.append(gap)
         self._frame_prev_at = now
         self._frame_draws.append(draw_s)
+
+        # Attribute individual slow frames: smoothness is set by the worst
+        # frame-to-frame gaps, not the average. Anything > 2x the sweep budget
+        # is a visible beam step; log where that specific gap went.
+        marks = frame_debug.drain_gap()
+        budget = theme.SWEEP_FRAME_MS / 1000.0
+        if gap > 2.0 * budget:
+            self._jank_2x += 1
+            if gap > 3.0 * budget:
+                self._jank_3x += 1
+            if now - self._jank_log_at >= 0.25:
+                self._jank_log_at = now
+                top = " ".join(
+                    f"{name}={sec * 1000.0:.1f}"
+                    for name, sec in sorted(marks.items(), key=lambda kv: -kv[1])[:7]
+                    if sec >= 0.001
+                )
+                logger.info(
+                    "[frame] slow screen=%s gap=%.1fms draw=%.1fms | %s",
+                    self.screen,
+                    gap * 1000.0,
+                    draw_s * 1000.0,
+                    top or "(unattributed: loop overhead/sleep)",
+                )
+
         if now - self._frame_log_at < 2.0:
             return
         self._frame_log_at = now
@@ -487,12 +576,16 @@ class RoundTouchDisplay:
         gaps = sorted(self._frame_gaps)
         self._frame_draws = []
         self._frame_gaps = []
+        jank_2x, jank_3x = self._jank_2x, self._jank_3x
+        self._jank_2x = 0
+        self._jank_3x = 0
         if not draws or not gaps:
             return
         avg_gap = sum(gaps) / len(gaps)
         logger.info(
             "[frame] screen=%s n=%d draw avg=%.1f p95=%.1f max=%.1fms | "
-            "interval avg=%.1f p95=%.1fms (%.0f fps, %.2f°/frame)",
+            "interval avg=%.1f p95=%.1f max=%.1fms (%.0f fps, %.2f°/frame) | "
+            "jank >%dms=%d >%dms=%d",
             self.screen,
             len(draws),
             sum(draws) / len(draws) * 1000.0,
@@ -500,9 +593,52 @@ class RoundTouchDisplay:
             draws[-1] * 1000.0,
             avg_gap * 1000.0,
             gaps[min(len(gaps) - 1, int(len(gaps) * 0.95))] * 1000.0,
+            gaps[-1] * 1000.0,
             1.0 / avg_gap if avg_gap else 0.0,
             360.0 * avg_gap / (theme.SWEEP_PERIOD_MS / 1000.0),
+            int(2.0 * theme.SWEEP_FRAME_MS),
+            jank_2x,
+            int(3.0 * theme.SWEEP_FRAME_MS),
+            jank_3x,
         )
+        stages = frame_debug.drain_stages()
+        if stages:
+            parts = " ".join(
+                f"{name}={total / count * 1000.0:.1f}"
+                for name, (total, count) in sorted(stages.items())
+            )
+            logger.info(
+                "[frame] stages(ms avg): %s | rebuilds: %s",
+                parts,
+                radar.take_rebuild_counts(),
+            )
+
+    @staticmethod
+    def _bound(collection, cap: int = 200) -> None:
+        """Trim per-flight lookup dicts/sets — keys are aircraft/vessel/fire
+        ids, an unbounded space over weeks of uptime. Drops the oldest half."""
+        if len(collection) < cap:
+            return
+        drop = list(collection)[: cap // 2]
+        if isinstance(collection, dict):
+            for k in drop:
+                collection.pop(k, None)
+        else:
+            collection.difference_update(drop)
+
+    @staticmethod
+    def _prewarm_layer_worker(flights):
+        try:
+            radar.prewarm_frame_layer(flights)
+        except Exception:
+            logger.exception("Radar layer prewarm failed")
+
+    def _loop_stage(self, name: str, t0: float) -> float:
+        """Attribute non-draw loop work (>=1ms) to the next frame gap."""
+        now = time.perf_counter()
+        if FRAME_DEBUG and now - t0 >= 0.001:
+            frame_debug.stage(name, now - t0)
+        return now
 
     def _safe_draw(self):
         started = time.perf_counter() if FRAME_DEBUG else 0.0
@@ -1003,6 +1139,7 @@ class RoundTouchDisplay:
             try:
                 enrichment = fetch_route_enrichment(flight)
                 if enrichment:
+                    self._bound(self._route_enrichment)
                     self._route_enrichment[callsign] = enrichment
                     self._route_enrich_redraw = True
             finally:
@@ -1027,6 +1164,7 @@ class RoundTouchDisplay:
 
         cached = get_cached_aircraft_photo(hex_id)
         if cached:
+            self._bound(self._aircraft_photos)
             self._aircraft_photos[hex_id] = cached
             self._aircraft_photo_redraw = True
             return
@@ -1038,10 +1176,12 @@ class RoundTouchDisplay:
             try:
                 photo = fetch_aircraft_photo_for(snapshot)
                 if photo and photo.get("path"):
+                    self._bound(self._aircraft_photos)
                     self._aircraft_photos[hex_id] = photo
                     self._aircraft_photo_redraw = True
                     logger.info("[photo] detail ready for %s", hex_id)
                 else:
+                    self._bound(self._aircraft_photo_miss)
                     self._aircraft_photo_miss.add(hex_id)
             finally:
                 self._aircraft_photo_inflight.discard(hex_id)
@@ -1067,6 +1207,7 @@ class RoundTouchDisplay:
             vessel.get("mmsi") or "",
         )
         if cached:
+            self._bound(self._vessel_photos)
             self._vessel_photos[key] = cached
             self._vessel_photo_redraw = True
             return
@@ -1078,6 +1219,7 @@ class RoundTouchDisplay:
             try:
                 photo = fetch_vessel_photo_for(snapshot)
                 if photo and photo.get("path"):
+                    self._bound(self._vessel_photos)
                     self._vessel_photos[key] = photo
                     self._vessel_photo_redraw = True
                     logger.info(
@@ -1085,6 +1227,7 @@ class RoundTouchDisplay:
                         snapshot.get("name") or snapshot.get("mmsi"),
                     )
                 else:
+                    self._bound(self._vessel_photo_miss)
                     self._vessel_photo_miss.add(key)
             finally:
                 self._vessel_photo_inflight.discard(key)
@@ -1809,6 +1952,7 @@ class RoundTouchDisplay:
 
         def _on_done(path: str | None) -> None:
             if path:
+                self._bound(self._fire_maps)
                 self._fire_maps[fid] = path
                 self._fire_map_redraw = True
 
@@ -1872,6 +2016,7 @@ class RoundTouchDisplay:
                             "Change range via Settings → Options → Range, "
                             "or see README / GitHub issue #21."
                         )
+                _lt = time.perf_counter()
                 for event in pygame.event.get():
                     if event.type == pygame.QUIT:
                         # Touch drivers / compositors sometimes emit spurious QUIT.
@@ -1952,6 +2097,7 @@ class RoundTouchDisplay:
                             if scale_delta:
                                 self._apply_scale_step(scale_delta)
                         self._handle_navigation()
+                _lt = self._loop_stage("loop_events", _lt)
 
                 if self._tick_long_press_pan():
                     self._safe_draw()
@@ -1973,7 +2119,9 @@ class RoundTouchDisplay:
                     and not self._radar_modal_active()
                     and now - last_data_poll >= DATA_REFRESH_SECONDS
                 ):
+                    _lt = time.perf_counter()
                     self._tick_data()
+                    self._loop_stage("loop_tick_data", _lt)
                     last_data_poll = now
 
                 if (
@@ -1981,7 +2129,9 @@ class RoundTouchDisplay:
                     and not self._radar_modal_active()
                     and now - self._last_ais_poll >= AIS_REFRESH_SECONDS
                 ):
+                    _lt = time.perf_counter()
                     self._tick_ais()
+                    self._loop_stage("loop_tick_ais", _lt)
                     self._last_ais_poll = now
 
                 if (
@@ -2005,12 +2155,16 @@ class RoundTouchDisplay:
                             self._last_radar_draw = now
 
                 if now - last_location_check >= 2.0:
+                    _lt = time.perf_counter()
                     self._maybe_reload_location()
+                    self._loop_stage("loop_location", _lt)
                     last_location_check = now
 
                 if now - self._last_settings_reload >= 0.5:
+                    _lt = time.perf_counter()
                     if settings.reload():
                         self._apply_reloaded_settings()
+                    self._loop_stage("loop_settings", _lt)
                     self._last_settings_reload = now
 
                 if self._route_enrich_redraw and self.screen == SCREEN_FLIGHT:
@@ -2059,9 +2213,37 @@ class RoundTouchDisplay:
                 elif self.screen == SCREEN_RADAR:
                     radar.tick_sweep()
                     frame_ms = theme.SWEEP_FRAME_MS if settings.show_sweep_line() else 50
-                    if (time.time() - self._last_radar_draw) * 1000 >= frame_ms:
+                    # Stamp the schedule *before* drawing. Stamping after made the
+                    # interval = draw_time + frame_ms (~35ms) and capped the sweep
+                    # at ~28fps even when draws were cheap enough for ~50fps.
+                    now_draw = time.time()
+                    if (now_draw - self._last_radar_draw) * 1000 >= frame_ms:
+                        self._last_radar_draw = now_draw
                         self._safe_draw()
-                        self._last_radar_draw = time.time()
+                        # Rebuild + pre-rotate the ~10Hz aircraft layer on a
+                        # worker thread: the ~20ms cost doesn't fit anywhere in
+                        # a 16ms frame cadence on the main thread and showed as
+                        # a 10Hz beam stutter (see prewarm_frame_layer).
+                        if (
+                            settings.show_sweep_line()
+                            and not self._calibrating_facing
+                            and not self._panning_map
+                            and not self._radar_modal_active()
+                            and radar.frame_layer_due()
+                            and (
+                                self._prewarm_thread is None
+                                or not self._prewarm_thread.is_alive()
+                            )
+                        ):
+                            _lt = time.perf_counter()
+                            flights_snapshot = self._radar_flights()
+                            self._prewarm_thread = Thread(
+                                target=self._prewarm_layer_worker,
+                                args=(flights_snapshot,),
+                                daemon=True,
+                            )
+                            self._prewarm_thread.start()
+                            self._loop_stage("loop_prewarm_spawn", _lt)
                 elif self.screen in (SCREEN_CLOCK, SCREEN_CLOCK_SETTINGS, SCREEN_FORECAST):
                     self._tick_clock()
                 elif self.screen == SCREEN_TRACKED:
@@ -2091,10 +2273,12 @@ class RoundTouchDisplay:
                         self._safe_draw()
                         self._last_static_draw = now
 
+                _lt = time.perf_counter()
                 self._tick_timeout()
                 self._tick_auto_idle_clock()
                 self._tick_off_hours_clock()
                 self._apply_brightness()
+                self._loop_stage("loop_misc", _lt)
                 # Yield less while the sweep is animating so frames aren't padded to 10ms+.
                 if self.screen == SCREEN_RADAR and settings.show_sweep_line():
                     time.sleep(0.001)

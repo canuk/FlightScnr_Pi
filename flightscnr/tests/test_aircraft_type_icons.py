@@ -26,9 +26,22 @@ class TestAircraftTypeIcons(unittest.TestCase):
 
         self.assertTrue(is_ground_vehicle({"plane": "GRND"}))
         self.assertTrue(is_ground_vehicle({"plane": "FLME"}))
+        self.assertTrue(is_ground_vehicle({"adsb_category": "C1", "callsign": "OPS16"}))
+        self.assertTrue(is_ground_vehicle({"callsign": "OPS16", "plane": ""}))
+        self.assertTrue(is_ground_vehicle({"adsb_category": "C2"}))
         self.assertFalse(is_ground_vehicle({"plane": "B738"}))
         self.assertFalse(is_ground_vehicle({"kind": "vessel", "plane": "GRND"}))
         self.assertFalse(is_ground_vehicle(None))
+
+    def test_ops_callsign_icon(self):
+        from display.round_touch.aircraft_type_icons import icon_category
+
+        self.assertEqual(
+            icon_category({"callsign": "OPS16", "adsb_category": "C1"}),
+            "ground_veh",
+        )
+        self.assertEqual(icon_category({"callsign": "OPS18"}), "ground_veh")
+        self.assertNotEqual(icon_category({"plane": "B738", "callsign": "SWA3648"}), "ground_veh")
 
     def test_business_jet_unchanged(self):
         from display.round_touch.aircraft_type_icons import _category_for_type

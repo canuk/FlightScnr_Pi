@@ -100,6 +100,7 @@ def _to_entry(plane: dict, min_altitude: int) -> dict | None:
         db_flags = 0
     squawk = normalize_squawk(plane.get("squawk"))
     icao_hex = (plane.get("hex") or "").strip().upper()
+    adsb_category = str(plane.get("category") or "").strip().upper()
 
     return {
         "callsign": callsign,
@@ -116,6 +117,7 @@ def _to_entry(plane: dict, min_altitude: int) -> dict | None:
         "vertical_speed": vert,
         "squawk": squawk,
         "db_flags": db_flags,
+        "adsb_category": adsb_category,
         "data_source": "adsb_fi",
     }
 

@@ -20,7 +20,19 @@ logger = logging.getLogger(__name__)
 _API_BASE = "https://aeroapi.flightaware.com/aeroapi"
 _CACHE_TTL_S = 900  # 15 minutes — routes rarely change mid-flight
 _cache: dict[str, tuple[dict | None, float]] = {}
+_CACHE_MAX = 128
 _lock = threading.Lock()
+
+
+def _cache_put(ident: str, value: dict | None) -> None:
+    """Store with pruning — expired keys were never removed (24/7 leak)."""
+    now = time()
+    if len(_cache) >= _CACHE_MAX:
+        for k in [k for k, (_, ts) in list(_cache.items()) if now - ts >= _CACHE_TTL_S]:
+            _cache.pop(k, None)
+        while len(_cache) >= _CACHE_MAX:
+            _cache.pop(min(_cache, key=lambda k: _cache[k][1]), None)
+    _cache[ident] = (value, now)
 
 DATA_DIR = os.environ.get("FLIGHTSCNR_DATA_DIR", "/var/lib/flightscnr")
 USAGE_PATH = os.path.join(DATA_DIR, "flightaware_usage.json")
@@ -195,7 +207,7 @@ def lookup_route(ident: str) -> dict | None:
         return cached[0]
 
     if not _budget_allows_call():
-        _cache[ident] = (None, time())
+        _cache_put(ident, None)
         return None
 
     url = f"{_API_BASE}/flights/{ident}"
@@ -210,19 +222,19 @@ def lookup_route(ident: str) -> dict | None:
         _record_call()
         if resp.status_code == 404:
             logger.info("FlightAware: No flights for %s", ident)
-            _cache[ident] = (None, time())
+            _cache_put(ident, None)
             return None
         resp.raise_for_status()
         data = resp.json()
         flights = data.get("flights") or []
         best = _pick_flight(flights, ident)
         if not best:
-            _cache[ident] = (None, time())
+            _cache_put(ident, None)
             return None
         origin = _airport_code(best.get("origin"))
         destination = _airport_code(best.get("destination"))
         if not origin and not destination:
-            _cache[ident] = (None, time())
+            _cache_put(ident, None)
             return None
         result = {
             "origin": origin,
@@ -245,13 +257,13 @@ def lookup_route(ident: str) -> dict | None:
             result["destination"] or "?",
             result["status"] or "?",
         )
-        _cache[ident] = (result, time())
+        _cache_put(ident, result)
         return result
     except requests.exceptions.Timeout:
         logger.warning("FlightAware: Request timed out for %s", ident)
-        _cache[ident] = (None, time())
+        _cache_put(ident, None)
         return None
     except Exception as exc:
         logger.warning("FlightAware: Error looking up %s: %s", ident, exc)
-        _cache[ident] = (None, time())
+        _cache_put(ident, None)
         return None

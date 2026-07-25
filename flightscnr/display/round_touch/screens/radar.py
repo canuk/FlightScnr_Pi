@@ -1,12 +1,13 @@
 """Radar screen — FlightScnr-style sweep and aircraft markers."""
 
 import math
+import threading
 import time
 
 import pygame
 
 from display.round_touch import aircraft, draw, geo, map_bg, rainviewer_overlay, scale, settings, theme, wildfire_overlay
-from display.round_touch import alert_prefs
+from display.round_touch import alert_prefs, frame_debug
 from display.round_touch import vessel_declutter
 from utilities import aircraft_alert
 from utilities.overhead import load_tracked_callsign
@@ -20,6 +21,7 @@ _backdrop_gen = 0
 _frame_layer: pygame.Surface | None = None
 _frame_layer_key = None
 _frame_layer_at = 0.0
+_frame_layer_gen = 0
 # How often the fire/aircraft layer is rebuilt. The beam wants ~60fps, but
 # redrawing every icon and tag costs ~6ms, so aircraft refresh at 10Hz instead —
 # a 300kt target moves under 2px in that time.
@@ -35,12 +37,100 @@ def _init_sweep():
     invalidate_frame_layer()
 
 
+_rebuild_counts = {"backdrop": 0, "layer": 0}
+
+
+def _rebuild_stage(name: str, t0: float) -> float:
+    now = time.perf_counter()
+    if frame_debug.ENABLED:
+        frame_debug.stage(name, now - t0)
+    return now
+
+
+def take_rebuild_counts() -> dict:
+    """Rebuild tallies since the last call (frame-debug instrumentation)."""
+    counts = dict(_rebuild_counts)
+    for name in _rebuild_counts:
+        _rebuild_counts[name] = 0
+    return counts
+
+
 def invalidate_frame_layer() -> None:
     """Force the fire/aircraft layer to rebuild on the next radar frame."""
-    global _frame_layer, _frame_layer_key, _frame_layer_at
+    global _frame_layer, _frame_layer_key, _frame_layer_at, _frame_layer_gen
     _frame_layer = None
     _frame_layer_key = None
     _frame_layer_at = 0.0
+    _frame_layer_gen += 1
+
+
+def frame_layer_snapshot() -> tuple[pygame.Surface | None, int]:
+    """Static radar layer + generation for the fast rotated present path."""
+    return _frame_layer, _frame_layer_gen
+
+
+_layer_spare: pygame.Surface | None = None
+_layer_lock = threading.Lock()
+
+
+def frame_layer_due() -> bool:
+    """True when the ~10Hz aircraft layer wants a rebuild before the next frame."""
+    return _frame_layer is None or (
+        time.time() - _frame_layer_at
+    ) >= _FRAME_LAYER_TTL_S - theme.SWEEP_FRAME_MS / 1000.0
+
+
+def prewarm_frame_layer(flights) -> None:
+    """Rebuild the aircraft layer off the render thread and publish atomically.
+
+    Runs on a worker thread: the ~20ms rebuild + rotate doesn't fit in the
+    16ms sweep frame budget on a Pi 3, so doing it inline (or even between
+    frames on the main loop) delayed frames and read as a 10Hz stutter. Builds
+    into a spare buffer — never the published surface the display may be
+    blitting from — then swaps refs, which is atomic under the GIL.
+    """
+    global _layer_spare, _frame_layer, _frame_layer_key, _frame_layer_at, _frame_layer_gen
+    with _layer_lock:
+        if not frame_layer_due():
+            return
+        # Read the published backdrop only; rebuilds of it stay on the main thread.
+        backdrop = _backdrop
+        if backdrop is None or backdrop.get_size() != (theme.SIZE, theme.SIZE):
+            return
+        _rebuild_counts["layer"] += 1
+        build = _layer_spare
+        _layer_spare = None
+        if build is None or build.get_size() != (theme.SIZE, theme.SIZE):
+            build = pygame.Surface((theme.SIZE, theme.SIZE))
+        _t = time.perf_counter()
+        build.blit(backdrop, (0, 0))
+        _t = _rebuild_stage("2r_blit", _t)
+        wildfire_overlay.draw_fires(build, pan_offset=None)
+        _t = _rebuild_stage("2r_fires", _t)
+        _draw_flights(build, flights)
+        _t = _rebuild_stage("2r_flights", _t)
+        _draw_status(build, flights)
+        _draw_map_attribution(build)
+        _t = _rebuild_stage("2r_status", _t)
+        draw.apply_round_bezel(build)
+        _rebuild_stage("2r_bezel", _t)
+
+        old = _frame_layer
+        _frame_layer = build
+        _frame_layer_key = (theme.SIZE, _backdrop_gen)
+        _frame_layer_at = time.time()
+        _frame_layer_gen += 1
+        if old is not None and old.get_size() == (theme.SIZE, theme.SIZE):
+            _layer_spare = old
+
+    from display.round_touch import rotation
+
+    rotation.prewarm_base(build, _frame_layer_gen)
+
+
+def current_sweep_angle() -> float:
+    """Logical sweep tip angle (0 = up), including facing."""
+    return (_sweep_angle - settings.effective_facing_deg()) % 360.0
 
 
 def tick_sweep():
@@ -61,14 +151,14 @@ def _backdrop_cache_key(*, pan_mode: bool, calibrate: bool):
     if pan_mode or calibrate:
         return None
     facing = round(float(settings.effective_facing_deg() or 0.0), 1)
-    bg = map_bg.get_background()
-    overlay = rainviewer_overlay.get_overlay()
+    # Use stable content tokens — never id(get_background()), because map_bg
+    # used to re-convert_alpha every call and churn surface ids every frame.
     return (
         theme.SIZE,
         scale.active_index(),
         facing,
-        id(bg) if bg is not None else 0,
-        id(overlay) if overlay is not None else 0,
+        map_bg.cache_token(),
+        rainviewer_overlay.cache_token(),
         settings.show_compass_rose(),
         settings.show_range_rings(),
         settings.show_aircraft_tag(),
@@ -90,6 +180,7 @@ def _ensure_backdrop(*, calibrate: bool, pan_mode: bool, pan_offset) -> pygame.S
     if _backdrop is not None and _backdrop_key == key and _backdrop.get_size() == (theme.SIZE, theme.SIZE):
         return _backdrop
 
+    _rebuild_counts["backdrop"] += 1
     surf = pygame.Surface((theme.SIZE, theme.SIZE))
     draw.fill_background(surf)
     map_bg.draw_background(surf, pan_offset=None)
@@ -101,38 +192,63 @@ def _ensure_backdrop(*, calibrate: bool, pan_mode: bool, pan_offset) -> pygame.S
     return _backdrop
 
 
+def _frame_layer_fresh(key) -> bool:
+    return (
+        _frame_layer is not None
+        and _frame_layer_key == key
+        and _frame_layer.get_size() == (theme.SIZE, theme.SIZE)
+        and (time.time() - _frame_layer_at) < _FRAME_LAYER_TTL_S
+    )
+
+
 def _ensure_frame_layer(backdrop, flights, offset) -> pygame.Surface | None:
     """Cached backdrop + fires + aircraft, so sweep frames only redraw the beam.
 
     Returns None when there is no cached backdrop to build on (pan/calibrate),
     leaving the caller to draw straight onto the frame.
     """
-    global _frame_layer, _frame_layer_key, _frame_layer_at
+    global _frame_layer, _frame_layer_key, _frame_layer_at, _frame_layer_gen
     if backdrop is None:
         return None
 
-    now = time.time()
     key = (theme.SIZE, _backdrop_gen)
-    if (
-        _frame_layer is not None
-        and _frame_layer_key == key
-        and _frame_layer.get_size() == (theme.SIZE, theme.SIZE)
-        and (now - _frame_layer_at) < _FRAME_LAYER_TTL_S
-    ):
+    if _frame_layer_fresh(key):
         return _frame_layer
 
-    if _frame_layer is None or _frame_layer.get_size() != (theme.SIZE, theme.SIZE):
-        _frame_layer = pygame.Surface((theme.SIZE, theme.SIZE))
-    _frame_layer.blit(backdrop, (0, 0))
-    wildfire_overlay.draw_fires(_frame_layer, pan_offset=offset)
-    _draw_flights(_frame_layer, flights)
-    # Bake the round mask in here: aircraft and tags are the only things that
-    # reach past the rim, and everything drawn on top of this layer (sweep,
-    # rim flash, status, attribution) stays inside the visible circle.
-    draw.apply_round_bezel(_frame_layer)
-    _frame_layer_key = key
-    _frame_layer_at = now
-    return _frame_layer
+    # Rebuilds also run on the prewarm worker thread; concurrent rebuilds blit
+    # from shared surfaces and crash pygame ("must not be locked during blit").
+    if not _layer_lock.acquire(blocking=False):
+        if _frame_layer is not None and _frame_layer.get_size() == (theme.SIZE, theme.SIZE):
+            # Worker rebuild in flight — one slightly stale frame is fine.
+            return _frame_layer
+        _layer_lock.acquire()  # first frame ever: wait for the worker
+    try:
+        if _frame_layer_fresh(key):
+            return _frame_layer
+        _rebuild_counts["layer"] += 1
+        if _frame_layer is None or _frame_layer.get_size() != (theme.SIZE, theme.SIZE):
+            _frame_layer = pygame.Surface((theme.SIZE, theme.SIZE))
+        _t = time.perf_counter()
+        _frame_layer.blit(backdrop, (0, 0))
+        _t = _rebuild_stage("2r_blit", _t)
+        wildfire_overlay.draw_fires(_frame_layer, pan_offset=offset)
+        _t = _rebuild_stage("2r_fires", _t)
+        _draw_flights(_frame_layer, flights)
+        _t = _rebuild_stage("2r_flights", _t)
+        _draw_status(_frame_layer, flights)
+        _draw_map_attribution(_frame_layer)
+        _t = _rebuild_stage("2r_status", _t)
+        # Bake the round mask in here: aircraft and tags are the only things that
+        # reach past the rim, and everything drawn on top of this layer (sweep,
+        # rim flash) stays inside the visible circle.
+        draw.apply_round_bezel(_frame_layer)
+        _rebuild_stage("2r_bezel", _t)
+        _frame_layer_key = key
+        _frame_layer_at = time.time()
+        _frame_layer_gen += 1
+        return _frame_layer
+    finally:
+        _layer_lock.release()
 
 
 def draw_radar(
@@ -154,9 +270,7 @@ def draw_radar(
         pan_mode=pan_mode,
         pan_offset=offset,
     )
-    if backdrop is not None:
-        surface.blit(backdrop, (0, 0))
-    else:
+    if backdrop is None:
         draw.fill_background(surface)
         map_bg.request_background()
         map_bg.draw_background(surface, pan_offset=offset)
@@ -178,24 +292,30 @@ def draw_radar(
     else:
         layer = _ensure_frame_layer(backdrop, flights, offset)
         if layer is not None:
-            surface.blit(layer, (0, 0))
+            # Fast present composites from this layer directly; skip the unused
+            # logical-buffer blit (~3–4ms) while the sweep is animating.
+            if not settings.show_sweep_line() or aircraft_alert.rim_flash_active():
+                surface.blit(layer, (0, 0))
             bezel_applied = True
         else:
             wildfire_overlay.draw_fires(surface, pan_offset=offset)
             _draw_flights(surface, flights)
-        if settings.show_sweep_line():
-            sweep = (_sweep_angle - settings.effective_facing_deg()) % 360.0
+            _draw_status(surface, flights)
+            _draw_map_attribution(surface)
+        # Sweep is composited in present() on the fast path so we can skip a
+        # full-frame rotate every tick. Fall back to in-buffer draw when the
+        # layer isn't available (or during alert rim flash).
+        if settings.show_sweep_line() and (
+            layer is None or aircraft_alert.rim_flash_active()
+        ):
             draw.draw_sweep_line(
                 surface,
-                sweep,
+                current_sweep_angle(),
                 theme.SWEEP,
                 width=max(2, theme.s(2)),
-                trail_color=theme.SWEEP_TRAIL,
             )
         if aircraft_alert.rim_flash_active():
             _draw_alert_rim_flash(surface)
-        _draw_status(surface, flights)
-        _draw_map_attribution(surface)
 
     return bezel_applied
 
@@ -311,7 +431,7 @@ def _draw_vessel_tag(surface, x, y, flight):
         color = _overlay_color_for_basemap(theme.GRID)
         if vessel_declutter.hierarchy_enabled() and vessel_declutter.is_parked(flight):
             color = _overlay_color_for_basemap(theme.HINT)
-        rendered = font.render(name, True, color)
+        rendered = draw.render_text_cached(font, name, color)
         tag_on_right = x < theme.CENTER_X
         symbol_half = theme.AIRCRAFT_ICON_RADIUS
         if tag_on_right:
@@ -404,7 +524,7 @@ def _draw_aircraft_tag(surface, x, y, flight):
     for i, (text, color, font, row_y) in enumerate(lines):
         if not text or text == "—" and i == 1:
             continue
-        rendered = font.render(text, True, color)
+        rendered = draw.render_text_cached(font, text, color)
         if align == "left":
             surface.blit(rendered, (anchor_x, ly + row_y))
         else:
@@ -491,17 +611,24 @@ def _overlay_color_for_basemap(color: tuple) -> tuple:
     )
 
 
+_halo_cache: dict[int, pygame.Surface] = {}
+
+
 def _draw_light_map_icon_halo(surface, x: int, y: int, *, compact: bool) -> None:
     """White soft disc behind icons so amber traffic reads on busy charts."""
     if not _light_basemap():
         return
     r = theme.s(12) if compact else theme.s(16)
-    side = r * 2 + 4
-    halo = pygame.Surface((side, side), pygame.SRCALPHA)
-    cx = cy = side // 2
-    pygame.draw.circle(halo, (*_LIGHT_MAP_HALO, 230), (cx, cy), r)
-    pygame.draw.circle(halo, (*_LIGHT_MAP_HALO, 100), (cx, cy), r + 1)
-    surface.blit(halo, (int(x) - cx, int(y) - cy))
+    halo = _halo_cache.get(r)
+    if halo is None:
+        side = r * 2 + 4
+        halo = pygame.Surface((side, side), pygame.SRCALPHA)
+        c = side // 2
+        pygame.draw.circle(halo, (*_LIGHT_MAP_HALO, 230), (c, c), r)
+        pygame.draw.circle(halo, (*_LIGHT_MAP_HALO, 100), (c, c), r + 1)
+        _halo_cache[r] = halo
+    c = halo.get_width() // 2
+    surface.blit(halo, (int(x) - c, int(y) - c))
 
 
 def _flight_icon_color(flight, *, compact: bool):

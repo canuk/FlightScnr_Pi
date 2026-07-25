@@ -161,9 +161,34 @@ def _load_meta() -> dict[str, Any]:
         return _meta
 
 
+def _prune_meta_locked() -> None:
+    """Drop expired index entries and their photo files.
+
+    The index gains one key per unique airframe ever looked up; the TTL only
+    gated reuse, so entries (and JPEGs on the SD card) accumulated forever.
+    """
+    if not _meta:
+        return
+    now = time.time()
+    expired = [
+        k
+        for k, v in _meta.items()
+        if not isinstance(v, dict) or now - float(v.get("ts") or 0) >= META_TTL_S
+    ]
+    for key in expired:
+        entry = _meta.pop(key)
+        path = (entry or {}).get("path") if isinstance(entry, dict) else ""
+        if path and os.path.isfile(path):
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+
+
 def _save_meta() -> None:
     with _lock:
         _ensure_cache_dir()
+        _prune_meta_locked()
         tmp = _META_PATH + ".tmp"
         with open(tmp, "w", encoding="utf-8") as fh:
             json.dump(_meta or {}, fh, indent=2)

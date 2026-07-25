@@ -63,5 +63,7 @@ def load_flag_surface(iso2: str, height: int) -> pygame.Surface | None:
             logger.debug("Flag load failed for %s: %s", code, exc)
             surface = None
 
+    if len(_cache) >= 128:
+        _cache.clear()  # keyed per country seen; bound it for 24/7 uptime
     _cache[key] = surface
     return surface
