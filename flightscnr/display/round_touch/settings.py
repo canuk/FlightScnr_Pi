@@ -982,6 +982,7 @@ def apply_theme_colors():
     # Fixed radar chrome (FlightScnr radar_theme.h).
     theme.BG = (2, 15, 3)
     theme.AIRCRAFT = (255, 180, 40)
+    theme.AIRCRAFT_UNKNOWN = (150, 100, 28)
     theme.TAG_TYPE = (255, 200, 0)
     theme.TAG_ALT_ASCEND = (0, 255, 255)
     theme.TAG_ALT_DESCEND = (255, 0, 255)

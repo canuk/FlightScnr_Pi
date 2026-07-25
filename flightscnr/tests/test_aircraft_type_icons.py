@@ -43,6 +43,16 @@ class TestAircraftTypeIcons(unittest.TestCase):
         self.assertEqual(icon_category({"callsign": "OPS18"}), "ground_veh")
         self.assertNotEqual(icon_category({"plane": "B738", "callsign": "SWA3648"}), "ground_veh")
 
+    def test_is_unknown_type(self):
+        from display.round_touch.aircraft_type_icons import is_unknown_type
+
+        self.assertTrue(is_unknown_type({"plane": ""}))
+        self.assertTrue(is_unknown_type({"plane": "ZZZZ"}))
+        self.assertFalse(is_unknown_type({"plane": "B738"}))
+        self.assertFalse(is_unknown_type({"plane": "SERV"}))
+        self.assertFalse(is_unknown_type({"callsign": "OPS16", "adsb_category": "C1"}))
+        self.assertFalse(is_unknown_type({"kind": "vessel", "plane": ""}))
+
     def test_business_jet_unchanged(self):
         from display.round_touch.aircraft_type_icons import _category_for_type
 

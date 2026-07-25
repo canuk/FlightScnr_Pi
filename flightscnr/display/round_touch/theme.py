@@ -83,6 +83,8 @@ SWEEP = (48, 255, 96)
 SWEEP_TRAIL = (12, 72, 28)
 LABEL = (255, 255, 255)
 AIRCRAFT = (255, 180, 40)
+# Unmapped ICAO type / blank type — darker so known traffic stays punchy.
+AIRCRAFT_UNKNOWN = (150, 100, 28)
 TAG_TYPE = (255, 200, 0)
 TAG_ALT_ASCEND = (0, 255, 255)
 TAG_ALT_DESCEND = (255, 0, 255)

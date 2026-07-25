@@ -221,6 +221,27 @@ def is_ground_vehicle(flight: dict | None) -> bool:
     return icon_category(flight) == "ground_veh"
 
 
+def is_unknown_type(flight: dict | None) -> bool:
+    """True when we have no ICAO type mapping (blank or unmapped code)."""
+    if not flight or flight.get("kind") == "vessel":
+        return False
+    if is_ground_vehicle(flight):
+        return False
+    plane_type = flight.get("plane") or ""
+    if _category_for_type(plane_type):
+        return False
+    if _is_helicopter_type(plane_type):
+        return False
+    try:
+        from utilities import aircraft_alert
+
+        if aircraft_alert.is_military(flight):
+            return False
+    except ImportError:
+        pass
+    return True
+
+
 def _icon_path(category: str) -> str | None:
     _load_mapping()
     if not _icon_files:

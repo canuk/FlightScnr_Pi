@@ -569,6 +569,7 @@ def _light_basemap() -> bool:
 # Near-black silhouettes drown in sectional ink (airspace, labels); amber
 # matches dark-radar traffic and stays off the chart's blue/green palette.
 _LIGHT_MAP_ICON = (234, 88, 12)         # vivid amber-orange
+_LIGHT_MAP_ICON_UNKNOWN = (146, 64, 14)  # darker amber for unmapped types
 _LIGHT_MAP_TRACKED = (22, 163, 74)      # vivid green (tracked)
 _LIGHT_MAP_CALLSIGN = (15, 23, 42)      # near-black tags
 _LIGHT_MAP_TYPE = (30, 64, 175)         # indigo
@@ -588,6 +589,7 @@ def _overlay_color_for_basemap(color: tuple) -> tuple:
     key = (r, g, b)
     mapping = {
         tuple(theme.AIRCRAFT[:3]): _LIGHT_MAP_ICON,
+        tuple(theme.AIRCRAFT_UNKNOWN[:3]): _LIGHT_MAP_ICON_UNKNOWN,
         tuple(theme.VESSEL_MOVING[:3]): _LIGHT_MAP_ICON,
         tuple(theme.SWEEP[:3]): _LIGHT_MAP_TRACKED,
         tuple(theme.GRID[:3]): _LIGHT_MAP_CALLSIGN,
@@ -643,6 +645,13 @@ def _flight_icon_color(flight, *, compact: bool):
         if vessel_declutter.is_parked(flight):
             return _overlay_color_for_basemap(theme.VESSEL_PARKED)
         return _overlay_color_for_basemap(theme.VESSEL_MOVING)
+    try:
+        from display.round_touch import aircraft_type_icons
+
+        if aircraft_type_icons.is_unknown_type(flight):
+            return _overlay_color_for_basemap(theme.AIRCRAFT_UNKNOWN)
+    except Exception:
+        pass
     return _overlay_color_for_basemap(theme.AIRCRAFT)
 
 
