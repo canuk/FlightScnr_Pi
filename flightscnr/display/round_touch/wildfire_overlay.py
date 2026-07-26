@@ -222,15 +222,19 @@ def draw_fires(
             pygame.draw.circle(surface, (255, 0, 0), (int(x), int(y)), r)
 
 
-def pick_fire_at(tap_x: int, tap_y: int, alt_x=None, alt_y=None) -> dict[str, Any] | None:
-    """Nearest fire under a tap (icon hit radius)."""
+def pick_fire_at(
+    tap_x: int, tap_y: int, alt_x=None, alt_y=None
+) -> tuple[dict[str, Any] | None, float | None]:
+    """Nearest fire under a tap. Returns ``(fire, distance_sq)`` or ``(None, None)``."""
     fires = get_fires()
     if not fires:
-        return None
+        return None, None
     points = [(tap_x, tap_y)]
     if alt_x is not None and alt_y is not None:
         points.append((alt_x, alt_y))
-    hit_r = max(theme.TAP_PICK_RADIUS, theme.s(28))
+    # Generous hit box: fire glyphs are small and sit near the rim where
+    # beyond-range aircraft blips compete for the same tap.
+    hit_r = max(theme.TAP_PICK_RADIUS, theme.s(36))
     hit_r2 = hit_r * hit_r
     best = None
     best_d2 = None
@@ -244,4 +248,4 @@ def pick_fire_at(tap_x: int, tap_y: int, alt_x=None, alt_y=None) -> dict[str, An
             if d2 <= hit_r2 and (best_d2 is None or d2 < best_d2):
                 best = fire
                 best_d2 = d2
-    return best
+    return best, best_d2

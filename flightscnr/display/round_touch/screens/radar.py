@@ -62,6 +62,8 @@ def invalidate_frame_layer() -> None:
     _frame_layer_key = None
     _frame_layer_at = 0.0
     _frame_layer_gen += 1
+    # Keep spare/cooling buffers so the next rebuild paints a free surface
+    # instead of the one present may still be reading.
 
 
 def frame_layer_snapshot() -> tuple[pygame.Surface | None, int]:
@@ -70,6 +72,9 @@ def frame_layer_snapshot() -> tuple[pygame.Surface | None, int]:
 
 
 _layer_spare: pygame.Surface | None = None
+# Previously published layer: may still be mid-blit/present on the main thread,
+# so it is not writable until the *next* publish recycles it to spare.
+_layer_cooling: pygame.Surface | None = None
 _layer_lock = threading.Lock()
 
 
@@ -78,6 +83,62 @@ def frame_layer_due() -> bool:
     return _frame_layer is None or (
         time.time() - _frame_layer_at
     ) >= _FRAME_LAYER_TTL_S - theme.SWEEP_FRAME_MS / 1000.0
+
+
+def _take_build_surface() -> pygame.Surface:
+    """Return a surface that is safe to draw into (not published / in-flight)."""
+    global _layer_spare
+    build = _layer_spare
+    _layer_spare = None
+    if build is None or build.get_size() != (theme.SIZE, theme.SIZE):
+        return pygame.Surface((theme.SIZE, theme.SIZE))
+    return build
+
+
+def _publish_frame_layer(build: pygame.Surface, key) -> pygame.Surface:
+    """Publish ``build`` and retire the previous layer through a cooling slot.
+
+    Triple-buffer: published (readable) → cooling (one-gen grace) → spare
+    (writable). Writing the published surface in place races the main thread's
+    blit/present and raises ``pygame.error: Surfaces must not be locked``.
+    """
+    global _frame_layer, _frame_layer_key, _frame_layer_at, _frame_layer_gen
+    global _layer_spare, _layer_cooling
+    old = _frame_layer
+    _frame_layer = build
+    _frame_layer_key = key
+    _frame_layer_at = time.time()
+    _frame_layer_gen += 1
+    if (
+        _layer_cooling is not None
+        and _layer_cooling.get_size() == (theme.SIZE, theme.SIZE)
+        and _layer_spare is None
+    ):
+        _layer_spare = _layer_cooling
+    _layer_cooling = (
+        old
+        if old is not None and old.get_size() == (theme.SIZE, theme.SIZE)
+        else None
+    )
+    return build
+
+
+def _build_frame_layer(build: pygame.Surface, backdrop, flights, offset) -> None:
+    """Paint fires/aircraft/status onto ``build`` (caller owns locking)."""
+    _t = time.perf_counter()
+    build.blit(backdrop, (0, 0))
+    _t = _rebuild_stage("2r_blit", _t)
+    wildfire_overlay.draw_fires(build, pan_offset=offset)
+    _t = _rebuild_stage("2r_fires", _t)
+    _draw_flights(build, flights)
+    _t = _rebuild_stage("2r_flights", _t)
+    _draw_status(build, flights)
+    _draw_map_attribution(build)
+    _t = _rebuild_stage("2r_status", _t)
+    # Bake the round mask here: aircraft/tags are the only things that reach
+    # past the rim; sweep/rim flash drawn on top stay inside the circle.
+    draw.apply_round_bezel(build)
+    _rebuild_stage("2r_bezel", _t)
 
 
 def prewarm_frame_layer(flights) -> None:
@@ -89,7 +150,8 @@ def prewarm_frame_layer(flights) -> None:
     into a spare buffer — never the published surface the display may be
     blitting from — then swaps refs, which is atomic under the GIL.
     """
-    global _layer_spare, _frame_layer, _frame_layer_key, _frame_layer_at, _frame_layer_gen
+    snap = None
+    gen = 0
     with _layer_lock:
         if not frame_layer_due():
             return
@@ -98,34 +160,17 @@ def prewarm_frame_layer(flights) -> None:
         if backdrop is None or backdrop.get_size() != (theme.SIZE, theme.SIZE):
             return
         _rebuild_counts["layer"] += 1
-        build = _layer_spare
-        _layer_spare = None
-        if build is None or build.get_size() != (theme.SIZE, theme.SIZE):
-            build = pygame.Surface((theme.SIZE, theme.SIZE))
-        _t = time.perf_counter()
-        build.blit(backdrop, (0, 0))
-        _t = _rebuild_stage("2r_blit", _t)
-        wildfire_overlay.draw_fires(build, pan_offset=None)
-        _t = _rebuild_stage("2r_fires", _t)
-        _draw_flights(build, flights)
-        _t = _rebuild_stage("2r_flights", _t)
-        _draw_status(build, flights)
-        _draw_map_attribution(build)
-        _t = _rebuild_stage("2r_status", _t)
-        draw.apply_round_bezel(build)
-        _rebuild_stage("2r_bezel", _t)
-
-        old = _frame_layer
-        _frame_layer = build
-        _frame_layer_key = (theme.SIZE, _backdrop_gen)
-        _frame_layer_at = time.time()
-        _frame_layer_gen += 1
-        if old is not None and old.get_size() == (theme.SIZE, theme.SIZE):
-            _layer_spare = old
+        build = _take_build_surface()
+        _build_frame_layer(build, backdrop, flights, None)
+        _publish_frame_layer(build, (theme.SIZE, _backdrop_gen))
+        # Snapshot under the lock so prewarm_base never pixel-locks the
+        # published surface while the main thread blits/presents it.
+        snap = build.copy()
+        gen = _frame_layer_gen
 
     from display.round_touch import rotation
 
-    rotation.prewarm_base(build, _frame_layer_gen)
+    rotation.prewarm_base(snap, gen)
 
 
 def current_sweep_angle() -> float:
@@ -207,7 +252,6 @@ def _ensure_frame_layer(backdrop, flights, offset) -> pygame.Surface | None:
     Returns None when there is no cached backdrop to build on (pan/calibrate),
     leaving the caller to draw straight onto the frame.
     """
-    global _frame_layer, _frame_layer_key, _frame_layer_at, _frame_layer_gen
     if backdrop is None:
         return None
 
@@ -226,27 +270,11 @@ def _ensure_frame_layer(backdrop, flights, offset) -> pygame.Surface | None:
         if _frame_layer_fresh(key):
             return _frame_layer
         _rebuild_counts["layer"] += 1
-        if _frame_layer is None or _frame_layer.get_size() != (theme.SIZE, theme.SIZE):
-            _frame_layer = pygame.Surface((theme.SIZE, theme.SIZE))
-        _t = time.perf_counter()
-        _frame_layer.blit(backdrop, (0, 0))
-        _t = _rebuild_stage("2r_blit", _t)
-        wildfire_overlay.draw_fires(_frame_layer, pan_offset=offset)
-        _t = _rebuild_stage("2r_fires", _t)
-        _draw_flights(_frame_layer, flights)
-        _t = _rebuild_stage("2r_flights", _t)
-        _draw_status(_frame_layer, flights)
-        _draw_map_attribution(_frame_layer)
-        _t = _rebuild_stage("2r_status", _t)
-        # Bake the round mask in here: aircraft and tags are the only things that
-        # reach past the rim, and everything drawn on top of this layer (sweep,
-        # rim flash) stays inside the visible circle.
-        draw.apply_round_bezel(_frame_layer)
-        _rebuild_stage("2r_bezel", _t)
-        _frame_layer_key = key
-        _frame_layer_at = time.time()
-        _frame_layer_gen += 1
-        return _frame_layer
+        # Never paint into the published surface — present/rim-flash may still
+        # be blitting it. Same spare→publish→cool path as prewarm_frame_layer.
+        build = _take_build_surface()
+        _build_frame_layer(build, backdrop, flights, offset)
+        return _publish_frame_layer(build, key)
     finally:
         _layer_lock.release()
 
@@ -295,7 +323,12 @@ def draw_radar(
             # Fast present composites from this layer directly; skip the unused
             # logical-buffer blit (~3–4ms) while the sweep is animating.
             if not settings.show_sweep_line() or aircraft_alert.rim_flash_active():
-                surface.blit(layer, (0, 0))
+                try:
+                    surface.blit(layer, (0, 0))
+                except pygame.error as exc:
+                    # Transient race with layer rebuild; skip this composite.
+                    if "locked" not in str(exc).lower():
+                        raise
             bezel_applied = True
         else:
             wildfire_overlay.draw_fires(surface, pan_offset=offset)
@@ -919,7 +952,10 @@ def _flight_screen_xy(flight) -> tuple[int, int] | None:
 
 
 def pick_flight_at(flights, tap_x, tap_y, alt_x=None, alt_y=None):
-    """Hit-test aircraft/vessel *icons* only — labels are not tappable."""
+    """Hit-test aircraft/vessel *icons* only — labels are not tappable.
+
+    Returns ``(flight, distance_sq)`` or ``(None, None)``.
+    """
     points = [(tap_x, tap_y)]
     if alt_x is not None and alt_y is not None:
         points.append((alt_x, alt_y))
@@ -941,7 +977,7 @@ def pick_flight_at(flights, tap_x, tap_y, alt_x=None, alt_y=None):
             if d2 <= hit_r2 and (best_d2 is None or d2 < best_d2):
                 best = flight
                 best_d2 = d2
-    return best
+    return best, best_d2
 
 
 def flights_by_distance(flights):

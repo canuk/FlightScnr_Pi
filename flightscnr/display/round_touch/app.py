@@ -646,6 +646,20 @@ class RoundTouchDisplay:
             self._draw()
             if FRAME_DEBUG:
                 self._note_frame_time(time.perf_counter() - started)
+        except pygame.error as exc:
+            # Layer prewarm vs present can briefly contend on a surface under
+            # heavy traffic; skipping one frame is better than freezing forever.
+            if "locked" in str(exc).lower():
+                logger.warning("Display draw skipped (surface locked): %s", exc)
+                return
+            self._fatal_error = str(exc)
+            logger.exception("Display draw failed")
+            try:
+                draw.draw_error(self.surface, self._fatal_error)
+                draw.apply_round_bezel(self.surface)
+                self._present()
+            except Exception:
+                logger.exception("Could not render error screen")
         except Exception as exc:
             self._fatal_error = str(exc)
             logger.exception("Display draw failed")
@@ -1239,7 +1253,10 @@ class RoundTouchDisplay:
         return self._position_smoother.apply(self.flights)
 
     def _open_flight_at(self, x: int, y: int, alt_x: int | None = None, alt_y: int | None = None) -> bool:
-        picked = radar.pick_flight_at(self._radar_flights(), x, y, alt_x, alt_y)
+        picked, _ = radar.pick_flight_at(self._radar_flights(), x, y, alt_x, alt_y)
+        return self._open_picked_flight(picked)
+
+    def _open_picked_flight(self, picked: dict | None) -> bool:
         ordered = self._ordered_flights()
         if not picked or not ordered:
             return False
@@ -1925,7 +1942,10 @@ class RoundTouchDisplay:
         self._selected_fire_id = self._fire_identity(ordered[self.fire_index])
 
     def _open_fire_at(self, x: int, y: int, alt_x: int | None = None, alt_y: int | None = None) -> bool:
-        picked = wildfire_overlay.pick_fire_at(x, y, alt_x, alt_y)
+        picked, _ = wildfire_overlay.pick_fire_at(x, y, alt_x, alt_y)
+        return self._open_picked_fire(picked)
+
+    def _open_picked_fire(self, picked: dict | None) -> bool:
         ordered = wildfire_overlay.fires_by_distance()
         if not picked or not ordered:
             return False
@@ -1968,9 +1988,23 @@ class RoundTouchDisplay:
     def _open_flight_or_fire_at(
         self, x: int, y: int, alt_x: int | None = None, alt_y: int | None = None
     ) -> bool:
-        if self._open_flight_at(x, y, alt_x, alt_y):
-            return True
-        return self._open_fire_at(x, y, alt_x, alt_y)
+        """Open the nearer of a flight or fire under the tap.
+
+        Dense traffic (and beyond-range rim blips) used to always win over a
+        fire even when the finger was clearly on the flame icon.
+        """
+        flight, flight_d2 = radar.pick_flight_at(self._radar_flights(), x, y, alt_x, alt_y)
+        fire, fire_d2 = wildfire_overlay.pick_fire_at(x, y, alt_x, alt_y)
+        # Prefer the fire when it is as close or only slightly farther — fires
+        # are sparse and easy to miss under Oshkosh-density aircraft.
+        fire_bias = theme.s(16) ** 2
+        if fire is not None and (
+            flight is None or fire_d2 is None or flight_d2 is None or fire_d2 <= flight_d2 + fire_bias
+        ):
+            return self._open_picked_fire(fire)
+        if flight is not None:
+            return self._open_picked_flight(flight)
+        return False
 
     def _tick_ais(self):
         if self._radar_modal_active():

@@ -22,17 +22,22 @@ _needs_full = False
 
 def prewarm_base(base_layer: pygame.Surface, layer_gen: int) -> None:
     """Rotate the rebuilt radar layer in idle time between frames so the next
-    presented frame only pays the swap blit + flip, never the rotate."""
+    presented frame only pays the swap blit + flip, never the rotate.
+
+    ``base_layer`` must be a private surface (caller snapshot); never pass the
+    live published radar layer — concurrent blit/present will lock-conflict.
+    """
     global _next_base, _next_base_key
     rotation = rotation_degrees()
-    key = (id(base_layer), layer_gen, rotation, theme.SIZE)
+    # Key on generation only — the snapshot surface id differs from the
+    # published layer id that present_radar_sweep sees.
+    key = (layer_gen, rotation, theme.SIZE)
     if key == _rot_base_key or key == _next_base_key:
         return
     _t = time.perf_counter()
     if rotation == 0:
-        # Copy: the layer buffer gets recycled by the rebuild double-buffer,
-        # and the display keeps erasing sweep rects from _rot_base.
-        _next_base = base_layer.copy()
+        # Already a private snapshot from the radar rebuild path.
+        _next_base = base_layer
     else:
         _next_base = pygame.transform.rotate(base_layer, -rotation)
     _next_base_key = key
@@ -124,7 +129,8 @@ def present_radar_sweep(
     from display.round_touch import draw
 
     rotation = rotation_degrees()
-    key = (id(base_layer), layer_gen, rotation, theme.SIZE)
+    # Match prewarm_base — generation identifies the layer contents.
+    key = (layer_gen, rotation, theme.SIZE)
     origin_off = (0, 0)
     full_refresh = False
 
@@ -149,17 +155,27 @@ def present_radar_sweep(
 
     if stale:
         _t = time.perf_counter()
-        if rotation == 0:
-            # Copy so the async layer rebuild can't scribble on the surface
-            # we erase sweep rects from (see prewarm_frame_layer).
-            _rot_base = base_layer.copy()
-        else:
-            _rot_base = pygame.transform.rotate(base_layer, -rotation)
-        _rot_base_key = key
-        _pending_key = None
-        swap_in = True
-        if frame_debug.ENABLED:
-            frame_debug.stage("4r_rotate", time.perf_counter() - _t)
+        try:
+            if rotation == 0:
+                # Copy so the async layer rebuild can't scribble on the surface
+                # we erase sweep rects from (see prewarm_frame_layer).
+                _rot_base = base_layer.copy()
+            else:
+                _rot_base = pygame.transform.rotate(base_layer, -rotation)
+        except pygame.error as exc:
+            # Published layer briefly locked by a concurrent rebuild/snapshot.
+            if "locked" in str(exc).lower():
+                if _rot_base is None:
+                    return
+                stale = False
+            else:
+                raise
+        if stale:
+            _rot_base_key = key
+            _pending_key = None
+            swap_in = True
+            if frame_debug.ENABLED:
+                frame_debug.stage("4r_rotate", time.perf_counter() - _t)
 
     if swap_in:
         if display.get_size() != _rot_base.get_size():
