@@ -1,7 +1,13 @@
-"""RainViewer precipitation overlay for the circular radar map.
+"""Precipitation radar overlay for the circular radar map.
 
-Uses the free public Weather Maps API (personal/educational use):
-https://www.rainviewer.com/api.html
+Providers (tried in order):
+  1. LibreWXR — open-source RainViewer-compatible API (slippy XYZ tiles)
+     https://librewxr.net/ / https://api.librewxr.net/
+  2. RainViewer — free personal Weather Maps API (centered lat/lon tiles)
+     https://www.rainviewer.com/api.html
+
+Rate limits: stay polite (~30 req/IP/min, 2s min gap). RainViewer's free
+ceiling is 100/min; LibreWXR has no published cap but we share the same gate.
 """
 
 from __future__ import annotations
@@ -13,6 +19,8 @@ import math
 import os
 import threading
 import time
+from collections import deque
+from typing import Any
 
 import pygame
 import requests
@@ -24,26 +32,134 @@ logger = logging.getLogger("flightscnr.display")
 DATA_DIR = os.environ.get("FLIGHTSCNR_DATA_DIR", "/var/lib/flightscnr")
 CACHE_DIR = os.path.join(DATA_DIR, "maps", "rainviewer")
 
-METADATA_URL = "https://api.rainviewer.com/public/weather-maps.json"
-USER_AGENT = "FlightScnrPi/1.0 (RainViewer overlay; https://www.rainviewer.com/)"
+USER_AGENT = (
+    "FlightScnrPi/1.0 (precip overlay; LibreWXR+RainViewer; "
+    "https://librewxr.net/ https://www.rainviewer.com/)"
+)
 
-# Free personal API: max zoom 7, Universal Blue (2), PNG.
+# Free personal RainViewer API: max zoom 7, Universal Blue (2), PNG.
+# LibreWXR accepts the same color id and zoom for XYZ tiles.
 MAX_ZOOM = 7
 TILE_SIZE = 512
 COLOR_SCHEME = 2
 OPTIONS = "0_0"
 
 EARTH_RADIUS_M = 6378137.0
-METADATA_TTL_S = 5 * 60
+# Past frames step every ~10 min. Poll metadata every minute; if the latest
+# frame timestamp is unchanged (or the poll fails), keep serving the cached
+# overlay — only fetch tiles when a new frame appears.
+METADATA_TTL_S = 60
 OVERLAY_ALPHA = 180  # keep map/roads readable under precip
 FETCH_TIMEOUT_S = 20
 
+# Official RainViewer free ceiling is 100 req/IP/min. Cap ourselves at 30
+# (~1 per 2s average) so a busy Pi still leaves headroom.
+MAX_REQUESTS_PER_MINUTE = 30
+MIN_REQUEST_GAP_S = 2.0
+RATE_LIMIT_BACKOFF_S = 60.0
+
+# After LibreWXR fails metadata/tiles, skip it briefly so we don't thrash.
+PROVIDER_FAIL_COOLDOWN_S = 5 * 60
+
+# tile_mode:
+#   "slippy" — XYZ tiles only (LibreWXR); we composite a home-centered window
+#   "maps"   — RainViewer lat/lon centered single PNG
+PROVIDERS: tuple[dict[str, Any], ...] = (
+    {
+        "id": "librewxr",
+        "name": "LibreWXR",
+        "metadata_url": "https://api.librewxr.net/public/weather-maps.json",
+        "attribution": "© LibreWXR",
+        "tile_mode": "slippy",
+    },
+    {
+        "id": "rainviewer",
+        "name": "RainViewer",
+        "metadata_url": "https://api.rainviewer.com/public/weather-maps.json",
+        "attribution": "© RainViewer",
+        "tile_mode": "maps",
+    },
+)
+
 _lock = threading.Lock()
 _surfaces: dict[tuple, pygame.Surface] = {}
-_fetch_threads: dict[tuple, threading.Thread] = {}
 _meta: dict | None = None
+_meta_provider_id: str | None = None
 _meta_ts = 0.0
 _meta_lock = threading.Lock()
+_active_provider_id: str | None = None
+_provider_fail_until: dict[str, float] = {}
+
+
+class _RainViewerRateLimiter:
+    """Sliding-window + minimum-gap gate for precip HTTP calls."""
+
+    def __init__(
+        self,
+        *,
+        max_per_minute: int = MAX_REQUESTS_PER_MINUTE,
+        min_gap_s: float = MIN_REQUEST_GAP_S,
+    ) -> None:
+        self._max_per_minute = max(1, int(max_per_minute))
+        self._min_gap_s = max(0.0, float(min_gap_s))
+        self._lock = threading.Lock()
+        self._times: deque[float] = deque()
+        self._last_at = 0.0
+        self._blocked_until = 0.0
+
+    def note_rate_limited(self, retry_after_s: float | None = None) -> None:
+        """Honor an HTTP 429 by pausing further requests."""
+        pause = RATE_LIMIT_BACKOFF_S if retry_after_s is None else max(
+            RATE_LIMIT_BACKOFF_S, float(retry_after_s)
+        )
+        with self._lock:
+            self._blocked_until = max(self._blocked_until, time.monotonic() + pause)
+        logger.warning("Precip overlay rate-limited; pausing requests for %.0fs", pause)
+
+    def wait(self) -> None:
+        """Block until a request is allowed under the safe budget."""
+        while True:
+            with self._lock:
+                now = time.monotonic()
+                if now < self._blocked_until:
+                    sleep_s = self._blocked_until - now
+                else:
+                    while self._times and (now - self._times[0]) >= 60.0:
+                        self._times.popleft()
+                    sleep_s = 0.0
+                    if self._last_at and (now - self._last_at) < self._min_gap_s:
+                        sleep_s = max(sleep_s, self._min_gap_s - (now - self._last_at))
+                    if len(self._times) >= self._max_per_minute:
+                        sleep_s = max(sleep_s, 60.0 - (now - self._times[0]) + 0.05)
+                    if sleep_s <= 0.0:
+                        self._times.append(now)
+                        self._last_at = now
+                        return
+            time.sleep(min(sleep_s, 5.0))
+
+
+_rate_limiter = _RainViewerRateLimiter()
+
+
+def _http_get(url: str) -> requests.Response:
+    """GET with FlightScnr's safe precip rate limit applied."""
+    _rate_limiter.wait()
+    resp = requests.get(
+        url,
+        timeout=FETCH_TIMEOUT_S,
+        headers={"User-Agent": USER_AGENT},
+    )
+    if resp.status_code == 429:
+        retry_after = None
+        raw = resp.headers.get("Retry-After")
+        if raw:
+            try:
+                retry_after = float(raw)
+            except ValueError:
+                retry_after = None
+        _rate_limiter.note_rate_limited(retry_after)
+        resp.raise_for_status()
+    return resp
 
 
 def _enabled() -> bool:
@@ -55,13 +171,51 @@ def _enabled() -> bool:
         return True
 
 
+def _provider_by_id(provider_id: str | None) -> dict[str, Any] | None:
+    if not provider_id:
+        return None
+    for provider in PROVIDERS:
+        if provider["id"] == provider_id:
+            return provider
+    return None
+
+
+def _provider_available(provider_id: str) -> bool:
+    until = _provider_fail_until.get(provider_id, 0.0)
+    return time.monotonic() >= until
+
+
+def _mark_provider_failed(provider_id: str) -> None:
+    _provider_fail_until[provider_id] = time.monotonic() + PROVIDER_FAIL_COOLDOWN_S
+    logger.warning(
+        "Precip provider %s failed; trying fallback / retry in %ds",
+        provider_id,
+        PROVIDER_FAIL_COOLDOWN_S,
+    )
+
+
+def _mark_provider_ok(provider_id: str) -> None:
+    _provider_fail_until.pop(provider_id, None)
+
+
 def _meters_per_pixel(lat_deg: float, zoom: int) -> float:
     return math.cos(math.radians(lat_deg)) * 2 * math.pi * EARTH_RADIUS_M / (
         TILE_SIZE * (2 ** zoom)
     )
 
 
-def _cache_key_for_scale(scale_index: int, frame_time: int) -> tuple | None:
+def _mercator_pixel(lat: float, lon: float, zoom: int) -> tuple[float, float]:
+    """World pixel coordinates for a lat/lon at the given zoom (tile-aligned)."""
+    n = 2.0 ** zoom
+    x = (lon + 180.0) / 360.0 * n * TILE_SIZE
+    lat_rad = math.radians(lat)
+    y = (1.0 - math.asinh(math.tan(lat_rad)) / math.pi) / 2.0 * n * TILE_SIZE
+    return x, y
+
+
+def _cache_key_for_scale(
+    scale_index: int, frame_time: int, provider_id: str
+) -> tuple | None:
     try:
         from config import LOCATION_HOME, location_configured
     except ImportError:
@@ -73,20 +227,25 @@ def _cache_key_for_scale(scale_index: int, frame_time: int) -> tuple | None:
         round(LOCATION_HOME[1], 5),
         int(scale_index),
         int(frame_time),
+        str(provider_id),
     )
 
 
 def _store_surface(key: tuple, surface: pygame.Surface) -> None:
     """Cache a frame surface and evict stale ones.
 
-    Keys embed the RainViewer frame timestamp, so without eviction every
-    ~10min frame pinned another ~2MB surface forever (~280MB/day leak).
-    Only the newest frame is ever drawn; older frames and other centers
-    are dead weight.
+    Keys embed frame timestamp + provider; without eviction every new frame
+    pinned another ~2MB surface. Only the newest frame/provider for a center
+    is kept (all scale bands for that frame).
     """
     with _lock:
         stale = [
-            k for k in _surfaces if k[3] != key[3] or k[0] != key[0] or k[1] != key[1]
+            k
+            for k in _surfaces
+            if k[0] != key[0]
+            or k[1] != key[1]
+            or k[3] != key[3]
+            or k[4] != key[4]
         ]
         for k in stale:
             del _surfaces[k]
@@ -94,46 +253,46 @@ def _store_surface(key: tuple, surface: pygame.Surface) -> None:
 
 
 def _cache_path_for_key(key: tuple) -> str:
-    lat, lon, scale_idx, frame_time = key
+    lat, lon, scale_idx, frame_time, provider_id = key
     return os.path.join(
-        CACHE_DIR, f"precip_{lat}_{lon}_{scale_idx}_{frame_time}.png"
+        CACHE_DIR,
+        f"precip_{provider_id}_{lat}_{lon}_{scale_idx}_{frame_time}.png",
     )
 
 
-def _cached_metadata() -> dict | None:
+def _cached_metadata() -> tuple[dict | None, str | None]:
     with _meta_lock:
-        return _meta
+        return _meta, _meta_provider_id
 
 
 def _metadata_stale() -> bool:
     with _meta_lock:
-        if _meta is None:
+        if _meta is None or _meta_provider_id is None:
             return True
         return (time.time() - _meta_ts) >= METADATA_TTL_S
 
 
-def _fetch_metadata(force: bool = False) -> dict | None:
-    """Blocking metadata refresh — call only from background threads."""
-    global _meta, _meta_ts
-    if not force and not _metadata_stale():
-        return _cached_metadata()
-
+def _fetch_metadata_for(provider: dict[str, Any]) -> dict | None:
+    """Blocking metadata refresh for one provider."""
     try:
-        resp = requests.get(
-            METADATA_URL,
-            timeout=FETCH_TIMEOUT_S,
-            headers={"User-Agent": USER_AGENT},
-        )
+        resp = _http_get(str(provider["metadata_url"]))
         resp.raise_for_status()
         data = resp.json()
     except (OSError, requests.RequestException, json.JSONDecodeError, ValueError) as exc:
-        logger.warning("RainViewer metadata fetch failed: %s", exc)
-        return _cached_metadata()
+        logger.warning("%s metadata fetch failed: %s", provider["name"], exc)
+        return None
+    if not _latest_frame(data):
+        logger.warning("%s metadata missing radar frames", provider["name"])
+        return None
+    return data
 
+
+def _set_metadata(data: dict, provider_id: str) -> None:
+    global _meta, _meta_ts, _meta_provider_id
     with _meta_lock:
         _meta = data
+        _meta_provider_id = provider_id
         _meta_ts = time.time()
-    return data
 
 
 def _latest_frame(meta: dict | None) -> tuple[str, str, int] | None:
@@ -173,14 +332,84 @@ def _with_alpha(surface: pygame.Surface, alpha: int) -> pygame.Surface:
     alpha = max(0, min(255, int(alpha)))
     if alpha >= 255:
         return out
-    # Scale only the A channel so clear (no-rain) pixels stay transparent.
     arr_a = pygame.surfarray.pixels_alpha(out)
     arr_a[:] = (arr_a.astype("uint16") * alpha // 255).astype("uint8")
     del arr_a
     return out
 
 
-def _build_overlay(scale_index: int, host: str, path: str) -> pygame.Surface | None:
+def _slippy_tile_range(
+    home_lat: float, home_lon: float, zoom: int
+) -> tuple[int, int, int, int, float, float]:
+    """Return (x0, x1, y0, y1, left_px, top_px) for a TILE_SIZE window at home."""
+    home_px, home_py = _mercator_pixel(home_lat, home_lon, zoom)
+    half = TILE_SIZE / 2.0
+    left = home_px - half
+    top = home_py - half
+    x0 = int(math.floor(left / TILE_SIZE))
+    x1 = int(math.floor((home_px + half - 1e-9) / TILE_SIZE))
+    y0 = int(math.floor(top / TILE_SIZE))
+    y1 = int(math.floor((home_py + half - 1e-9) / TILE_SIZE))
+    return x0, x1, y0, y1, left, top
+
+
+def _fetch_slippy_composite(
+    host: str, path: str, home_lat: float, home_lon: float, zoom: int
+) -> pygame.Surface | None:
+    """Composite XYZ tiles into a TILE_SIZE canvas centered on home."""
+    x0, x1, y0, y1, left, top = _slippy_tile_range(home_lat, home_lon, zoom)
+    n_tiles = max(0, (x1 - x0 + 1) * (y1 - y0 + 1))
+    if n_tiles <= 0 or n_tiles > 16:
+        logger.warning(
+            "LibreWXR slippy window out of bounds (%d tiles at z%d)", n_tiles, zoom
+        )
+        return None
+
+    canvas = pygame.Surface((TILE_SIZE, TILE_SIZE), pygame.SRCALPHA)
+    got_any = False
+    for tx in range(x0, x1 + 1):
+        for ty in range(y0, y1 + 1):
+            url = (
+                f"{host}{path}/{TILE_SIZE}/{zoom}/"
+                f"{tx}/{ty}/{COLOR_SCHEME}/{OPTIONS}.png"
+            )
+            try:
+                resp = _http_get(url)
+                resp.raise_for_status()
+                tile = pygame.image.load(io.BytesIO(resp.content)).convert_alpha()
+            except (OSError, requests.RequestException, pygame.error) as exc:
+                logger.warning("LibreWXR tile fetch failed %s: %s", url, exc)
+                return None
+            px = int(round(tx * TILE_SIZE - left))
+            py = int(round(ty * TILE_SIZE - top))
+            canvas.blit(tile, (px, py))
+            got_any = True
+    return canvas if got_any else None
+
+
+def _fetch_maps_tile(
+    host: str, path: str, home_lat: float, home_lon: float, zoom: int
+) -> pygame.Surface | None:
+    """RainViewer centered lat/lon widget tile (one PNG)."""
+    url = (
+        f"{host}{path}/{TILE_SIZE}/{zoom}/"
+        f"{home_lat:.5f}/{home_lon:.5f}/{COLOR_SCHEME}/{OPTIONS}.png"
+    )
+    try:
+        resp = _http_get(url)
+        resp.raise_for_status()
+        return pygame.image.load(io.BytesIO(resp.content)).convert_alpha()
+    except (OSError, requests.RequestException, pygame.error) as exc:
+        logger.warning("RainViewer tile fetch failed %s: %s", url, exc)
+        return None
+
+
+def _build_overlay(
+    scale_index: int,
+    host: str,
+    path: str,
+    provider: dict[str, Any],
+) -> pygame.Surface | None:
     try:
         from config import LOCATION_HOME, location_configured
     except ImportError:
@@ -195,21 +424,12 @@ def _build_overlay(scale_index: int, host: str, path: str) -> pygame.Surface | N
     px_per_km = theme.GRID_OUTER_RADIUS / outer_km
     zoom = MAX_ZOOM
 
-    # Centered widget tile: one PNG covering a Mercator window around home.
-    url = (
-        f"{host}{path}/{TILE_SIZE}/{zoom}/"
-        f"{home_lat:.5f}/{home_lon:.5f}/{COLOR_SCHEME}/{OPTIONS}.png"
-    )
-    try:
-        resp = requests.get(
-            url,
-            timeout=FETCH_TIMEOUT_S,
-            headers={"User-Agent": USER_AGENT},
-        )
-        resp.raise_for_status()
-        tile = pygame.image.load(io.BytesIO(resp.content)).convert_alpha()
-    except (OSError, requests.RequestException, pygame.error) as exc:
-        logger.warning("RainViewer tile fetch failed %s: %s", url, exc)
+    tile_mode = str(provider.get("tile_mode") or "maps")
+    if tile_mode == "slippy":
+        tile = _fetch_slippy_composite(host, path, home_lat, home_lon, zoom)
+    else:
+        tile = _fetch_maps_tile(host, path, home_lat, home_lon, zoom)
+    if tile is None:
         return None
 
     tile_km = TILE_SIZE * _meters_per_pixel(home_lat, zoom) / 1000.0
@@ -218,7 +438,6 @@ def _build_overlay(scale_index: int, host: str, path: str) -> pygame.Surface | N
 
     diameter_px = theme.VISIBLE_RADIUS * 2
     diameter_km = diameter_px / px_per_km
-    # Crop the geographic window that maps to the radar circle, then scale.
     crop_px = max(8, int(round(TILE_SIZE * (diameter_km / tile_km))))
     crop_px = min(crop_px, TILE_SIZE)
     tw, th = tile.get_size()
@@ -233,7 +452,8 @@ def _build_overlay(scale_index: int, host: str, path: str) -> pygame.Surface | N
     scaled = _with_alpha(scaled, OVERLAY_ALPHA)
 
     logger.info(
-        "Built RainViewer precip overlay (scale %d, z%d, crop %d→%d px, ~%.1f km)",
+        "Built %s precip overlay (scale %d, z%d, crop %d→%d px, ~%.1f km)",
+        provider["name"],
         scale_index,
         zoom,
         crop_px,
@@ -258,19 +478,19 @@ def _save_disk(surface: pygame.Surface, key: tuple) -> None:
         os.makedirs(CACHE_DIR, exist_ok=True)
         pygame.image.save(surface, _cache_path_for_key(key))
     except (OSError, pygame.error) as exc:
-        logger.warning("Could not cache RainViewer overlay: %s", exc)
+        logger.warning("Could not cache precip overlay: %s", exc)
 
 
-def _prune_old_cache(keep_frame: int) -> None:
-    """Drop overlay PNGs older than the current frame to limit disk use."""
+def _prune_old_cache(keep_frame: int, provider_id: str) -> None:
+    """Drop overlay PNGs that are not the current provider+frame."""
     try:
         names = os.listdir(CACHE_DIR)
     except OSError:
         return
+    prefix = f"precip_{provider_id}_"
     for name in names:
         if not name.startswith("precip_") or not name.endswith(".png"):
             continue
-        # precip_{lat}_{lon}_{scale}_{frame}.png — frame is last underscore group.
         stem = name[:-4]
         parts = stem.rsplit("_", 1)
         if len(parts) != 2:
@@ -279,70 +499,120 @@ def _prune_old_cache(keep_frame: int) -> None:
             frame = int(parts[1])
         except ValueError:
             continue
-        if frame != keep_frame:
-            try:
-                os.remove(os.path.join(CACHE_DIR, name))
-            except OSError:
-                pass
+        if name.startswith(prefix) and frame == keep_frame:
+            continue
+        try:
+            os.remove(os.path.join(CACHE_DIR, name))
+        except OSError:
+            pass
 
 
-def _fetch_running(key: tuple) -> bool:
+def _set_active_provider(provider_id: str) -> None:
+    global _active_provider_id
     with _lock:
-        t = _fetch_threads.get(key)
-        return bool(t and t.is_alive())
+        _active_provider_id = provider_id
+
+
+def _have_cached_overlay(key: tuple | None) -> bool:
+    """True if memory or disk already has this frame (no tile download needed)."""
+    if key is None:
+        return False
+    with _lock:
+        if key in _surfaces:
+            return True
+    disk = _load_disk(key)
+    if disk is not None:
+        _store_surface(key, disk)
+        return True
+    return False
+
+
+def _resolve_provider_surface(
+    provider: dict[str, Any], *, force_meta: bool
+) -> bool:
+    """Try one provider to memory/disk (blocking). True if overlay is ready.
+
+    Metadata is polled on the minute cadence. Matching frame timestamps reuse
+    the cached overlay; failed polls also keep the last good cache.
+    """
+    provider_id = str(provider["id"])
+    if not _provider_available(provider_id):
+        return False
+
+    cached_meta, cached_pid = _cached_metadata()
+    if (
+        not force_meta
+        and cached_meta is not None
+        and cached_pid == provider_id
+        and not _metadata_stale()
+    ):
+        meta = cached_meta
+    else:
+        meta = _fetch_metadata_for(provider)
+        if meta is None:
+            # Network/API blip: keep last good map for this provider if we have it.
+            if cached_pid == provider_id and cached_meta is not None:
+                frame = _latest_frame(cached_meta)
+                if frame is not None:
+                    key = _cache_key_for_scale(
+                        scale.active_index(), frame[2], provider_id
+                    )
+                    if _have_cached_overlay(key):
+                        _set_active_provider(provider_id)
+                        logger.info(
+                            "%s metadata check failed; keeping cached frame %s",
+                            provider["name"],
+                            frame[2],
+                        )
+                        return True
+            _mark_provider_failed(provider_id)
+            return False
+        _set_metadata(meta, provider_id)
+
+    frame = _latest_frame(meta)
+    if frame is None:
+        _mark_provider_failed(provider_id)
+        return False
+
+    host, path, frame_time = frame
+    key = _cache_key_for_scale(scale.active_index(), frame_time, provider_id)
+    if key is None:
+        return False
+
+    if _have_cached_overlay(key):
+        _mark_provider_ok(provider_id)
+        _set_active_provider(provider_id)
+        return True
+
+    surface = _build_overlay(key[2], host, path, provider)
+    if surface is None:
+        _mark_provider_failed(provider_id)
+        return False
+
+    _mark_provider_ok(provider_id)
+    _set_active_provider(provider_id)
+    _save_disk(surface, key)
+    _store_surface(key, surface)
+    _prune_old_cache(frame_time, provider_id)
+    return True
 
 
 _refresh_thread: threading.Thread | None = None
 
 
-def _start_fetch(key: tuple, host: str, path: str) -> None:
-    if _fetch_running(key):
-        return
-
-    def _worker():
-        try:
-            surface = _build_overlay(key[2], host, path)
-            if surface is None:
-                return
-            _save_disk(surface, key)
-            _store_surface(key, surface)
-            _prune_old_cache(key[3])
-        finally:
-            with _lock:
-                _fetch_threads.pop(key, None)
-
-    thread = threading.Thread(
-        target=_worker,
-        name=f"rainviewer-{key[2]}",
-        daemon=True,
-    )
-    with _lock:
-        _fetch_threads[key] = thread
-    thread.start()
-
-
 def _ensure_current_frame_async() -> None:
-    """Refresh metadata (if stale) and load/fetch the active-scale overlay."""
+    """Refresh via LibreWXR first, then RainViewer, off the UI thread."""
     global _refresh_thread
 
     def _worker():
         try:
-            meta = _fetch_metadata(force=_metadata_stale())
-            frame = _latest_frame(meta)
-            if frame is None:
-                return
-            host, path, frame_time = frame
-            key = _cache_key_for_scale(scale.active_index(), frame_time)
-            if key is None:
-                return
-            with _lock:
-                if key in _surfaces:
+            force = _metadata_stale()
+            for provider in PROVIDERS:
+                if _resolve_provider_surface(provider, force_meta=force):
                     return
-            disk = _load_disk(key)
-            if disk is not None:
-                _store_surface(key, disk)
-                return
-            _start_fetch(key, host, path)
+                # After a failed primary, still force meta on the fallback.
+                force = True
+            logger.warning("All precip providers failed for this refresh")
         finally:
             global _refresh_thread
             with _lock:
@@ -353,7 +623,7 @@ def _ensure_current_frame_async() -> None:
             return
         _refresh_thread = threading.Thread(
             target=_worker,
-            name="rainviewer-refresh",
+            name="precip-refresh",
             daemon=True,
         )
         _refresh_thread.start()
@@ -363,11 +633,12 @@ def request_overlay() -> None:
     """Kick an async refresh so draw stays off the network."""
     if not _enabled():
         return
-    # Fast path: serve a disk/memory hit for the last known frame.
-    frame = _latest_frame(_cached_metadata())
-    if frame is not None:
+    # Fast path: serve a disk/memory hit for the last known frame/provider.
+    meta, provider_id = _cached_metadata()
+    frame = _latest_frame(meta)
+    if frame is not None and provider_id:
         _, _, frame_time = frame
-        key = _cache_key_for_scale(scale.active_index(), frame_time)
+        key = _cache_key_for_scale(scale.active_index(), frame_time, provider_id)
         if key is not None:
             with _lock:
                 cached = key in _surfaces
@@ -375,6 +646,7 @@ def request_overlay() -> None:
                 disk = _load_disk(key)
                 if disk is not None:
                     _store_surface(key, disk)
+                    _set_active_provider(provider_id)
     if _metadata_stale() or get_overlay() is None:
         _ensure_current_frame_async()
 
@@ -382,22 +654,26 @@ def request_overlay() -> None:
 def invalidate() -> None:
     with _lock:
         _surfaces.clear()
-        _fetch_threads.clear()
+        global _active_provider_id
+        _active_provider_id = None
     with _meta_lock:
-        global _meta, _meta_ts
+        global _meta, _meta_ts, _meta_provider_id
         _meta = None
+        _meta_provider_id = None
         _meta_ts = 0.0
+    _provider_fail_until.clear()
 
 
 def cache_token() -> object:
     """Stable token for radar backdrop invalidation (changes with precip frame)."""
     if not _enabled():
         return None
-    frame = _latest_frame(_cached_metadata())
-    if frame is None:
+    meta, provider_id = _cached_metadata()
+    frame = _latest_frame(meta)
+    if frame is None or not provider_id:
         return ("none",)
     _, _, frame_time = frame
-    key = _cache_key_for_scale(scale.active_index(), frame_time)
+    key = _cache_key_for_scale(scale.active_index(), frame_time, provider_id)
     if key is None:
         return None
     with _lock:
@@ -407,11 +683,12 @@ def cache_token() -> object:
 def get_overlay() -> pygame.Surface | None:
     if not _enabled():
         return None
-    frame = _latest_frame(_cached_metadata())
-    if frame is None:
+    meta, provider_id = _cached_metadata()
+    frame = _latest_frame(meta)
+    if frame is None or not provider_id:
         return None
     _, _, frame_time = frame
-    key = _cache_key_for_scale(scale.active_index(), frame_time)
+    key = _cache_key_for_scale(scale.active_index(), frame_time, provider_id)
     if key is None:
         return None
     with _lock:
@@ -443,4 +720,11 @@ def draw_overlay(surface: pygame.Surface, pan_offset: tuple[int, int] | None = N
 def attribution_text() -> str | None:
     if not _enabled() or get_overlay() is None:
         return None
-    return "© RainViewer"
+    with _lock:
+        provider_id = _active_provider_id
+    provider = _provider_by_id(provider_id) or _provider_by_id(
+        _cached_metadata()[1]
+    )
+    if provider is None:
+        return "© LibreWXR / RainViewer"
+    return str(provider["attribution"])

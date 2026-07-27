@@ -172,10 +172,10 @@
                 <span class="switch"><input id="show_sweep" type="checkbox"><span class="track"></span></span>
             </div>
             <div class="chk">
-                <label for="show_precip">Show precipitation (RainViewer)</label>
+                <label for="show_precip">Show precipitation</label>
                 <span class="switch"><input id="show_precip" type="checkbox"><span class="track"></span></span>
             </div>
-            <p class="hint">Live rain/snow radar overlay via <a href="https://www.rainviewer.com/" target="_blank" rel="noopener">RainViewer</a> (free personal API, updates ~ every 5–10 min).</p>
+            <p class="hint">Live rain/snow radar overlay: tries open-source <a href="https://librewxr.net/" target="_blank" rel="noopener">LibreWXR</a> first, then <a href="https://www.rainviewer.com/" target="_blank" rel="noopener">RainViewer</a> as fallback. Checks for a new frame every minute; keeps the cached map until new data arrives (capped at ~30 req/min).</p>
             <div class="chk">
                 <label for="show_wildfires">Show wildfires</label>
                 <span class="switch"><input id="show_wildfires" type="checkbox"><span class="track"></span></span>
