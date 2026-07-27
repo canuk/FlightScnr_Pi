@@ -62,7 +62,7 @@ class TestAircraftTypeIcons(unittest.TestCase):
         """FR24/ADS-B often send T206/T210 for turbo Stationair/Centurion."""
         from display.round_touch.aircraft_type_icons import _category_for_type, is_unknown_type
 
-        for code in ("C206", "T206", "C210", "T210", "T182"):
+        for code in ("C206", "T206", "C210", "T210", "T182", "C182", "C82T", "C82R", "C82S"):
             self.assertEqual(_category_for_type(code), "small-prop-single", code)
             self.assertFalse(is_unknown_type({"plane": code}), code)
 
