@@ -39,7 +39,11 @@
         .status.show{display:block}
         .row2{display:grid;grid-template-columns:1fr 1fr;gap:.6rem;}
         .row3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:.6rem;}
-        @media(max-width:24rem){.row2,.row3{grid-template-columns:1fr;}}
+        .rgb-row{display:grid;grid-template-columns:1fr 1fr 1fr auto;gap:.45rem;align-items:end;margin:.35rem 0 .2rem;}
+        .rgb-row label{margin:0;font-size:.75rem;color:var(--muted);}
+        .rgb-row input[type=number]{width:100%;padding:.45rem .4rem;font-size:.9rem;}
+        .rgb-row input[type=color]{width:2.6rem;height:2.4rem;padding:.15rem;border-radius:9px;border:1px solid var(--fline);background:var(--field);cursor:pointer;}
+        @media(max-width:24rem){.row2,.row3{grid-template-columns:1fr;}.rgb-row{grid-template-columns:1fr 1fr;}}
         .track-row{display:flex;gap:.5rem;align-items:center}
         .track-row input{flex:1}
         .track-row button,.btn{
@@ -141,8 +145,22 @@
                 <option value="100000">100000 (off)</option>
             </select>
             <p class="hint">Show only aircraft between the floor and ceiling. Max is raised automatically if it would sit below min.</p>
-            <label for="radar_theme">Color theme</label>
-            <select id="radar_theme"></select>
+            <label>Radar Theme</label>
+            <div class="rgb-row" id="radar_theme_rgb">
+                <label>R <input id="theme_r" type="number" min="0" max="255" step="1"></label>
+                <label>G <input id="theme_g" type="number" min="0" max="255" step="1"></label>
+                <label>B <input id="theme_b" type="number" min="0" max="255" step="1"></label>
+                <input id="theme_color" type="color" title="Radar Theme">
+            </div>
+            <p class="hint">Accent color for the sweep, range rings, and labels.</p>
+            <label>Runway Centerline Color for Dark Map</label>
+            <div class="rgb-row" id="runway_darkmap_rgb">
+                <label>R <input id="runway_r" type="number" min="0" max="255" step="1"></label>
+                <label>G <input id="runway_g" type="number" min="0" max="255" step="1"></label>
+                <label>B <input id="runway_b" type="number" min="0" max="255" step="1"></label>
+                <input id="runway_color" type="color" title="Runway centerline">
+            </div>
+            <p class="hint">Sets RUNWAY_DARKMAP — runway centerline color on the dark basemap (skipped on VFR).</p>
             <label for="map_style">Map style</label>
             <select id="map_style">
                 <option value="dark">Dark (CARTO)</option>
@@ -184,10 +202,15 @@
             </div>
             <p class="hint">In California: <a href="https://www.fire.ca.gov/incidents" target="_blank" rel="noopener">CAL FIRE</a> (no API key). Rest of USA/Canada: <a href="https://data-nifc.opendata.arcgis.com/" target="_blank" rel="noopener">NIFC WFIGS</a> / <a href="https://fire.airnow.gov/" target="_blank" rel="noopener">AirNow</a> large fires (no API key). Outside USA/Canada: <a href="https://firms.modaps.eosdis.nasa.gov/api/area/" target="_blank" rel="noopener">NASA FIRMS</a> hotspots (free <a href="https://firms.modaps.eosdis.nasa.gov/api/map_key/" target="_blank" rel="noopener">MAP_KEY</a> in API Keys). Tap a fire for details. Refreshes every 15 minutes and on recenter.</p>
             <div class="chk">
-                <label for="show_airports">Show airports</label>
-                <span class="switch"><input id="show_airports" type="checkbox"><span class="track"></span></span>
+                <label for="show_airport_centerlines">Show airport centerlines</label>
+                <span class="switch"><input id="show_airport_centerlines" type="checkbox"><span class="track"></span></span>
             </div>
-            <p class="hint">Marks large, medium, and small airports in range with the airport pin icon. On dark and light maps also draws OurAirports runway centerlines from the bundled runway database (skipped on VFR — the chart already shows runways). Heliports and closed fields/runways are skipped.</p>
+            <p class="hint">OurAirports runway centerlines for large, medium, and small airports in range (dark and light maps; skipped on VFR — the chart already shows runways). Heliports and closed fields/runways are skipped.</p>
+            <div class="chk">
+                <label for="show_airport_icons">Show airport icons</label>
+                <span class="switch"><input id="show_airport_icons" type="checkbox"><span class="track"></span></span>
+            </div>
+            <p class="hint">Airport pin icons (airport.png) for large, medium, and small airports in range. Heliports and closed fields are skipped.</p>
             <div class="chk">
                 <label for="show_ground_vehicles">Show ground vehicles</label>
                 <span class="switch"><input id="show_ground_vehicles" type="checkbox"><span class="track"></span></span>
@@ -479,6 +502,56 @@ const STATUTE_MILE_KM = 1.609344;
 const NM_PER_KM = 1 / 1.852;
 const $ = (id) => document.getElementById(id);
 
+function clampByte(n) {
+    const v = Number(n);
+    if (!Number.isFinite(v)) return 0;
+    return Math.max(0, Math.min(255, Math.round(v)));
+}
+
+function rgbToHex(r, g, b) {
+    return "#" + [r, g, b].map((c) => clampByte(c).toString(16).padStart(2, "0")).join("");
+}
+
+function hexToRgb(hex) {
+    const m = /^#?([0-9a-f]{6})$/i.exec(String(hex || "").trim());
+    if (!m) return [0, 0, 0];
+    const n = parseInt(m[1], 16);
+    return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+
+function readRgbInputs(prefix) {
+    return [
+        clampByte($(prefix + "_r") && $(prefix + "_r").value),
+        clampByte($(prefix + "_g") && $(prefix + "_g").value),
+        clampByte($(prefix + "_b") && $(prefix + "_b").value),
+    ];
+}
+
+function setRgbInputs(prefix, rgb) {
+    const [r, g, b] = Array.isArray(rgb) ? rgb : [0, 0, 0];
+    if ($(prefix + "_r")) $(prefix + "_r").value = String(clampByte(r));
+    if ($(prefix + "_g")) $(prefix + "_g").value = String(clampByte(g));
+    if ($(prefix + "_b")) $(prefix + "_b").value = String(clampByte(b));
+    if ($(prefix + "_color")) $(prefix + "_color").value = rgbToHex(r, g, b);
+}
+
+function wireRgbGroup(prefix) {
+    const syncFromNumbers = () => {
+        const [r, g, b] = readRgbInputs(prefix);
+        if ($(prefix + "_color")) $(prefix + "_color").value = rgbToHex(r, g, b);
+    };
+    const syncFromColor = () => {
+        if (!$(prefix + "_color")) return;
+        const [r, g, b] = hexToRgb($(prefix + "_color").value);
+        setRgbInputs(prefix, [r, g, b]);
+    };
+    ["_r", "_g", "_b"].forEach((s) => {
+        const el = $(prefix + s);
+        if (el) el.addEventListener("input", syncFromNumbers);
+    });
+    if ($(prefix + "_color")) $(prefix + "_color").addEventListener("input", syncFromColor);
+}
+
 function showStatus(id, msg, error = false) {
     const el = $(id);
     el.textContent = msg || "";
@@ -667,15 +740,8 @@ async function loadAll() {
         syncMinSpeedUnitLabels();
         $("min_height").value = String(r.min_height_ft ?? 1000);
         $("max_height").value = String(r.max_height_ft ?? 100000);
-        const theme = $("radar_theme");
-        theme.innerHTML = "";
-        (r.theme_options || []).forEach((name, idx) => {
-            const el = document.createElement("option");
-            el.value = String(idx);
-            el.textContent = name;
-            theme.appendChild(el);
-        });
-        $("radar_theme").value = String(r.theme_index || 0);
+        setRgbInputs("theme", r.theme_rgb || [0, 255, 0]);
+        setRgbInputs("runway", r.runway_darkmap_rgb || [225, 128, 0]);
         if ($("map_style")) $("map_style").value = r.map_style || "dark";
         if ($("vfr_opacity")) {
             $("vfr_opacity").value = String(r.vfr_map_opacity ?? 45);
@@ -688,7 +754,8 @@ async function loadAll() {
         $("show_sweep").checked = !!r.show_sweep_line;
         $("show_precip").checked = r.show_precipitation !== false;
         if ($("show_wildfires")) $("show_wildfires").checked = !!r.show_wildfires;
-        if ($("show_airports")) $("show_airports").checked = !!r.show_airports;
+        if ($("show_airport_centerlines")) $("show_airport_centerlines").checked = !!r.show_airport_centerlines;
+        if ($("show_airport_icons")) $("show_airport_icons").checked = !!r.show_airport_icons;
         if ($("show_ground_vehicles")) $("show_ground_vehicles").checked = r.show_ground_vehicles !== false;
         $("traffic_mode").value = r.traffic_mode || (r.ais_enabled ? "both" : "aircraft");
         if ($("vessel_min_speed")) $("vessel_min_speed").value = String(r.vessel_min_speed_kt ?? 0);
@@ -849,7 +916,8 @@ async function saveRadar() {
                 scale_index: Number($("range_index").value),
                 min_height_ft: Number($("min_height").value),
                 max_height_ft: Number($("max_height").value),
-                theme_index: Number($("radar_theme").value),
+                theme_rgb: readRgbInputs("theme"),
+                runway_darkmap_rgb: readRgbInputs("runway"),
                 show_compass_rose: $("show_compass").checked,
                 show_range_rings: $("show_range_rings") ? $("show_range_rings").checked : true,
                 show_aircraft_tag: $("show_aircraft_tag").checked,
@@ -857,7 +925,8 @@ async function saveRadar() {
                 show_sweep_line: $("show_sweep").checked,
                 show_precipitation: $("show_precip").checked,
                 show_wildfires: $("show_wildfires") ? $("show_wildfires").checked : false,
-                show_airports: $("show_airports") ? $("show_airports").checked : false,
+                show_airport_centerlines: $("show_airport_centerlines") ? $("show_airport_centerlines").checked : false,
+                show_airport_icons: $("show_airport_icons") ? $("show_airport_icons").checked : false,
                 show_ground_vehicles: $("show_ground_vehicles") ? $("show_ground_vehicles").checked : true,
                 map_style: $("map_style").value,
                 vfr_map_opacity: Number($("vfr_opacity") ? $("vfr_opacity").value : 45),
@@ -930,7 +999,8 @@ async function saveAndReloadSettings() {
                 scale_index: Number($("range_index").value),
                 min_height_ft: Number($("min_height").value),
                 max_height_ft: Number($("max_height").value),
-                theme_index: Number($("radar_theme").value),
+                theme_rgb: readRgbInputs("theme"),
+                runway_darkmap_rgb: readRgbInputs("runway"),
                 show_compass_rose: $("show_compass").checked,
                 show_range_rings: $("show_range_rings") ? $("show_range_rings").checked : true,
                 show_aircraft_tag: $("show_aircraft_tag").checked,
@@ -938,7 +1008,8 @@ async function saveAndReloadSettings() {
                 show_sweep_line: $("show_sweep").checked,
                 show_precipitation: $("show_precip").checked,
                 show_wildfires: $("show_wildfires") ? $("show_wildfires").checked : false,
-                show_airports: $("show_airports") ? $("show_airports").checked : false,
+                show_airport_centerlines: $("show_airport_centerlines") ? $("show_airport_centerlines").checked : false,
+                show_airport_icons: $("show_airport_icons") ? $("show_airport_icons").checked : false,
                 show_ground_vehicles: $("show_ground_vehicles") ? $("show_ground_vehicles").checked : true,
                 map_style: $("map_style").value,
                 vfr_map_opacity: Number($("vfr_opacity") ? $("vfr_opacity").value : 45),
@@ -1228,6 +1299,8 @@ if ($("vfr_opacity")) $("vfr_opacity").addEventListener("input", syncVfrOpacityL
 if ($("dist_units")) $("dist_units").addEventListener("change", syncMinSpeedUnitLabels);
 
 document.addEventListener("DOMContentLoaded", () => {
+    wireRgbGroup("theme");
+    wireRgbGroup("runway");
     loadAll();
     checkUpdates();
 });

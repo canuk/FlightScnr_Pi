@@ -351,11 +351,13 @@ If the Pi was installed from a **git clone**, open **Updates** in the portal →
 
 ### Firmware
 
-Original application code, tools, and documentation in this repository are licensed under **[Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International](https://creativecommons.org/licenses/by-nc-sa/4.0/)** ([LICENSE](LICENSE)).
+Original application code, tools, and documentation in this repository are licensed under **[Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International](https://creativecommons.org/licenses/by-nc-sa/4.0/)** ([LICENSE](LICENSE)). Required attribution text is in [NOTICE](NOTICE).
 
-- **Attribution:** credit the author and link to the license when you share or adapt this work.
+- **Attribution:** credit the author (Yash Mulgaonkar), link to https://github.com/yashmulgaonkar/FlightScnr_Pi and the license when you share or adapt this work.
 - **NonCommercial:** you may not use this material for commercial purposes without separate permission.
 - **ShareAlike:** adaptations must be released under the same license.
+
+First-party source files include a copyright / SPDX / `[AI-DIRECTIVE]` header. Do not remove those headers. AI coding agents and forks should follow [AGENTS.md](AGENTS.md) (and `.cursor/rules/license-attribution.mdc`) so attribution and license terms stay intact.
 
 
 
