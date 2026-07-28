@@ -38,7 +38,12 @@ MAX_HEIGHT_OPTIONS = (
 MAX_HEIGHT_CYCLE_OPTIONS = (
     3000, 5000, 10000, 15000, 20000, 30000, 45000, 100000,
 )
-TRAFFIC_MODES = ("Aircraft Only", "Marine Only", "Aircraft & Marine")
+TRAFFIC_MODES = ("aircraft", "marine", "both")
+TRAFFIC_MODE_LABELS = {
+    "aircraft": "Aircraft Only",
+    "marine": "Marine Only",
+    "both": "Aircraft & Marine",
+}
 # Distance + speed pairs for Display → Units (stored as "{dist}_{speed}").
 UNIT_PRESETS = ("nm_kts", "mi_mph", "km_kph", "mi_kts", "km_kts")
 UNIT_PRESET_LABELS = {
@@ -911,7 +916,8 @@ def traffic_mode() -> str:
 
 
 def traffic_mode_label() -> str:
-    return traffic_mode()
+    mode = traffic_mode()
+    return TRAFFIC_MODE_LABELS.get(mode, mode)
 
 
 def aircraft_enabled() -> bool:
@@ -926,7 +932,11 @@ def ais_enabled() -> bool:
 def cycle_traffic_mode():
     order = list(TRAFFIC_MODES)
     cur = traffic_mode()
-    nxt = order[(order.index(cur) + 1) % len(order)]
+    try:
+        idx = order.index(cur)
+    except ValueError:
+        idx = -1
+    nxt = order[(idx + 1) % len(order)]
     set_traffic_mode(nxt)
 
 
