@@ -232,18 +232,75 @@ def offline_grace_s() -> float:
 
 
 def link_up() -> bool:
-    """True when ethernet or client Wi-Fi has connectivity."""
-    return ethernet_up() or active_client_wifi()
+    """True when ethernet or client Wi-Fi has connectivity.
+
+    Fast path for the display loop: use a background-refreshed cache so we
+    never block the sweep on ``nmcli`` (~150–180ms on a Pi). Call
+    ``refresh_link_up()`` from a worker, or ``link_up_blocking()`` when a
+    synchronous answer is required (setup / join).
+    """
+    global _link_up_cache, _link_up_cache_at
+    now = time.time()
+    # Serve cache; kick a refresh if stale. Never wait on nmcli here.
+    if _link_up_cache_at <= 0.0 or (now - _link_up_cache_at) >= _LINK_CACHE_TTL_S:
+        _schedule_link_refresh()
+    if _link_up_cache_at > 0.0:
+        return bool(_link_up_cache)
+    # First call before any refresh finished: optimistic True avoids flashing
+    # setup UI; the worker will correct within ~200ms.
+    _schedule_link_refresh()
+    return True
+
+
+def link_up_blocking() -> bool:
+    """Synchronous link check (Wi-Fi setup / join paths only)."""
+    global _link_up_cache, _link_up_cache_at
+    up = ethernet_up() or active_client_wifi()
+    _link_up_cache = up
+    _link_up_cache_at = time.time()
+    return up
+
+
+_link_up_cache = False
+_link_up_cache_at = 0.0
+_LINK_CACHE_TTL_S = 2.0
+_link_refresh_lock = threading.Lock()
+_link_refresh_thread: threading.Thread | None = None
+
+
+def _schedule_link_refresh() -> None:
+    global _link_refresh_thread
+    with _link_refresh_lock:
+        if _link_refresh_thread is not None and _link_refresh_thread.is_alive():
+            return
+        _link_refresh_thread = threading.Thread(
+            target=_refresh_link_worker,
+            name="wifi-link-poll",
+            daemon=True,
+        )
+        _link_refresh_thread.start()
+
+
+def _refresh_link_worker() -> None:
+    try:
+        link_up_blocking()
+    except Exception:
+        logger.debug("link refresh failed", exc_info=True)
+
+
+def refresh_link_up() -> bool:
+    """Force a blocking refresh and return the new value."""
+    return link_up_blocking()
 
 
 def _wait_for_client_wifi(timeout_s: float) -> bool:
     """Return True if client Wi-Fi or ethernet comes up within timeout_s."""
     deadline = time.time() + max(0.0, timeout_s)
     while time.time() < deadline:
-        if link_up():
+        if link_up_blocking():
             return True
         time.sleep(1.0)
-    return link_up()
+    return link_up_blocking()
 
 
 def should_enter_setup_at_boot() -> bool:
@@ -256,7 +313,7 @@ def should_enter_setup_at_boot() -> bool:
         return False
     if force_requested():
         return True
-    if link_up():
+    if link_up_blocking():
         return False
     if not saved_client_wifi_names():
         return True

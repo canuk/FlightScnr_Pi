@@ -46,6 +46,8 @@ _lock = threading.Lock()
 _airports: list[dict[str, Any]] = []
 _runways: list[dict[str, Any]] = []
 _cache_key: tuple | None = None
+_load_key: tuple | None = None
+_loading = False
 _icon_cache: dict[int, pygame.Surface] = {}
 _icon_warned = False
 
@@ -108,23 +110,33 @@ def _query_key() -> tuple | None:
 
 def invalidate() -> None:
     """Drop the nearby-airport / runway cache (toggle / home / scale change)."""
-    global _airports, _runways, _cache_key
+    global _airports, _runways, _cache_key, _load_key, _loading
     with _lock:
         _airports = []
         _runways = []
         _cache_key = None
+        _load_key = None
+        _loading = False
 
 
-def _ensure_cached() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    global _airports, _runways, _cache_key
-    if not _enabled():
-        return [], []
-    key = _query_key()
-    if key is None:
-        return [], []
+def _finish_load(key: tuple, points: list, segs: list) -> None:
+    global _airports, _runways, _cache_key, _loading
     with _lock:
-        if _cache_key == key:
-            return list(_airports), list(_runways)
+        if _load_key != key:
+            return
+        _airports = points
+        _runways = segs
+        _cache_key = key
+        _loading = False
+    try:
+        from display.round_touch.screens import radar
+
+        radar.invalidate_backdrop()
+    except Exception:
+        pass
+
+
+def _load_worker(key: tuple) -> None:
     points: list[dict[str, Any]] = []
     segs: list[dict[str, Any]] = []
     try:
@@ -139,16 +151,38 @@ def _ensure_cached() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         )
         if _runways_allowed():
             segs = runways_for_idents(ap.get("ident") for ap in points)
-        else:
-            segs = []
     except Exception:
         logger.exception("airport overlay query failed")
         points, segs = [], []
+    _finish_load(key, points, segs)
+
+
+def _ensure_cached() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Return cached airports/runways; load off-thread on miss.
+
+    The OurAirports query can take hundreds of ms on a Pi — never do that on
+    the display thread (it froze the sweep / first radar frame).
+    """
+    global _load_key, _loading
+    if not _enabled():
+        return [], []
+    key = _query_key()
+    if key is None:
+        return [], []
     with _lock:
-        _airports = points
-        _runways = segs
-        _cache_key = key
-        return list(_airports), list(_runways)
+        if _cache_key == key:
+            return list(_airports), list(_runways)
+        already = _loading and _load_key == key
+        if not already:
+            _loading = True
+            _load_key = key
+        stale_a = list(_airports)
+        stale_r = list(_runways)
+    if not already:
+        threading.Thread(
+            target=_load_worker, args=(key,), daemon=True, name="airport-overlay"
+        ).start()
+    return stale_a, stale_r
 
 
 def _screen_xy(lat: float, lon: float) -> tuple[int, int] | None:

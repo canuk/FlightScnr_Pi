@@ -24,8 +24,19 @@ import requests
 
 logger = logging.getLogger(__name__)
 
-_CACHE: dict = {"entries": [], "ts": 0.0, "url": None, "radius_nm": None}
+_CACHE: dict = {
+    "entries": [],
+    "ts": 0.0,
+    "url": None,
+    "radius_nm": None,
+    "fail_until": 0.0,
+}
 _CACHE_TTL_S = 1.0
+# After a failed fetch, skip retries for a while (unreachable hosts used to
+# burn a 2s connect timeout on every overhead cycle).
+_FAIL_BACKOFF_S = 30.0
+_CONNECT_TIMEOUT_S = 0.5
+_READ_TIMEOUT_S = 2.0
 # Ignore tracks with no fresh position (seconds).
 _MAX_SEEN_POS_S = 60.0
 
@@ -182,6 +193,8 @@ def fetch_aircraft_entries(
     feed_url = _aircraft_json_url(url or configured)
 
     now = time.time()
+    if now < float(_CACHE.get("fail_until") or 0.0):
+        return list(_CACHE["entries"] or [])
     if (
         now - _CACHE["ts"] < _CACHE_TTL_S
         and _CACHE["entries"] is not None
@@ -191,14 +204,22 @@ def fetch_aircraft_entries(
         return list(_CACHE["entries"])
 
     try:
-        resp = requests.get(feed_url, timeout=(2, 5))
+        resp = requests.get(
+            feed_url, timeout=(_CONNECT_TIMEOUT_S, _READ_TIMEOUT_S)
+        )
         resp.raise_for_status()
         data = resp.json()
     except requests.RequestException as exc:
         logger.warning("dump1090 fetch failed (%s): %s", feed_url, exc)
+        _CACHE["fail_until"] = now + _FAIL_BACKOFF_S
+        _CACHE["ts"] = now
+        _CACHE["url"] = feed_url
+        _CACHE["radius_nm"] = radius_nm
         return list(_CACHE["entries"] or [])
     except ValueError as exc:
         logger.warning("dump1090 invalid JSON (%s): %s", feed_url, exc)
+        _CACHE["fail_until"] = now + _FAIL_BACKOFF_S
+        _CACHE["ts"] = now
         return list(_CACHE["entries"] or [])
 
     aircraft = data.get("aircraft") or data.get("ac") or []
@@ -220,6 +241,7 @@ def fetch_aircraft_entries(
     _CACHE["ts"] = now
     _CACHE["url"] = feed_url
     _CACHE["radius_nm"] = radius_nm
+    _CACHE["fail_until"] = 0.0
     logger.info(
         "dump1090: %d aircraft within %.1fnm of %.4f,%.4f (%s)",
         len(entries),

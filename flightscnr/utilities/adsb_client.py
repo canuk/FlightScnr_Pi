@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 API_BASE = "https://opendata.adsb.fi/api/v3/lat/"
 _CACHE = {"entries": [], "ts": 0.0, "radius_nm": None}
-_CACHE_TTL_S = 2
+_CACHE_TTL_S = 5
 
 
 def _parse_alt_ft(plane: dict) -> int:
@@ -168,5 +168,11 @@ def fetch_aircraft_entries(
     _CACHE["entries"] = entries
     _CACHE["ts"] = now
     _CACHE["radius_nm"] = radius_nm
-    logger.info("adsb.fi: %d aircraft within %.1fnm of %.4f,%.4f", len(entries), radius_nm, lat, lon)
+    logger.debug(
+        "adsb.fi: %d aircraft within %.1fnm of %.4f,%.4f",
+        len(entries),
+        radius_nm,
+        lat,
+        lon,
+    )
     return entries

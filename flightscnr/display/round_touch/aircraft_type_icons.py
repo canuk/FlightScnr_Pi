@@ -71,6 +71,10 @@ _CATEGORY_SIZE_SCALE = {
 _type_to_category: dict[str, str] | None = None
 _icon_files: dict[str, str] | None = None
 _surface_cache: dict[tuple[str, int, tuple], pygame.Surface] = {}
+# Memoized type-code → category (includes None for unmapped codes). The
+# prefix/startswith fallbacks in _category_for_type are O(n) over the whole
+# mapping — too slow to repeat per flight per layer rebuild on a Pi 3.
+_category_cache: dict[str, str | None] = {}
 _assets_warned = False
 
 
@@ -125,16 +129,24 @@ def _category_for_type(plane_type: str) -> str | None:
     code = "".join((plane_type or "").upper().split())
     if not code:
         return None
+    if code in _category_cache:
+        return _category_cache[code]
+    result: str | None = None
     if code in _type_to_category:
-        return _type_to_category[code]
-    for length in range(len(code), 2, -1):
-        prefix = code[:length]
-        if prefix in _type_to_category:
-            return _type_to_category[prefix]
-    for mapped, category in _type_to_category.items():
-        if code.startswith(mapped) or mapped.startswith(code):
-            return category
-    return None
+        result = _type_to_category[code]
+    else:
+        for length in range(len(code), 2, -1):
+            prefix = code[:length]
+            if prefix in _type_to_category:
+                result = _type_to_category[prefix]
+                break
+        else:
+            for mapped, category in _type_to_category.items():
+                if code.startswith(mapped) or mapped.startswith(code):
+                    result = category
+                    break
+    _category_cache[code] = result
+    return result
 
 
 def _is_helicopter_type(plane_type: str) -> bool:

@@ -54,7 +54,13 @@ class TestDump1090Client(unittest.TestCase):
                 },
             ]
         }
-        dump1090_client._CACHE = {"entries": [], "ts": 0.0, "url": None, "radius_nm": None}
+        dump1090_client._CACHE = {
+            "entries": [],
+            "ts": 0.0,
+            "url": None,
+            "radius_nm": None,
+            "fail_until": 0.0,
+        }
         with mock.patch.object(dump1090_client.requests, "get") as get:
             resp = mock.Mock()
             resp.raise_for_status = mock.Mock()

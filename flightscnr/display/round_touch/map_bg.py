@@ -826,6 +826,63 @@ def _basemap_zoom_for_home(home_lat: float) -> int | None:
     return _zoom_for_scale(home_lat, px_per_km, _resolved_style())
 
 
+# Cached constants for a multi-target draw (radar layer rebuild projects
+# ~100 aircraft). Recomputing zoom/home/facing per call dominated 2r_f_vis.
+_proj_batch: dict | None = None
+
+
+def begin_projection_batch(
+    center_lat: float | None = None,
+    center_lon: float | None = None,
+) -> None:
+    """Hoist basemap projection constants for a draw pass."""
+    global _proj_batch
+    try:
+        from config import LOCATION_HOME, location_configured
+        from display.round_touch import settings
+    except ImportError:
+        _proj_batch = None
+        return
+    if not location_configured() and center_lat is None:
+        _proj_batch = None
+        return
+    try:
+        home_lat = float(LOCATION_HOME[0] if center_lat is None else center_lat)
+        home_lon = float(LOCATION_HOME[1] if center_lon is None else center_lon)
+    except (TypeError, ValueError):
+        _proj_batch = None
+        return
+    zoom = _basemap_zoom_for_home(home_lat)
+    if zoom is None:
+        _proj_batch = None
+        return
+    render_scale = _basemap_render_scale(home_lat, scale.active_index(), zoom)
+    home_px, home_py = _mercator_pixel(home_lat, home_lon, zoom)
+    try:
+        facing = float(settings.effective_facing_deg() or 0.0)
+    except Exception:
+        facing = 0.0
+    cos_a = sin_a = 0.0
+    if abs(facing) >= 0.05:
+        rad = math.radians(facing)
+        cos_a = math.cos(rad)
+        sin_a = math.sin(rad)
+    _proj_batch = {
+        "zoom": zoom,
+        "render_scale": render_scale,
+        "home_px": home_px,
+        "home_py": home_py,
+        "facing": facing,
+        "cos_a": cos_a,
+        "sin_a": sin_a,
+    }
+
+
+def end_projection_batch() -> None:
+    global _proj_batch
+    _proj_batch = None
+
+
 def lat_lon_to_basemap_screen(
     lat: float,
     lon: float,
@@ -840,36 +897,53 @@ def lat_lon_to_basemap_screen(
     flat-earth radar projection away from the radar center.
     """
     try:
-        from config import LOCATION_HOME, location_configured
-        from display.round_touch import settings
-    except ImportError:
-        return None
-    if not location_configured() and center_lat is None:
-        return None
-    try:
-        home_lat = float(LOCATION_HOME[0] if center_lat is None else center_lat)
-        home_lon = float(LOCATION_HOME[1] if center_lon is None else center_lon)
         lat_f = float(lat)
         lon_f = float(lon)
     except (TypeError, ValueError):
         return None
-    zoom = _basemap_zoom_for_home(home_lat)
-    if zoom is None:
-        return None
-    render_scale = _basemap_render_scale(home_lat, scale.active_index(), zoom)
-    home_px, home_py = _mercator_pixel(home_lat, home_lon, zoom)
+
+    batch = _proj_batch
+    if batch is not None:
+        zoom = batch["zoom"]
+        render_scale = batch["render_scale"]
+        home_px = batch["home_px"]
+        home_py = batch["home_py"]
+        facing = batch["facing"]
+        cos_a = batch["cos_a"]
+        sin_a = batch["sin_a"]
+    else:
+        try:
+            from config import LOCATION_HOME, location_configured
+            from display.round_touch import settings
+        except ImportError:
+            return None
+        if not location_configured() and center_lat is None:
+            return None
+        try:
+            home_lat = float(LOCATION_HOME[0] if center_lat is None else center_lat)
+            home_lon = float(LOCATION_HOME[1] if center_lon is None else center_lon)
+        except (TypeError, ValueError):
+            return None
+        zoom = _basemap_zoom_for_home(home_lat)
+        if zoom is None:
+            return None
+        render_scale = _basemap_render_scale(home_lat, scale.active_index(), zoom)
+        home_px, home_py = _mercator_pixel(home_lat, home_lon, zoom)
+        try:
+            facing = float(settings.effective_facing_deg() or 0.0)
+        except Exception:
+            facing = 0.0
+        cos_a = sin_a = 0.0
+        if abs(facing) >= 0.05:
+            rad = math.radians(facing)
+            cos_a = math.cos(rad)
+            sin_a = math.sin(rad)
+
     mx, my = _mercator_pixel(lat_f, lon_f, zoom)
     # Image coords: +x east, +y south (Mercator tile space), matching _build_background.
     vx = (mx - home_px) * render_scale
     vy = (my - home_py) * render_scale
-    try:
-        facing = float(settings.effective_facing_deg() or 0.0)
-    except Exception:
-        facing = 0.0
     if abs(facing) >= 0.05:
-        rad = math.radians(facing)
-        cos_a = math.cos(rad)
-        sin_a = math.sin(rad)
         # Same CCW rotation pygame applies to the basemap surface.
         vx, vy = vx * cos_a - vy * sin_a, vx * sin_a + vy * cos_a
     return (

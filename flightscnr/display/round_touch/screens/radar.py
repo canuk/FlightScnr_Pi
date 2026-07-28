@@ -43,9 +43,19 @@ _frame_layer_key = None
 _frame_layer_at = 0.0
 _frame_layer_gen = 0
 # How often the fire/aircraft layer is rebuilt. The beam wants ~60fps, but
-# redrawing every icon and tag costs ~6ms, so aircraft refresh at 10Hz instead —
-# a 300kt target moves under 2px in that time.
-_FRAME_LAYER_TTL_S = 0.1
+# redrawing every icon and tag costs ~6–20ms, so aircraft refresh at ~5Hz —
+# still smooth for traffic, and halves worker SDL/GIL contention vs the
+# original 10Hz cadence when ADS-B grabs every 2s.
+_FRAME_LAYER_TTL_S = 0.2
+# Smoothed cost of recent rebuilds. Dense AIS+ADS-B can push a rebuild past
+# 50ms of GIL/SDL time; back off only then so the worker doesn't monopolize
+# the GIL. Decay toward the base TTL so a single cold-cache rebuild (icon
+# rotate / airport DB) doesn't leave the layer stuck at multi-second refresh.
+_layer_build_cost_s = 0.0
+
+
+def _layer_ttl_s() -> float:
+    return max(_FRAME_LAYER_TTL_S, _layer_build_cost_s * 3.0)
 
 
 def _init_sweep():
@@ -72,6 +82,8 @@ def take_rebuild_counts() -> dict:
     counts = dict(_rebuild_counts)
     for name in _rebuild_counts:
         _rebuild_counts[name] = 0
+    counts["layer_ttl_ms"] = int(_layer_ttl_s() * 1000)
+    counts["layer_cost_ms"] = int(_layer_build_cost_s * 1000)
     return counts
 
 
@@ -84,6 +96,15 @@ def invalidate_frame_layer() -> None:
     _frame_layer_gen += 1
     # Keep spare/cooling buffers so the next rebuild paints a free surface
     # instead of the one present may still be reading.
+
+
+def invalidate_backdrop() -> None:
+    """Force map/precip/airport backdrop rebuild (async airport cache ready)."""
+    global _backdrop, _backdrop_key, _backdrop_gen
+    _backdrop = None
+    _backdrop_key = None
+    _backdrop_gen += 1
+    invalidate_frame_layer()
 
 
 def frame_layer_snapshot() -> tuple[pygame.Surface | None, int]:
@@ -102,7 +123,7 @@ def frame_layer_due() -> bool:
     """True when the ~10Hz aircraft layer wants a rebuild before the next frame."""
     return _frame_layer is None or (
         time.time() - _frame_layer_at
-    ) >= _FRAME_LAYER_TTL_S - theme.SWEEP_FRAME_MS / 1000.0
+    ) >= _layer_ttl_s() - theme.SWEEP_FRAME_MS / 1000.0
 
 
 def _take_build_surface() -> pygame.Surface:
@@ -145,10 +166,10 @@ def _publish_frame_layer(build: pygame.Surface, key) -> pygame.Surface:
 
 def _build_frame_layer(build: pygame.Surface, backdrop, flights, offset) -> None:
     """Paint fires/aircraft/status onto ``build`` (caller owns locking)."""
-    _t = time.perf_counter()
+    global _layer_build_cost_s
+    _t0 = _t = time.perf_counter()
     build.blit(backdrop, (0, 0))
     _t = _rebuild_stage("2r_blit", _t)
-    airport_overlay.draw_airports(build, pan_offset=offset)
     wildfire_overlay.draw_fires(build, pan_offset=offset)
     _t = _rebuild_stage("2r_fires", _t)
     _draw_flights(build, flights)
@@ -156,37 +177,53 @@ def _build_frame_layer(build: pygame.Surface, backdrop, flights, offset) -> None
     _draw_status(build, flights)
     _draw_map_attribution(build)
     _t = _rebuild_stage("2r_status", _t)
-    # Bake the round mask here: aircraft/tags are the only things that reach
+    # Bake the round mask here: aircraft and tags are the only things that reach
     # past the rim; sweep/rim flash drawn on top stay inside the circle.
     draw.apply_round_bezel(build)
     _rebuild_stage("2r_bezel", _t)
+    cost = time.perf_counter() - _t0
+    # Stronger decay toward cheap steady-state so cold misses don't lock TTL.
+    _layer_build_cost_s = (
+        cost if _layer_build_cost_s <= 0.0
+        else 0.5 * _layer_build_cost_s + 0.5 * cost
+    )
 
 
 def prewarm_frame_layer(flights) -> None:
     """Rebuild the aircraft layer off the render thread and publish atomically.
 
-    Runs on a worker thread: the ~20ms rebuild + rotate doesn't fit in the
-    16ms sweep frame budget on a Pi 3, so doing it inline (or even between
-    frames on the main loop) delayed frames and read as a 10Hz stutter. Builds
-    into a spare buffer — never the published surface the display may be
-    blitting from — then swaps refs, which is atomic under the GIL.
+    Runs on a worker thread: the rebuild + rotate doesn't fit in the 16ms sweep
+    frame budget on a Pi, so doing it inline (or between frames on the main
+    loop) delayed frames and read as a periodic beam stutter. Builds into a
+    spare buffer — never the published surface the display may be blitting
+    from — then swaps refs under the lock. The expensive paint happens
+    *outside* the lock so the main thread can keep presenting a stale layer.
     """
-    snap = None
-    gen = 0
+    global _layer_spare
     with _layer_lock:
         if not frame_layer_due():
             return
         # Read the published backdrop only; rebuilds of it stay on the main thread.
         backdrop = _backdrop
+        backdrop_gen = _backdrop_gen
         if backdrop is None or backdrop.get_size() != (theme.SIZE, theme.SIZE):
             return
-        _rebuild_counts["layer"] += 1
         build = _take_build_surface()
-        _build_frame_layer(build, backdrop, flights, None)
-        _publish_frame_layer(build, (theme.SIZE, _backdrop_gen))
-        # Snapshot under the lock so prewarm_base never pixel-locks the
-        # published surface while the main thread blits/presents it.
-        snap = build.copy()
+
+    # Paint while only this worker owns ``build`` — do not hold _layer_lock.
+    _rebuild_counts["layer"] += 1
+    _build_frame_layer(build, backdrop, flights, None)
+    # Private snapshot before publish: rotation.prewarm_base must never lock
+    # the live published surface concurrent with present/blit.
+    snap = build.copy()
+
+    with _layer_lock:
+        # Backdrop swapped under us (zoom/theme): drop this build; next due wins.
+        if backdrop is not _backdrop or backdrop_gen != _backdrop_gen:
+            if _layer_spare is None and build.get_size() == (theme.SIZE, theme.SIZE):
+                _layer_spare = build
+            return
+        _publish_frame_layer(build, (theme.SIZE, backdrop_gen))
         gen = _frame_layer_gen
 
     from display.round_touch import rotation
@@ -232,6 +269,8 @@ def _backdrop_cache_key(*, pan_mode: bool, calibrate: bool):
         settings.theme_custom(),
         settings.theme_rgb(),
         settings.runway_darkmap_rgb(),
+        settings.show_airport_icons(),
+        settings.show_airport_centerlines(),
         settings.distance_units(),
         settings.map_style(),
         settings.vfr_map_opacity() if settings.map_style() == "vfr" else 0,
@@ -252,6 +291,9 @@ def _ensure_backdrop(*, calibrate: bool, pan_mode: bool, pan_offset) -> pygame.S
     draw.fill_background(surf)
     map_bg.draw_background(surf, pan_offset=None)
     rainviewer_overlay.draw_overlay(surf, pan_offset=None)
+    # Airports are static with the basemap — bake here so the ~10Hz aircraft
+    # layer rebuild (and its worker-thread SDL traffic) stays cheap.
+    airport_overlay.draw_airports(surf, pan_offset=None)
     _draw_grid(surf, calibrate=False)
     _backdrop = surf
     _backdrop_key = key
@@ -264,7 +306,7 @@ def _frame_layer_fresh(key) -> bool:
         _frame_layer is not None
         and _frame_layer_key == key
         and _frame_layer.get_size() == (theme.SIZE, theme.SIZE)
-        and (time.time() - _frame_layer_at) < _FRAME_LAYER_TTL_S
+        and (time.time() - _frame_layer_at) < _layer_ttl_s()
     )
 
 
@@ -273,6 +315,9 @@ def _ensure_frame_layer(backdrop, flights, offset) -> pygame.Surface | None:
 
     Returns None when there is no cached backdrop to build on (pan/calibrate),
     leaving the caller to draw straight onto the frame.
+
+    Heavy rebuilds belong on the prewarm worker — rebuilding here on the display
+    thread freezes the sweep for hundreds of ms when AIS+ADS-B is dense.
     """
     if backdrop is None:
         return None
@@ -281,15 +326,16 @@ def _ensure_frame_layer(backdrop, flights, offset) -> pygame.Surface | None:
     if _frame_layer_fresh(key):
         return _frame_layer
 
-    # Rebuilds also run on the prewarm worker thread; concurrent rebuilds blit
-    # from shared surfaces and crash pygame ("must not be locked during blit").
+    # Worker may already be rebuilding; keep presenting the last good layer.
     if not _layer_lock.acquire(blocking=False):
         if _frame_layer is not None and _frame_layer.get_size() == (theme.SIZE, theme.SIZE):
-            # Worker rebuild in flight — one slightly stale frame is fine.
             return _frame_layer
         _layer_lock.acquire()  # first frame ever: wait for the worker
     try:
         if _frame_layer_fresh(key):
+            return _frame_layer
+        # Prefer a slightly stale layer over hitching the sweep on this thread.
+        if _frame_layer is not None and _frame_layer.get_size() == (theme.SIZE, theme.SIZE):
             return _frame_layer
         _rebuild_counts["layer"] += 1
         # Never paint into the published surface — present/rim-flash may still
@@ -720,57 +766,82 @@ def _flight_icon_color(flight, *, compact: bool):
 
 
 def _draw_flights(surface, flights):
-    rim_items: list[tuple[float, dict, tuple[int, int]]] = []
-    inner_items: list[tuple[float, dict, tuple[int, int]]] = []
+    from display.round_touch import alert_prefs, frame_debug, map_bg
 
-    for flight in _visible_flights(flights):
-        if not aircraft_alert.is_shown_on_radar(flight):
-            continue
-        lat = flight.get("plane_latitude")
-        lon = flight.get("plane_longitude")
-        if lat is None or lon is None:
-            continue
-        _, _, dist_km = geo.local_offset_km(lat, lon)
-        if dist_km <= geo.inner_ring_max_km():
-            x, y = geo.lat_lon_to_screen(lat, lon)
-            inner_items.append((dist_km, flight, (x, y)))
-        else:
-            pos = geo.beyond_ring_position(lat, lon)
-            if pos:
-                rim_items.append((dist_km, flight, pos))
+    _t = frame_debug.mark("2r_f_vis")
+    # One prefs stat() for the whole pass — is_shown_on_radar used to do this
+    # per target and dominated visibility time with ~100 aircraft.
+    alert_prefs.reload()
+    map_bg.begin_projection_batch()
+    try:
+        rim_items: list[tuple[float, dict, tuple[int, int]]] = []
+        inner_items: list[tuple[float, dict, tuple[int, int]]] = []
+        max_km = geo.fetch_max_km()
+        inner_max = geo.inner_ring_max_km()
 
-    # Draw order: lower key first (underneath). Vessels under aircraft;
-    # within vessels, parked under moving when hierarchy is on.
-    def _draw_order(item):
-        dist_km, flight, _ = item
-        layer = 0 if vessel_declutter.is_vessel(flight) else 1
-        if vessel_declutter.is_vessel(flight) and vessel_declutter.hierarchy_enabled():
-            vessel_rank = 0 if vessel_declutter.is_parked(flight) else 1
-        else:
-            vessel_rank = 1
-        return (layer, vessel_rank, -dist_km)
+        for flight in flights:
+            if not _above_min_height(flight):
+                continue
+            if not aircraft_alert.is_shown_on_radar(flight):
+                continue
+            lat = flight.get("plane_latitude")
+            lon = flight.get("plane_longitude")
+            if lat is None or lon is None:
+                continue
+            _, _, dist_km = geo.local_offset_km(lat, lon)
+            if dist_km > max_km:
+                continue
+            if dist_km <= inner_max:
+                x, y = geo.lat_lon_to_screen(lat, lon)
+                inner_items.append((dist_km, flight, (x, y)))
+            else:
+                pos = geo.beyond_ring_position(lat, lon)
+                if pos:
+                    rim_items.append((dist_km, flight, pos))
 
-    rim_items.sort(key=_draw_order)
-    inner_items.sort(key=_draw_order)
+        # Draw order: lower key first (underneath). Vessels under aircraft;
+        # within vessels, parked under moving when hierarchy is on.
+        def _draw_order(item):
+            dist_km, flight, _ = item
+            layer = 0 if vessel_declutter.is_vessel(flight) else 1
+            if vessel_declutter.is_vessel(flight) and vessel_declutter.hierarchy_enabled():
+                vessel_rank = 0 if vessel_declutter.is_parked(flight) else 1
+            else:
+                vessel_rank = 1
+            return (layer, vessel_rank, -dist_km)
 
-    for _, flight, (x, y) in rim_items:
-        _draw_light_map_icon_halo(surface, x, y, compact=True)
-        aircraft.draw_plane_icon(
-            surface,
-            x,
-            y,
-            geo.screen_heading(flight.get("heading") or 0),
-            _flight_icon_color(flight, compact=True),
-            compact=True,
-            flight=flight,
-        )
+        _t = frame_debug.end("2r_f_vis", _t)
+        rim_items.sort(key=_draw_order)
+        inner_items.sort(key=_draw_order)
+        _t = frame_debug.end("2r_f_sort", _t)
 
-    for _, flight, (x, y) in inner_items:
-        heading = geo.screen_heading(flight.get("heading") or 0)
-        color = _flight_icon_color(flight, compact=False)
-        _draw_light_map_icon_halo(surface, x, y, compact=False)
-        aircraft.draw_plane_icon(surface, x, y, heading, color, flight=flight)
-        _draw_aircraft_tag(surface, x, y, flight)
+        for _, flight, (x, y) in rim_items:
+            _draw_light_map_icon_halo(surface, x, y, compact=True)
+            aircraft.draw_plane_icon(
+                surface,
+                x,
+                y,
+                geo.screen_heading(flight.get("heading") or 0),
+                _flight_icon_color(flight, compact=True),
+                compact=True,
+                flight=flight,
+            )
+
+        for _, flight, (x, y) in inner_items:
+            heading = geo.screen_heading(flight.get("heading") or 0)
+            color = _flight_icon_color(flight, compact=False)
+            _draw_light_map_icon_halo(surface, x, y, compact=False)
+            aircraft.draw_plane_icon(surface, x, y, heading, color, flight=flight)
+        _t = frame_debug.end("2r_f_icons", _t)
+
+        for _, flight, (x, y) in inner_items:
+            _draw_aircraft_tag(surface, x, y, flight)
+        frame_debug.end("2r_f_tags", _t)
+        frame_debug.count("targets_drawn", len(rim_items) + len(inner_items))
+        frame_debug.count("targets_inner", len(inner_items))
+        frame_debug.count("targets_rim", len(rim_items))
+    finally:
+        map_bg.end_projection_batch()
 
 
 def visible_in_range_count(flights) -> int:

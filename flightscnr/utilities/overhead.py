@@ -29,6 +29,52 @@ from httpx import ConnectError, TimeoutException
 
 logger = logging.getLogger(__name__)
 
+# Release the GIL during long pure-Python grab cycles so the radar
+# sweep thread can present frames. Without this, a multi-second _grab
+# freezes the beam for ~100–200ms every DATA_REFRESH (~2s).
+_GIL_YIELD_EVERY = 2
+_GIL_YIELD_S = 0.002
+_last_budget_yield = 0.0
+_GIL_BUDGET_WORK_S = 0.005  # after this much wall time, yield
+_GIL_BUDGET_SLEEP_S = 0.003
+
+
+def _gil_yield(n: int = 1) -> None:
+    if n > 0 and n % _GIL_YIELD_EVERY == 0:
+        sleep(_GIL_YIELD_S)
+    _gil_yield_budget()
+
+
+def _gil_yield_budget() -> None:
+    """Yield based on wall time so dense loops can't starve the sweep."""
+    global _last_budget_yield
+    now = time()
+    if _last_budget_yield <= 0.0:
+        _last_budget_yield = now
+        return
+    if now - _last_budget_yield >= _GIL_BUDGET_WORK_S:
+        sleep(_GIL_BUDGET_SLEEP_S)
+        _last_budget_yield = time()
+
+
+def _deprioritize_this_thread(nice_delta: int = 10) -> None:
+    """Lower this thread's CPU nice so the radar loop keeps the core.
+
+    Linux treats ``setpriority(PRIO_PROCESS, tid, …)`` as per-thread. Without
+    this, a multi-second ``_grab`` starves the display for ~100ms quanta.
+    """
+    try:
+        import ctypes
+
+        libc = ctypes.CDLL("libc.so.6", use_errno=True)
+        # SYS_gettid: 178 on aarch64/arm, 186 on x86_64.
+        nr = 178 if os.uname().machine.startswith(("aarch64", "arm")) else 186
+        tid = int(libc.syscall(nr))
+        cur = os.getpriority(os.PRIO_PROCESS, tid)
+        os.setpriority(os.PRIO_PROCESS, tid, min(19, cur + nice_delta))
+    except Exception:
+        pass
+
 from config import (
     DISTANCE_UNITS,
     CLOCK_FORMAT,
@@ -528,8 +574,40 @@ def _save_counter_log(data: dict) -> None:
         logger.warning(f"Could not save flight counter: {e}")
 
 
+# In-memory flight counter — the old path load+saved the JSON on every ADS-B
+# add (~100×/cycle), which saturated the Pi's SD card and froze the sweep for
+# ~100–200ms at a time while the display thread blocked on disk.
+_counter_cache: dict | None = None
+_counter_dirty = False
+_counter_seen_today: set[str] = set()
+
+
+def _counter_ensure_loaded() -> dict:
+    global _counter_cache, _counter_seen_today
+    if _counter_cache is None:
+        _counter_cache = _load_counter_log()
+        today = str(datetime.now().date())
+        day = _counter_cache.get(today) or {}
+        _counter_seen_today = {
+            (e.get("callsign") or "").strip().upper()
+            for e in day.get("flights", [])
+            if (e.get("callsign") or "").strip()
+        }
+    return _counter_cache
+
+
+def flush_flight_counter() -> None:
+    """Persist the in-memory flight counter if it changed."""
+    global _counter_dirty
+    if not _counter_dirty or _counter_cache is None:
+        return
+    _save_counter_log(_counter_cache)
+    _counter_dirty = False
+
+
 def log_flight_count(callsign: str, entry: dict | None = None) -> None:
     """Record a unique callsign sighting for the daily flight statistics page."""
+    global _counter_dirty, _counter_seen_today
     if entry is None:
         entry = {}
     callsign = (callsign or "").strip().upper()
@@ -538,7 +616,7 @@ def log_flight_count(callsign: str, entry: dict | None = None) -> None:
     now = datetime.now()
     today = str(now.date())
     now_str = now.strftime("%H:%M:%S")
-    log = _load_counter_log()
+    log = _counter_ensure_loaded()
     if today not in log:
         log[today] = {
             "date": today,
@@ -547,8 +625,8 @@ def log_flight_count(callsign: str, entry: dict | None = None) -> None:
             "first_seen": now_str,
             "last_seen": now_str,
         }
-    seen = {e.get("callsign") for e in log[today].get("flights", [])}
-    if callsign not in seen:
+        _counter_seen_today = set()
+    if callsign not in _counter_seen_today:
         log[today]["flights"].append({
             "callsign": callsign,
             "time": now_str,
@@ -558,8 +636,11 @@ def log_flight_count(callsign: str, entry: dict | None = None) -> None:
             "aircraft": entry.get("plane", ""),
         })
         log[today]["count"] = len(log[today]["flights"])
+        _counter_seen_today.add(callsign)
+        _counter_dirty = True
+    # Touch last_seen in memory only; disk flush is once per grab cycle.
     log[today]["last_seen"] = now_str
-    _save_counter_log(log)
+    _counter_dirty = True
 
 
 # Logging Closest Flights
@@ -701,6 +782,7 @@ class Overhead:
         Displays: API calls made, data sources used, flights processed,
         helicopters detected, and data enrichment statistics.
         """
+        _t0 = time()
         elapsed = stats.get("elapsed_ms", 0)
         self._cycle_count += 1
         self._total_flights_seen += stats.get("flights_processed", 0)
@@ -741,12 +823,14 @@ class Overhead:
             if stats.get("tracked_callsign"):
                 lines.append(f"│ Callsign: {stats['tracked_callsign']}")
 
-        # Flight details table
+        # Flight details table (DEBUG only — 90+ lines at INFO starved the
+        # display thread via journald + GIL during every 2s pipeline cycle).
         flights = stats.get("flight_details", [])
+        detail_lines: list[str] = []
         if flights:
-            lines.append("├─── Overhead Flights ───────────────────────────────────")
-            lines.append("│  #  Callsign   Type  Route         Dist   Source")
-            lines.append("│ ─── ────────── ───── ───────────── ────── ──────────")
+            detail_lines.append("├─── Overhead Flights ───────────────────────────────────")
+            detail_lines.append("│  #  Callsign   Type  Route         Dist   Source")
+            detail_lines.append("│ ─── ────────── ───── ───────────── ────── ──────────")
             for i, fd in enumerate(flights, 1):
                 cs = fd.get("callsign", "?")[:9].ljust(9)
                 ac = fd.get("plane", "?")[:5].ljust(5)
@@ -755,7 +839,7 @@ class Overhead:
                 route = f"{orig}→{dest}".ljust(13)
                 dist = f"{fd.get('distance', 0):.1f}".rjust(5)
                 src = fd.get("data_source", "fr24")[:10]
-                lines.append(f"│ {i:>2}  {cs} {ac} {route} {dist}  {src}")
+                detail_lines.append(f"│ {i:>2}  {cs} {ac} {route} {dist}  {src}")
 
         lines.append("├─── Lifetime Stats ─────────────────────────────────────")
         lines.append(f"│ Total cycles:         {self._cycle_count}")
@@ -763,9 +847,44 @@ class Overhead:
         lines.append(f"│ Aircraft cache size:  {len(_aircraft_cache)}")
         lines.append("└─────────────────────────────────────────────────────────")
 
-        logger.info("\n".join(lines))
+        _t_fmt = time()
+        # Compact INFO line only — the full box was ~30 lines every 2s and
+        # journald sync hitch the sweep on a Pi SD card.
+        # DEBUG only — INFO→journald every DATA_REFRESH froze the sweep ~150ms
+        # on a Pi SD card (same class of hitch as FLIGHTSCNR_FRAME_DEBUG).
+        logger.debug(
+            "Overhead cycle=%s flights=%s elapsed=%.0fms adsb=+%s/~%s dump=+%s/~%s",
+            self._cycle_count,
+            stats.get("flights_processed", 0),
+            stats.get("elapsed_ms", 0),
+            stats.get("adsb_added", 0),
+            stats.get("adsb_updated", 0),
+            stats.get("dump1090_added", 0),
+            stats.get("dump1090_updated", 0),
+        )
+        logger.debug("\n".join(lines))
+        if detail_lines:
+            logger.debug("\n".join(detail_lines))
+        _t_done = time()
+        try:
+            from display.round_touch import frame_debug
+
+            frame_debug.stage("pipe_summary_fmt", _t_fmt - _t0)
+            frame_debug.stage("pipe_summary_log", _t_done - _t_fmt)
+            frame_debug.count("pipe_summary_lines", len(lines) + len(detail_lines))
+            frame_debug.count("pipe_summary_flights", len(flights))
+        except Exception:
+            pass
 
     def grab_data(self):
+        if os.environ.get("FLIGHTSCNR_PAUSE_GRAB", "").lower() in ("1", "true", "yes"):
+            return
+        # One in-flight grab at a time. Overlapping threads stacked HTTPS +
+        # merge work and starved the radar sweep every refresh cycle.
+        with self._lock:
+            if self._processing:
+                return
+            self._processing = True
         Thread(target=self._grab, daemon=True).start()
 
     def safe_get(self, d, *keys, default=None):
@@ -776,8 +895,10 @@ class Overhead:
         return d if d is not None else default
 
     def _grab(self):
-        with self._lock:
-            self._processing = True
+        global _last_budget_yield
+        _deprioritize_this_thread()
+        # processing flag is set in grab_data under the lock.
+        _last_budget_yield = time()
 
         overhead_data = []
         tracked_data = None
@@ -1041,12 +1162,15 @@ class Overhead:
                         log_flight_data(entry)
                         log_farthest_flight(entry)
                         log_flight_count(callsign, entry)
+                        _gil_yield(stats["flights_processed"])
                         break
 
                     except Exception as e:
                         retries -= 1
                         if retries == 0:
                             logger.warning(f"Failed to get details for {f.callsign}: {e}")
+                        else:
+                            _gil_yield(1)
 
             # --- STEP 1b: ADS-B live positions (adsb.fi + optional local dump1090) ---
             adsb_entries: list[dict] = []
@@ -1173,10 +1297,27 @@ class Overhead:
                             "data_source": "fr24_feed+adsb",
                         })
 
+                # Spatial index for proximity merge. Scanning all FR24 rows per
+                # ADS-B entry is O(n·m) pure Python and starves the sweep GIL
+                # every DATA_REFRESH (~2s) — the periodic beam hitch.
+                _merge_cell_deg = max(0.05, 15.0 / 111.0)
+
+                def _merge_cell(lat: float, lon: float) -> tuple[int, int]:
+                    return (int(lat / _merge_cell_deg), int(lon / _merge_cell_deg))
+
+                def _index_position(flight: dict) -> None:
+                    try:
+                        lat = float(flight["plane_latitude"])
+                        lon = float(flight["plane_longitude"])
+                    except (KeyError, TypeError, ValueError):
+                        return
+                    by_cell.setdefault(_merge_cell(lat, lon), []).append(flight)
+
                 def _rebuild_indexes() -> None:
                     by_callsign.clear()
                     by_hex.clear()
                     by_identity.clear()
+                    by_cell.clear()
                     for existing in overhead_data:
                         hx = (existing.get("icao_hex") or "").strip().upper()
                         if hx:
@@ -1187,9 +1328,19 @@ class Overhead:
                             by_callsign[key] = existing
                         for key in flight_identity_keys(existing):
                             by_identity[key] = existing
+                        _index_position(existing)
+
+                def _nearby_candidates(lat: float, lon: float):
+                    cy, cx = _merge_cell(lat, lon)
+                    for dy in (-1, 0, 1):
+                        for dx in (-1, 0, 1):
+                            bucket = by_cell.get((cy + dy, cx + dx))
+                            if bucket:
+                                yield from bucket
 
                 def _merge_position_entries(entries: list[dict], *, stat_prefix: str) -> None:
-                    for entry in entries:
+                    for _i, entry in enumerate(entries, 1):
+                        _gil_yield_budget()
                         keys = callsign_match_keys(entry.get("callsign"))
                         hx = (entry.get("icao_hex") or "").strip().upper()
                         target = by_hex.get(hx) if hx else None
@@ -1210,22 +1361,28 @@ class Overhead:
                             if lat is not None and lon is not None:
                                 best = None
                                 best_d = None
-                                for existing in overhead_data:
-                                    elat = existing.get("plane_latitude")
-                                    elon = existing.get("plane_longitude")
-                                    if elat is None or elon is None:
-                                        continue
-                                    d = geo.distance_km(lat, lon, elat, elon)
-                                    max_d = position_merge_threshold_km(entry, existing)
-                                    if d > max_d:
-                                        continue
-                                    if flights_match_by_position(
-                                        entry, existing, dist_km=d
-                                    ):
-                                        if best_d is None or d < best_d:
-                                            best_d = d
-                                            best = existing
-                                target = best
+                                try:
+                                    flat = float(lat)
+                                    flon = float(lon)
+                                except (TypeError, ValueError):
+                                    flat = flon = None
+                                if flat is not None:
+                                    for existing in _nearby_candidates(flat, flon):
+                                        elat = existing.get("plane_latitude")
+                                        elon = existing.get("plane_longitude")
+                                        if elat is None or elon is None:
+                                            continue
+                                        d = geo.distance_km(flat, flon, elat, elon)
+                                        max_d = position_merge_threshold_km(entry, existing)
+                                        if d > max_d:
+                                            continue
+                                        if flights_match_by_position(
+                                            entry, existing, dist_km=d
+                                        ):
+                                            if best_d is None or d < best_d:
+                                                best_d = d
+                                                best = existing
+                                    target = best
                         if target is not None:
                             merge_live_fields(target, entry, _LIVE_FIELDS)
                             if not (target.get("callsign") or "").strip():
@@ -1251,31 +1408,42 @@ class Overhead:
                             stats[f"{stat_prefix}_updated"] = (
                                 stats.get(f"{stat_prefix}_updated", 0) + 1
                             )
+                            _gil_yield(_i)
                             continue
                         _maybe_feed_enrich(entry)
                         overhead_data.append(entry)
                         stats[f"{stat_prefix}_added"] = (
                             stats.get(f"{stat_prefix}_added", 0) + 1
                         )
+                        for key in keys:
+                            by_callsign[key] = entry
+                        if hx:
+                            by_hex[hx] = entry
+                        for key in flight_identity_keys(entry):
+                            by_identity[key] = entry
+                        _index_position(entry)
                         cs = "".join((entry.get("callsign") or "").upper().split())
                         if cs:
-                            for key in keys:
-                                by_callsign[key] = entry
-                            if hx:
-                                by_hex[hx] = entry
-                            for key in flight_identity_keys(entry):
-                                by_identity[key] = entry
                             log_flight_count(cs, entry)
+                        _gil_yield(_i)
 
                 by_hex: dict[str, dict] = {}
                 by_identity: dict[str, dict] = {}
+                by_cell: dict[tuple[int, int], list] = {}
                 _rebuild_indexes()
                 # Cloud first, then local dump1090 so local kinematics win on overlap.
                 _merge_position_entries(adsb_entries, stat_prefix="adsb")
                 _merge_position_entries(dump_entries, stat_prefix="dump1090")
 
                 apply_adsb_alert_fields(overhead_data, adsb_entries + dump_entries)
+                _t_dedupe = time()
                 overhead_data = dedupe_flights(overhead_data)
+                try:
+                    from display.round_touch import frame_debug
+
+                    frame_debug.stage("pipe_dedupe", time() - _t_dedupe)
+                except Exception:
+                    pass
 
             # --- STEP 2: Tracked flight (always check; display shows it when clock is up) ---
             tracked_callsign = load_tracked_callsign()
@@ -1410,6 +1578,13 @@ class Overhead:
             # --- Pipeline Summary ---
             stats["elapsed_ms"] = (time() - _grab_start) * 1000
             self._log_pipeline_summary(stats)
+            flush_flight_counter()
+            try:
+                from display.round_touch import frame_debug
+
+                frame_debug.stage("pipe_grab_total", time() - _grab_start)
+            except Exception:
+                pass
 
             with self._lock:
                 self._data = overhead_data
@@ -1418,12 +1593,14 @@ class Overhead:
 
         except (ConnectionError, ConnectError, TimeoutException, OSError) as e:
             logger.warning(f"Overhead: Network error during _grab: {type(e).__name__}: {e}")
+            flush_flight_counter()
             with self._lock:
                 self._data = []
                 self._tracked_data = None
                 self._new_data = True
         except Exception as e:
             logger.error(f"Overhead: Unexpected error in _grab: {type(e).__name__}: {e}", exc_info=True)
+            flush_flight_counter()
             with self._lock:
                 self._data = []
                 self._tracked_data = None

@@ -269,16 +269,16 @@ class FR24Client:
         # Check cache first
         cached = self._cache.get_cached_flights(cache_key)
         if cached is not None:
-            logger.info(f"FR24: Cache hit ({len(cached)} flights) for key: {cache_key}")
+            logger.debug("FR24: Cache hit (%d flights) for key: %s", len(cached), cache_key)
             return cached
 
         # Check rate limiter (90s polling interval, per-key)
         if not self._cache.should_poll_feed(cache_key):
-            logger.info("FR24: Rate limited (90s) — returning cached or empty")
+            logger.debug("FR24: Rate limited (90s) — returning cached or empty")
             return []
 
         # Make the actual API call
-        logger.info(f"FR24: Making live API call (key: {cache_key})")
+        logger.debug("FR24: Making live API call (key: %s)", cache_key)
         try:
             result = self._run_with_client(
                 lambda fr24: self._get_flights_async(fr24, bounds, airline)
@@ -523,7 +523,7 @@ class FR24Client:
         # Max 4 fields for unauthenticated users; vspeed requires auth
         fields = {"flight", "reg", "route", "type"}
 
-        logger.info(f"FR24: Fetching live feed (bbox: S={bbox.south}, N={bbox.north}, W={bbox.west}, E={bbox.east})")
+        logger.debug(f"FR24: Fetching live feed (bbox: S={bbox.south}, N={bbox.north}, W={bbox.west}, E={bbox.east})")
         result = await fr24.live_feed.fetch(
             bounding_box=bbox,
             limit=1500,
@@ -537,7 +537,7 @@ class FR24Client:
             return []
 
         flight_count = len(proto.flights_list)
-        logger.info(f"FR24: Live feed returned {flight_count} flights")
+        logger.debug(f"FR24: Live feed returned {flight_count} flights")
         flights = self._parse_flights(proto)
 
         # Post-filter by airline ICAO if specified

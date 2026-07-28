@@ -76,6 +76,9 @@ SECONDARY_TIMEOUT_S = 45
 # FLIGHTSCNR_FRAME_DEBUG=1 logs draw cost and achieved frame interval every 2s.
 # The sweep turns 60°/s, so anything past ~20ms/frame shows as a stepping beam.
 FRAME_DEBUG = os.environ.get("FLIGHTSCNR_FRAME_DEBUG", "").lower() in ("1", "true", "yes")
+# Always-on hitch probe (no journald): one line per visible sweep stall.
+_HITCH_LOG = os.environ.get("FLIGHTSCNR_HITCH_LOG", "/tmp/flightscnr-hitch.log")
+_HITCH_GAP_S = float(os.environ.get("FLIGHTSCNR_HITCH_GAP_MS", "48")) / 1000.0
 BOOT_SPLASH_S = 3
 AUTO_IDLE_MIN_RADAR_S = 5
 OFF_HOURS_TOUCH_WAKE_S = 300
@@ -672,10 +675,25 @@ class RoundTouchDisplay:
         """Log draw cost and achieved interval every 2s (FLIGHTSCNR_FRAME_DEBUG=1)."""
         now = time.perf_counter()
         gap = (now - self._frame_prev_at) if self._frame_prev_at else 0.0
-        if self._frame_prev_at:
+        if self._frame_prev_at and gap >= _HITCH_GAP_S:
+            try:
+                with open(_HITCH_LOG, "a", encoding="utf-8") as fh:
+                    fh.write(
+                        f"{time.time():.3f}\tgap_ms={gap * 1000:.0f}\t"
+                        f"draw_ms={draw_s * 1000:.0f}\t"
+                        f"proc={int(bool(self.overhead.processing))}\t"
+                        f"grab={self.overhead.grab_seq}\n"
+                    )
+            except Exception:
+                pass
+        if self._frame_prev_at and FRAME_DEBUG:
             self._frame_gaps.append(gap)
         self._frame_prev_at = now
-        self._frame_draws.append(draw_s)
+        if FRAME_DEBUG:
+            self._frame_draws.append(draw_s)
+
+        if not FRAME_DEBUG:
+            return
 
         # Attribute individual slow frames: smoothness is set by the worst
         # frame-to-frame gaps, not the average. Anything > 2x the sweep budget
@@ -688,18 +706,15 @@ class RoundTouchDisplay:
                 self._jank_3x += 1
             if now - self._jank_log_at >= 0.25:
                 self._jank_log_at = now
-                top = " ".join(
-                    f"{name}={sec * 1000.0:.1f}"
-                    for name, sec in sorted(marks.items(), key=lambda kv: -kv[1])[:7]
-                    if sec >= 0.001
-                )
-                logger.info(
+                frame_debug.log(
+                    logging.INFO,
                     "[frame] slow screen=%s gap=%.1fms draw=%.1fms | %s",
                     self.screen,
                     gap * 1000.0,
                     draw_s * 1000.0,
-                    top or "(unattributed: loop overhead/sleep)",
+                    frame_debug.format_top(marks, gap=gap, limit=10),
                 )
+                frame_debug.dump_threads_if_stall(gap, marks)
 
         if now - self._frame_log_at < 2.0:
             return
@@ -714,7 +729,8 @@ class RoundTouchDisplay:
         if not draws or not gaps:
             return
         avg_gap = sum(gaps) / len(gaps)
-        logger.info(
+        frame_debug.log(
+            logging.INFO,
             "[frame] screen=%s n=%d draw avg=%.1f p95=%.1f max=%.1fms | "
             "interval avg=%.1f p95=%.1f max=%.1fms (%.0f fps, %.2f°/frame) | "
             "jank >%dms=%d >%dms=%d",
@@ -739,10 +755,18 @@ class RoundTouchDisplay:
                 f"{name}={total / count * 1000.0:.1f}"
                 for name, (total, count) in sorted(stages.items())
             )
-            logger.info(
-                "[frame] stages(ms avg): %s | rebuilds: %s",
+            counters = frame_debug.drain_counters()
+            counter_txt = ""
+            if counters:
+                counter_txt = " | counts: " + " ".join(
+                    f"{name}={n}" for name, n in sorted(counters.items())
+                )
+            frame_debug.log(
+                logging.INFO,
+                "[frame] stages(ms avg): %s | rebuilds: %s%s",
                 parts,
                 radar.take_rebuild_counts(),
+                counter_txt,
             )
 
     @staticmethod
@@ -773,11 +797,11 @@ class RoundTouchDisplay:
         return now
 
     def _safe_draw(self):
-        started = time.perf_counter() if FRAME_DEBUG else 0.0
+        # Always track frame gaps for /tmp hitch log; full stage debug is optional.
+        started = time.perf_counter()
         try:
             self._draw()
-            if FRAME_DEBUG:
-                self._note_frame_time(time.perf_counter() - started)
+            self._note_frame_time(time.perf_counter() - started)
         except pygame.error as exc:
             # Layer prewarm vs present can briefly contend on a surface under
             # heavy traffic; skipping one frame is better than freezing forever.
@@ -2190,6 +2214,18 @@ class RoundTouchDisplay:
             logger.exception("[ais] vessel poll failed")
 
     def run(self):
+        import gc
+        import sys
+
+        # The overhead pipeline / prewarm workers run pure-Python bursts that
+        # hold the GIL; the default 5ms switch interval let them stall the
+        # sweep ~150ms per 2s data tick. Shorter slices keep the beam moving.
+        sys.setswitchinterval(0.002)
+        # Startup objects (modules, fonts, icon/tile caches) are permanent —
+        # freeze them so gen-2 collections stop scanning them (~90ms pauses).
+        gc.collect()
+        gc.freeze()
+
         logger.info(
             "Round touch display starting (%dx%d framebuffer, rotation=%d°, visible radius=%d)",
             theme.SIZE,
@@ -2197,6 +2233,8 @@ class RoundTouchDisplay:
             rotation.rotation_degrees(),
             theme.VISIBLE_RADIUS,
         )
+        if os.environ.get("FLIGHTSCNR_PAUSE_GRAB", "").lower() in ("1", "true", "yes"):
+            logger.warning("FLIGHTSCNR_PAUSE_GRAB=1 — overhead pipeline disabled")
         touch_debug.log_startup()
         running = True
         last_data_poll = 0
@@ -2306,6 +2344,7 @@ class RoundTouchDisplay:
                                 self._apply_scale_step(scale_delta)
                         self._handle_navigation()
                 _lt = self._loop_stage("loop_events", _lt)
+                _body_t = _lt
 
                 if self._tick_long_press_pan():
                     self._safe_draw()
@@ -2328,7 +2367,13 @@ class RoundTouchDisplay:
                     and now - last_data_poll >= DATA_REFRESH_SECONDS
                 ):
                     _lt = time.perf_counter()
-                    self._tick_data()
+                    # FLIGHTSCNR_PAUSE_GRAB=1: isolate whether _grab causes sweep hitch.
+                    if os.environ.get("FLIGHTSCNR_PAUSE_GRAB", "").lower() in (
+                        "1", "true", "yes"
+                    ):
+                        self._refresh_flights()
+                    else:
+                        self._tick_data()
                     self._loop_stage("loop_tick_data", _lt)
                     last_data_poll = now
 
@@ -2355,12 +2400,15 @@ class RoundTouchDisplay:
                     self._last_grab_seq = grab_seq
                     if not self._radar_modal_active():
                         self._refresh_flights()
+                        # Radar already redraws on the sweep cadence — forcing a
+                        # draw here stacked on the just-finished grab and read as
+                        # a ~2s beam hitch. Static screens still need a refresh.
                         if self.screen == SCREEN_TRACKED:
                             self._safe_draw()
                             self._last_static_draw = now
-                        elif self.screen == SCREEN_RADAR:
+                        elif self.screen != SCREEN_RADAR:
                             self._safe_draw()
-                            self._last_radar_draw = now
+                            self._last_static_draw = now
 
                 if now - last_location_check >= 2.0:
                     _lt = time.perf_counter()
@@ -2432,14 +2480,16 @@ class RoundTouchDisplay:
                         self._last_radar_draw = now_draw
                         self._safe_draw()
                         # Rebuild + pre-rotate the ~10Hz aircraft layer on a
-                        # worker thread: the ~20ms cost doesn't fit anywhere in
-                        # a 16ms frame cadence on the main thread and showed as
-                        # a 10Hz beam stutter (see prewarm_frame_layer).
+                        # worker thread (same model as 9a130e7). Inline rebuilds
+                        # on this loop made the sweep hitch every layer TTL.
+                        # Skip while _grab holds the GIL so prewarm and merge
+                        # don't stack into a multi-hundred-ms unmarked stall.
                         if (
                             settings.show_sweep_line()
                             and not self._calibrating_facing
                             and not self._panning_map
                             and not self._radar_modal_active()
+                            and not self.overhead.processing
                             and radar.frame_layer_due()
                             and (
                                 self._prewarm_thread is None
@@ -2490,11 +2540,30 @@ class RoundTouchDisplay:
                 self._tick_off_hours_clock()
                 self._apply_brightness()
                 self._loop_stage("loop_misc", _lt)
+                if FRAME_DEBUG:
+                    try:
+                        body = time.perf_counter() - _body_t
+                        if body >= 0.020:
+                            frame_debug.stage("loop_body", body)
+                    except NameError:
+                        pass
                 # Yield less while the sweep is animating so frames aren't padded to 10ms+.
+                _sleep_t = time.perf_counter()
                 if self.screen == SCREEN_RADAR and settings.show_sweep_line():
                     time.sleep(0.001)
                 else:
                     time.sleep(0.01)
+                if FRAME_DEBUG:
+                    # Overrun beyond the requested sleep = GIL / OS preemption.
+                    requested = (
+                        0.001
+                        if self.screen == SCREEN_RADAR and settings.show_sweep_line()
+                        else 0.01
+                    )
+                    slept = time.perf_counter() - _sleep_t
+                    if slept > requested + 0.005:
+                        frame_debug.stage("loop_sleep_overrun", slept - requested)
+                    frame_debug.stage("loop_sleep", slept)
 
         except KeyboardInterrupt:
             logger.info("Display stopped by user")

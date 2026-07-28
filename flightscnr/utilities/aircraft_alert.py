@@ -316,7 +316,14 @@ def merge_live_fields(target: dict, source: dict, fields: tuple[str, ...]) -> No
 
 
 def dedupe_flights(flights: list[dict], *, threshold_km: float = 1.2) -> list[dict]:
-    """Collapse FR24 + ADS-B duplicates (identity and/or nearby position)."""
+    """Collapse FR24 + ADS-B duplicates (identity and/or nearby position).
+
+    Identity matches are O(1) via a hash index. Proximity matches use a tight
+    spatial grid (~threshold_km). The expensive wide cross-feed radius
+    (~15 km for blank-callsign ADS-B vs lagged FR24) only probes the small
+    set of tracks that actually need it — a full 15 km grid over the Bay Area
+    was still O(n²)-ish and held the GIL for ~130 ms per cycle.
+    """
 
     def richness(flight: dict) -> int:
         score = 0
@@ -325,7 +332,6 @@ def dedupe_flights(flights: list[dict], *, threshold_km: float = 1.2) -> list[di
         if flight.get("airline"):
             score += 3
         src = (flight.get("data_source") or "").strip()
-        # Prefer FR24 shells for metadata; among ADS-B feeds prefer local dump1090.
         if src.startswith("fr24"):
             score += 5
         elif src == "dump1090":
@@ -342,23 +348,105 @@ def dedupe_flights(flights: list[dict], *, threshold_km: float = 1.2) -> list[di
             score += 1
         return score
 
-    def _are_duplicates(a: dict, b: dict) -> bool:
-        if flights_share_identity(a, b):
-            return True
-        return flights_match_by_position(a, b, near_km=threshold_km)
+    cell_deg = max(0.005, threshold_km / 111.0)
+
+    def _cell(lat: float, lon: float) -> tuple[int, int]:
+        return (int(lat / cell_deg), int(lon / cell_deg))
+
+    def _is_fr24(flight: dict) -> bool:
+        return (flight.get("data_source") or "").startswith("fr24")
+
+    def _needs_wide(flight: dict) -> bool:
+        """Wide FR24↔ADS-B merge only when at least one side lacks callsign keys."""
+        return not _callsign_keys(flight)
 
     kept: list[dict] = []
-    for flight in flights:
-        duplicate = None
-        for existing in kept:
-            if _are_duplicates(flight, existing):
-                duplicate = existing
-                break
+    by_identity: dict[str, int] = {}
+    by_cell: dict[tuple[int, int], list[int]] = {}
+    wide_idxs: list[int] = []
 
-        if duplicate is None:
+    def _index(idx: int, flight: dict) -> None:
+        for key in flight_identity_keys(flight):
+            by_identity[key] = idx
+        try:
+            lat = float(flight["plane_latitude"])
+            lon = float(flight["plane_longitude"])
+        except (KeyError, TypeError, ValueError):
+            lat = lon = None
+        if lat is not None:
+            by_cell.setdefault(_cell(lat, lon), []).append(idx)
+        if _needs_wide(flight) or _is_fr24(flight):
+            if idx not in wide_idxs:
+                wide_idxs.append(idx)
+
+    def _unindex(idx: int, flight: dict) -> None:
+        for key in flight_identity_keys(flight):
+            if by_identity.get(key) == idx:
+                by_identity.pop(key, None)
+        try:
+            lat = float(flight["plane_latitude"])
+            lon = float(flight["plane_longitude"])
+        except (KeyError, TypeError, ValueError):
+            lat = lon = None
+        if lat is not None:
+            bucket = by_cell.get(_cell(lat, lon))
+            if bucket:
+                try:
+                    bucket.remove(idx)
+                except ValueError:
+                    pass
+        try:
+            wide_idxs.remove(idx)
+        except ValueError:
+            pass
+
+    def _find_duplicate(flight: dict) -> int | None:
+        for key in flight_identity_keys(flight):
+            idx = by_identity.get(key)
+            if idx is not None:
+                return idx
+        try:
+            lat = float(flight["plane_latitude"])
+            lon = float(flight["plane_longitude"])
+        except (KeyError, TypeError, ValueError):
+            return None
+        cy, cx = _cell(lat, lon)
+        checked: set[int] = set()
+        for dy in (-1, 0, 1):
+            for dx in (-1, 0, 1):
+                for idx in by_cell.get((cy + dy, cx + dx), ()):
+                    if idx in checked:
+                        continue
+                    checked.add(idx)
+                    if flights_match_by_position(
+                        flight, kept[idx], near_km=threshold_km
+                    ):
+                        return idx
+        # Wide cross-feed: blank-callsign ADS-B vs lagged FR24 (up to ~15 km).
+        if _needs_wide(flight) or _is_fr24(flight):
+            flight_fr24 = _is_fr24(flight)
+            for idx in wide_idxs:
+                if idx in checked:
+                    continue
+                other = kept[idx]
+                if flight_fr24 == _is_fr24(other):
+                    continue  # same feed — tight grid already covered
+                if flights_match_by_position(flight, other, near_km=threshold_km):
+                    return idx
+        return None
+
+    for i, flight in enumerate(flights):
+        if i and i % 5 == 0:
+            # Give the sweep ~3ms of GIL every few flights so a dense dedupe
+            # cannot freeze the beam for a full DATA_REFRESH quantum.
+            time.sleep(0.003)
+        dup_idx = _find_duplicate(flight)
+        if dup_idx is None:
+            _index(len(kept), flight)
             kept.append(flight)
             continue
 
+        duplicate = kept[dup_idx]
         live_fields = (
             "plane_latitude", "plane_longitude", "altitude",
             "heading", "ground_speed", "vertical_speed",
@@ -366,21 +454,24 @@ def dedupe_flights(flights: list[dict], *, threshold_km: float = 1.2) -> list[di
         )
         if richness(flight) > richness(duplicate):
             merge_live_fields(flight, duplicate, live_fields)
-            # Prefer non-empty identity from either side.
             if not (flight.get("callsign") or "").strip():
                 flight["callsign"] = duplicate.get("callsign") or flight.get("callsign")
             if not (flight.get("registration") or "").strip():
                 flight["registration"] = duplicate.get("registration") or ""
-            kept.remove(duplicate)
-            kept.append(flight)
+            _unindex(dup_idx, duplicate)
+            kept[dup_idx] = flight
+            _index(dup_idx, flight)
         else:
+            _unindex(dup_idx, duplicate)
             merge_live_fields(duplicate, flight, live_fields)
             if not (duplicate.get("callsign") or "").strip():
                 duplicate["callsign"] = flight.get("callsign") or duplicate.get("callsign")
             if not (duplicate.get("registration") or "").strip():
                 duplicate["registration"] = flight.get("registration") or ""
+            _index(dup_idx, duplicate)
 
     return kept
+
 
 
 def apply_adsb_alert_fields(flights: list[dict], adsb_entries: list[dict]) -> None:
@@ -489,10 +580,14 @@ def is_highlighted(flight: dict) -> bool:
 
 
 def is_shown_on_radar(flight: dict) -> bool:
-    """True if this aircraft should be drawn when hide-non-alerted is enabled."""
+    """True if this aircraft should be drawn when hide-non-alerted is enabled.
+
+    Callers that loop many flights should ``alert_prefs.reload()`` once before
+    the loop — this used to ``stat()`` the prefs file per target and showed up
+    as tens of ms in ``2r_f_vis`` on dense radar redraws.
+    """
     if flight.get("kind") == "vessel":
         return True
-    alert_prefs.reload()
     if not alert_prefs.hide_non_alerted():
         return True
     return is_highlighted(flight)
