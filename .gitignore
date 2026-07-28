@@ -36,6 +36,7 @@ Thumbs.db
 # Runtime data & downloaded databases
 flightscnr/.cache/
 flightscnr/airports.json
+flightscnr/runways.json
 flightscnr/cities.json
 flightscnr/airlines.json
 flightscnr/icao_types.json

@@ -96,6 +96,12 @@ LIVE_DIM = (28, 84, 128)
 # Parked / slow AIS vessels (dimmer than AIRCRAFT when hierarchy is on).
 VESSEL_PARKED = (120, 90, 40)
 VESSEL_MOVING = AIRCRAFT
+# Major airport location marks (unlabeled cross/circle under traffic).
+AIRPORT = (120, 150, 175)
+# OurAirports runway centerlines (dark basemap).
+RUNWAY = (160, 185, 205)
+# Higher-contrast runway lines on light CARTO basemap.
+RUNWAY_LIGHT = (35, 55, 95)
 ALERT_MILITARY = (255, 40, 40)   # red — military tracks
 ALERT_OTHER = (56, 160, 255)     # blue — emergency squawk / watch list
 ALERT_EMERGENCY = ALERT_OTHER

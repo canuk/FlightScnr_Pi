@@ -23,13 +23,66 @@ CACHE_FILE  = os.path.join(BASE_DIR, "airports.json")
 CSV_URL     = "https://raw.githubusercontent.com/datasets/airport-codes/master/data/airport-codes.csv"
 
 # Cache version — increment to force rebuild (e.g. when coordinate parsing changes)
+# v4: persist OurAirports ``type`` for radar major-airport filtering
 # v3: store municipality name for route labels
 # v2: confirmed coordinates field is "latitude, longitude" order
-CACHE_VERSION = 3
+CACHE_VERSION = 4
 
-# In-memory lookup: both IATA and ICAO -> {lat, lon}
+# Types drawn on the radar when "show airports" is on (no labels / no runways).
+# Include small public fields — many GA strips are tagged small_airport but still
+# have ADS-B traffic (Hayward, Half Moon Bay, Reid-Hillview, …).
+RADAR_AIRPORT_TYPES = frozenset(
+    {"large_airport", "medium_airport", "small_airport"}
+)
+
+# In-memory lookup: both IATA and ICAO -> {lat, lon, name?, type?}
 _db = {}
 _loaded = False
+
+
+def _record_from_row(row: dict) -> dict | None:
+    """Parse one airport-codes CSV row into a coord record, or None."""
+    coords_str = row.get("coordinates", "")
+    if not coords_str:
+        return None
+    try:
+        # Dataset "coordinates" field is "latitude,longitude"
+        parts = coords_str.split(",")
+        lat = float(parts[0].strip())
+        lon = float(parts[1].strip())
+    except (ValueError, AttributeError, IndexError):
+        return None
+    if not (-90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0):
+        return None
+    rec: dict = {"lat": lat, "lon": lon}
+    municipality = (row.get("municipality") or "").strip()
+    if municipality:
+        rec["name"] = municipality
+    atype = (row.get("type") or "").strip().lower()
+    if atype:
+        rec["type"] = atype
+    return rec
+
+
+def build_db_from_csv_text(text: str) -> dict:
+    """Build the IATA/ICAO lookup dict from airport-codes CSV text (testable)."""
+    reader = csv.DictReader(StringIO(text or ""))
+    db: dict = {}
+    for row in reader:
+        rec = _record_from_row(row)
+        if not rec:
+            continue
+        iata = (row.get("iata_code") or "").strip().upper()
+        icao = (row.get("ident") or "").strip().upper()
+        if iata and iata != "0":
+            db[iata] = dict(rec)
+        if icao:
+            db[icao] = dict(rec)
+            # Prefer ICAO keys for radar uniqueness.
+            db[icao]["ident"] = icao
+            if iata and iata != "0" and iata in db:
+                db[iata]["ident"] = icao
+    return db
 
 
 def _download_and_build():
@@ -38,39 +91,7 @@ def _download_and_build():
     try:
         r = requests.get(CSV_URL, timeout=30)
         r.raise_for_status()
-        reader = csv.DictReader(StringIO(r.text))
-        db = {}
-        for row in reader:
-            # Parse coordinates — stored as "lat,lon" in coordinates field
-            coords_str = row.get("coordinates", "")
-            if not coords_str:
-                continue
-            try:
-                # Dataset "coordinates" field is "latitude,longitude"
-                parts = coords_str.split(",")
-                lat = float(parts[0].strip())
-                lon = float(parts[1].strip())
-            except (ValueError, AttributeError, IndexError):
-                continue
-
-            # Index by IATA code
-            iata = row.get("iata_code", "").strip().upper()
-            icao = row.get("ident", "").strip().upper()
-
-            if iata and iata != "0":
-                db[iata] = {"lat": lat, "lon": lon}
-
-            # Index by ICAO code too
-            if icao:
-                db[icao] = {"lat": lat, "lon": lon}
-
-            municipality = (row.get("municipality") or "").strip()
-            if municipality:
-                if iata and iata != "0" and iata in db:
-                    db[iata]["name"] = municipality
-                if icao and icao in db:
-                    db[icao]["name"] = municipality
-
+        db = build_db_from_csv_text(r.text)
         cache_data = {"_version": CACHE_VERSION, "airports": db}
         with open(CACHE_FILE, "w", encoding="utf-8") as f:
             json.dump(cache_data, f)
@@ -88,6 +109,7 @@ def _load():
     if _loaded:
         return
 
+    stale: dict | None = None
     if os.path.exists(CACHE_FILE):
         try:
             with open(CACHE_FILE, "r", encoding="utf-8") as f:
@@ -102,11 +124,91 @@ def _load():
                 # Stale or unversioned cache — rebuild
                 version_found = raw.get("_version", "none") if isinstance(raw, dict) else "legacy"
                 print(f"[Airports] Cache version mismatch (found: {version_found}, need: {CACHE_VERSION}) — rebuilding")
+                if isinstance(raw, dict) and isinstance(raw.get("airports"), dict):
+                    stale = raw["airports"]
+                elif isinstance(raw, dict) and "_version" not in raw:
+                    stale = raw
         except Exception as e:
             print(f"[Airports] Cache load failed: {e} — re-downloading")
 
     _db = _download_and_build()
+    if not _db and stale:
+        # Keep lookups working offline until a typed rebuild succeeds.
+        print("[Airports] Using previous cache without type metadata (degraded)")
+        _db = stale
     _loaded = True
+
+
+def _distance_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Flat-earth km distance (matches radar geo helpers near home)."""
+    import math
+
+    lat_rad = math.radians(lat1)
+    dx = (lon2 - lon1) * 111.320 * math.cos(lat_rad)
+    dy = (lat2 - lat1) * 110.574
+    return math.hypot(dx, dy)
+
+
+def iter_airports_near(
+    lat: float,
+    lon: float,
+    max_km: float,
+    types: frozenset[str] | set[str] | None = None,
+) -> list[dict]:
+    """Unique airport points within ``max_km`` of ``lat,lon``.
+
+    Prefers ICAO ``ident`` keys (4-letter) so IATA duplicates are not drawn twice.
+    Default ``types`` is large + medium airports only.
+    Each item: ``{"ident", "lat", "lon", "type", "name", "dist_km"}``.
+    """
+    _load()
+    try:
+        center_lat = float(lat)
+        center_lon = float(lon)
+        radius = float(max_km)
+    except (TypeError, ValueError):
+        return []
+    if radius <= 0:
+        return []
+
+    wanted = RADAR_AIRPORT_TYPES if types is None else frozenset(types)
+    out: list[dict] = []
+    seen: set[str] = set()
+
+    for code, rec in _db.items():
+        if not isinstance(rec, dict):
+            continue
+        # Prefer ICAO-style idents; skip bare IATA keys to avoid double markers.
+        ident = (rec.get("ident") or code or "").strip().upper()
+        if len(ident) < 4:
+            continue
+        if ident in seen:
+            continue
+        atype = (rec.get("type") or "").strip().lower()
+        if wanted and atype not in wanted:
+            continue
+        try:
+            alat = float(rec["lat"])
+            alon = float(rec["lon"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        dist = _distance_km(center_lat, center_lon, alat, alon)
+        if dist > radius:
+            continue
+        seen.add(ident)
+        out.append(
+            {
+                "ident": ident,
+                "lat": alat,
+                "lon": alon,
+                "type": atype,
+                "name": (rec.get("name") or "").strip(),
+                "dist_km": dist,
+            }
+        )
+
+    out.sort(key=lambda a: a["dist_km"])
+    return out
 
 
 def get_airport_coords(code):
