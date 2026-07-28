@@ -217,6 +217,7 @@ def wifi_status_json():
             "setup_active": wifi_setup.setup_mode_active(),
             "needs_setup": wifi_setup.needs_wifi_setup(),
             "client_connected": wifi_setup.active_client_wifi(),
+            "has_saved": bool(wifi_setup.saved_client_wifi_names()),
             "ap_ssid": creds.ssid,
             "portal_url": creds.portal_url,
             "status": wifi_setup.status_message(),
@@ -243,6 +244,23 @@ def wifi_connect():
     ok, message = wifi_setup.connect_to_wifi(ssid, password)
     code = 200 if ok else 400
     return jsonify({"ok": ok, "message": message}), code
+
+
+@app.post("/wifi/try-saved")
+def wifi_try_saved():
+    """Stop the setup AP and retry NetworkManager saved client profiles."""
+    from utilities import wifi_setup
+
+    ok, message = wifi_setup.try_saved_wifi()
+    code = 200 if ok else 400
+    return jsonify(
+        {
+            "ok": ok,
+            "message": message,
+            "has_saved": bool(wifi_setup.saved_client_wifi_names()),
+            "client_connected": wifi_setup.link_up(),
+        }
+    ), code
 
 
 @app.get("/")
@@ -640,6 +658,7 @@ def radar_json():
             "show_ground_vehicles": settings.show_ground_vehicles(),
             "traffic_mode": settings.traffic_mode(),
             "ais_enabled": settings.ais_enabled(),
+            "vessel_min_speed_kt": settings.vessel_min_speed_kt(),
             "map_style": settings.map_style(),
             "map_style_options": list(settings.MAP_STYLES),
             "vfr_map_opacity": settings.vfr_map_opacity(),
@@ -735,6 +754,11 @@ def radar_save():
         settings.set_traffic_mode(str(data.get("traffic_mode") or ""))
     elif "ais_enabled" in data:
         settings.set_ais_enabled(bool(data.get("ais_enabled")))
+    if "vessel_min_speed_kt" in data:
+        try:
+            settings.set_vessel_min_speed_kt(data.get("vessel_min_speed_kt"))
+        except (TypeError, ValueError):
+            return jsonify({"ok": False, "message": "vessel_min_speed_kt must be a number"}), 400
     if "dump1090_enabled" in data or "dump1090_url" in data:
         from secrets_store import save_secrets_from_portal
 

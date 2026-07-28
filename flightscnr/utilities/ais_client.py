@@ -2,7 +2,7 @@
 Live vessel positions from aisstream.io (free WebSocket AIS feed).
 
 Opens one persistent WSS connection, sends a bounding-box subscription, then
-merges PositionReport + ShipStaticData messages by MMSI into a shared table.
+merges Class A/B position + static AIS messages by MMSI into a shared table.
 
 Protocol and merge strategy adapted from capsule-radar-ais (MIT):
   https://github.com/socquique/capsule-radar-ais
@@ -15,6 +15,7 @@ import asyncio
 import json
 import logging
 import math
+import os
 import threading
 import time
 from dataclasses import dataclass
@@ -23,12 +24,25 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 AIS_WSS_URL = "wss://stream.aisstream.io/v0/stream"
-AIS_BOX_MARGIN = 1.15  # slightly larger than display range so edge vessels stay in feed
+AIS_BOX_MARGIN = 1.25  # slightly larger than display range so edge vessels stay in feed
 SHIP_STALE_S = 12 * 60  # ships report less often than aircraft
-AIS_MAX_SHIPS = 200
+AIS_MAX_SHIPS = 500
+# Optional floor under the display search radius (nm). Default 0 — a large
+# floor (e.g. 25nm) pulls in distant busy waterways (Solent from Portland)
+# and aisstream throttling / queue pressure then starves the local harbour.
+AIS_MIN_SUBSCRIBE_NM = float(os.environ.get("AIS_MIN_SUBSCRIBE_NM", "0"))
+# Coalesce rapid configure() bumps (scale wheel / location jitter) so we never
+# send two subscription messages back-to-back — aisstream drops the socket.
+AIS_RESUBSCRIBE_DEBOUNCE_S = float(os.environ.get("AIS_RESUBSCRIBE_DEBOUNCE_S", "0.8"))
 RECONNECT_MIN_S = 2.0
 RECONNECT_MAX_S = 60.0
-FILTER_MESSAGE_TYPES = ("PositionReport", "ShipStaticData")
+FILTER_MESSAGE_TYPES = (
+    "PositionReport",
+    "StandardClassBPositionReport",
+    "ExtendedClassBPositionReport",
+    "ShipStaticData",
+    "StaticDataReport",
+)
 
 # AIS navigation status (ITU-R M.1371) — common codes only
 NAV_UNDERWAY_ENGINE = 0
@@ -174,25 +188,30 @@ class AisClient:
         return self._last_msg_ts
 
     def configure(self, api_key: str, lat: float, lon: float, range_nm: float) -> None:
-        """Update credentials / home box. Re-subscribes if already connected."""
+        """Update credentials / home box. Re-subscribes if already connected.
+
+        Only bumps ``_config_epoch`` — the WebSocket recv loop sends the
+        subscription once. Scheduling a second send here used to double-hit
+        aisstream and drop the socket (lost traffic until reconnect).
+        """
         with self._lock:
+            new_key = (api_key or "").strip()
+            new_lat = float(lat)
+            new_lon = float(lon)
+            new_range = max(0.5, float(range_nm))
+            # Ignore tiny float jitter from repeated polls / scale math.
             changed = (
-                api_key != self._api_key
-                or abs(lat - self._lat) > 1e-7
-                or abs(lon - self._lon) > 1e-7
-                or abs(range_nm - self._range_nm) > 1e-3
+                new_key != self._api_key
+                or abs(new_lat - self._lat) > 1e-4
+                or abs(new_lon - self._lon) > 1e-4
+                or abs(new_range - self._range_nm) / max(self._range_nm, 0.5) > 0.05
             )
-            self._api_key = (api_key or "").strip()
-            self._lat = float(lat)
-            self._lon = float(lon)
-            self._range_nm = max(0.5, float(range_nm))
+            self._api_key = new_key
+            self._lat = new_lat
+            self._lon = new_lon
+            self._range_nm = new_range
             if changed:
                 self._config_epoch += 1
-        if changed and self._loop and self._ws is not None:
-            try:
-                asyncio.run_coroutine_threadsafe(self._send_subscription(), self._loop)
-            except Exception:
-                logger.debug("AIS re-subscribe schedule failed", exc_info=True)
 
     def start(self) -> None:
         if self._started and self._thread and self._thread.is_alive():
@@ -256,6 +275,36 @@ class AisClient:
     def snapshot_dicts(self) -> list[dict[str, Any]]:
         return [s.to_dict() for s in self.snapshot()]
 
+    def _evict_one_locked(self, now: float) -> bool:
+        """Free one slot. Prefer oldest parked/slow tracks so movers aren't blocked.
+
+        Caller must hold ``self._lock``.
+        """
+        if not self._ships:
+            return False
+
+        def _score(ship: Ship) -> tuple:
+            sog = ship.sog_kt
+            try:
+                slow = math.isnan(sog) or float(sog) < 0.5
+            except (TypeError, ValueError):
+                slow = True
+            parked_nav = ship.nav_status in (NAV_AT_ANCHOR, NAV_MOORED)
+            # Higher priority to evict = larger tuple when sorting reverse... 
+            # We want oldest quiet parked first: sort ascending by (is_moving, last_seen)
+            is_moving = 0 if (parked_nav or slow) else 1
+            return (is_moving, ship.last_seen)
+
+        victim = min(self._ships.values(), key=_score)
+        self._ships.pop(victim.mmsi, None)
+        logger.debug(
+            "[ais] evicted MMSI=%s name=%r to free slot (tracked→%d)",
+            victim.mmsi,
+            victim.name or "?",
+            len(self._ships),
+        )
+        return True
+
     def _thread_main(self) -> None:
         loop = asyncio.new_event_loop()
         self._loop = loop
@@ -295,12 +344,24 @@ class AisClient:
                     self._last_connect_ts = time.time()
                     backoff = RECONNECT_MIN_S
                     logger.info("[ais] WebSocket connected → %s", AIS_WSS_URL)
+                    # Capture epoch *after* the first send so a configure() that
+                    # raced the connect does not immediately double-subscribe
+                    # (aisstream closes the socket on back-to-back sub messages).
                     await self._send_subscription()
                     epoch = self._config_epoch
                     while not self._stop.is_set():
                         if self._config_epoch != epoch:
+                            try:
+                                debounce = max(0.0, float(AIS_RESUBSCRIBE_DEBOUNCE_S))
+                            except (TypeError, ValueError):
+                                debounce = 0.8
+                            if debounce:
+                                await asyncio.sleep(debounce)
+                            # Coalesce further bumps during the debounce window.
+                            epoch = self._config_epoch
                             await self._send_subscription()
                             epoch = self._config_epoch
+                            self._prune_outside_box_locked_safe()
                         try:
                             raw = await asyncio.wait_for(ws.recv(), timeout=1.0)
                         except asyncio.TimeoutError:
@@ -376,7 +437,8 @@ class AisClient:
             is_new = ship is None
             if ship is None:
                 if len(self._ships) >= AIS_MAX_SHIPS:
-                    return
+                    if not self._evict_one_locked(now):
+                        return
                 ship = Ship(mmsi=mmsi)
                 self._ships[mmsi] = ship
             ship.mmsi = mmsi
@@ -393,33 +455,29 @@ class AisClient:
                 ship.lon = _as_float(meta_lon, ship.lon)
 
             message = doc.get("Message") or {}
-            if mtype == "PositionReport":
-                pr = message.get("PositionReport") or {}
-                if "Latitude" in pr:
-                    ship.lat = _as_float(pr.get("Latitude"), ship.lat)
-                if "Longitude" in pr:
-                    ship.lon = _as_float(pr.get("Longitude"), ship.lon)
-                ship.cog_deg = _as_float(pr.get("Cog"), ship.cog_deg)
-                ship.sog_kt = _as_float(pr.get("Sog"), ship.sog_kt)
-                heading = _as_float(pr.get("TrueHeading"), float("nan"))
-                # 511 = not available in AIS
-                ship.heading_deg = heading if 0.0 <= heading < 360.0 else float("nan")
-                ship.nav_status = _as_int(pr.get("NavigationalStatus"), NAV_UNDEFINED)
-            elif mtype == "ShipStaticData":
-                sd = message.get("ShipStaticData") or {}
-                name = sd.get("Name")
-                if name:
-                    ship.name = _trim_ais(str(name))
-                ship.ship_type = _as_int(sd.get("Type"), ship.ship_type)
-                dest = sd.get("Destination")
-                if dest:
-                    ship.dest = _trim_ais(str(dest))
-                dim = sd.get("Dimension") or {}
-                if dim:
-                    ship.length_m = _as_int(dim.get("A")) + _as_int(dim.get("B"))
-                    ship.beam_m = _as_int(dim.get("C")) + _as_int(dim.get("D"))
-                if "MaximumStaticDraught" in sd:
-                    ship.draught_m = _as_float(sd.get("MaximumStaticDraught"))
+            if mtype in (
+                "PositionReport",
+                "StandardClassBPositionReport",
+                "ExtendedClassBPositionReport",
+            ):
+                pr = message.get(mtype) or {}
+                _apply_position_report(ship, pr)
+                # Extended Class B (msg 19) often carries name / type / dimensions.
+                if mtype == "ExtendedClassBPositionReport":
+                    _apply_static_fields(ship, pr)
+            elif mtype in ("ShipStaticData", "StaticDataReport"):
+                sd = message.get(mtype) or {}
+                # aisstream Class B StaticDataReport uses ReportA/ReportB;
+                # some samples/docs also use PartA/PartB.
+                part_a = sd.get("ReportA") or sd.get("PartA") or {}
+                part_b = sd.get("ReportB") or sd.get("PartB") or {}
+                if part_a or part_b:
+                    merged = {**part_b, **part_a}
+                    if part_a.get("Name") and not merged.get("Name"):
+                        merged["Name"] = part_a.get("Name")
+                    _apply_static_fields(ship, merged)
+                else:
+                    _apply_static_fields(ship, sd)
 
             self._last_msg_ts = now
             if is_new:
@@ -433,6 +491,75 @@ class AisClient:
                     len(self._ships),
                 )
 
+    def _prune_outside_box_locked_safe(self) -> None:
+        """Drop tracks well outside the current subscribe box after a resubscribe."""
+        with self._lock:
+            self._prune_outside_box_locked()
+
+    def _prune_outside_box_locked(self) -> None:
+        """Caller must hold ``self._lock``."""
+        if not self._ships:
+            return
+        box = bounding_box(self._lat, self._lon, self._range_nm)
+        (sw_lat, sw_lon), (ne_lat, ne_lon) = box
+        # Small pad so vessels near the edge aren't flapped by float jitter.
+        pad_lat = max(0.01, (ne_lat - sw_lat) * 0.02)
+        pad_lon = max(0.01, (ne_lon - sw_lon) * 0.02)
+        lo_lat, hi_lat = sw_lat - pad_lat, ne_lat + pad_lat
+        lo_lon, hi_lon = sw_lon - pad_lon, ne_lon + pad_lon
+        dead = [
+            mmsi
+            for mmsi, ship in self._ships.items()
+            if not (lo_lat <= ship.lat <= hi_lat and lo_lon <= ship.lon <= hi_lon)
+        ]
+        for mmsi in dead:
+            self._ships.pop(mmsi, None)
+        if dead:
+            logger.info(
+                "[ais] pruned %d tracks outside subscribe box (tracked→%d)",
+                len(dead),
+                len(self._ships),
+            )
+
+
+def _apply_position_report(ship: Ship, pr: dict) -> None:
+    """Merge a Class A or Class B position payload into ``ship``."""
+    if "Latitude" in pr:
+        ship.lat = _as_float(pr.get("Latitude"), ship.lat)
+    if "Longitude" in pr:
+        ship.lon = _as_float(pr.get("Longitude"), ship.lon)
+    # aisstream uses Sog/Cog on Class A; some Class B payloads use Speed/Course.
+    if "Sog" in pr or "Speed" in pr:
+        ship.sog_kt = _as_float(pr.get("Sog", pr.get("Speed")), ship.sog_kt)
+    if "Cog" in pr or "Course" in pr:
+        ship.cog_deg = _as_float(pr.get("Cog", pr.get("Course")), ship.cog_deg)
+    heading = _as_float(
+        pr.get("TrueHeading", pr.get("Heading")),
+        float("nan"),
+    )
+    # 511 = not available in AIS
+    ship.heading_deg = heading if 0.0 <= heading < 360.0 else float("nan")
+    if "NavigationalStatus" in pr:
+        ship.nav_status = _as_int(pr.get("NavigationalStatus"), NAV_UNDEFINED)
+
+
+def _apply_static_fields(ship: Ship, sd: dict) -> None:
+    """Merge ShipStaticData / Extended Class B / StaticDataReport fields."""
+    name = sd.get("Name") or sd.get("ShipName")
+    if name:
+        ship.name = _trim_ais(str(name))
+    if "Type" in sd or "ShipType" in sd:
+        ship.ship_type = _as_int(sd.get("Type", sd.get("ShipType")), ship.ship_type)
+    dest = sd.get("Destination")
+    if dest:
+        ship.dest = _trim_ais(str(dest))
+    dim = sd.get("Dimension") or {}
+    if dim:
+        ship.length_m = _as_int(dim.get("A")) + _as_int(dim.get("B"))
+        ship.beam_m = _as_int(dim.get("C")) + _as_int(dim.get("D"))
+    if "MaximumStaticDraught" in sd:
+        ship.draught_m = _as_float(sd.get("MaximumStaticDraught"))
+
 
 _client: AisClient | None = None
 _client_lock = threading.Lock()
@@ -444,6 +571,15 @@ def get_client() -> AisClient:
         if _client is None:
             _client = AisClient()
         return _client
+
+
+def _subscribe_range_nm(display_range_nm: float) -> float:
+    """AIS watch radius: display fetch range, optionally floored by env."""
+    try:
+        floor = float(AIS_MIN_SUBSCRIBE_NM)
+    except (TypeError, ValueError):
+        floor = 0.0
+    return max(0.5, float(display_range_nm), max(0.0, floor))
 
 
 def fetch_ais_vessels(
@@ -490,7 +626,7 @@ def fetch_ais_vessels(
                 range_nm = 15.0
 
     client = get_client()
-    client.configure(key, float(lat), float(lon), float(range_nm))
+    client.configure(key, float(lat), float(lon), _subscribe_range_nm(float(range_nm)))
     if not client._started:
         client.start()
     return client.snapshot_dicts()
@@ -510,7 +646,7 @@ def sync_ais_client() -> None:
 
         lat = float(LOCATION_HOME[0])
         lon = float(LOCATION_HOME[1])
-        range_nm = float(scale.search_radius_nm(settings.scale_index()))
+        range_nm = _subscribe_range_nm(float(scale.search_radius_nm(settings.scale_index())))
     except Exception:
         return
     client.configure(_api_key(), lat, lon, range_nm)
@@ -677,9 +813,24 @@ def fetch_ais_radar_entries(
         if now - _last_snapshot_log >= 10.0:
             _last_snapshot_log = now
             client = get_client()
+            near = 0
+            try:
+                from display.round_touch import geo
+
+                max_km = float(geo.fetch_max_km())
+                for e in out:
+                    lat = e.get("plane_latitude")
+                    lon = e.get("plane_longitude")
+                    if lat is None or lon is None:
+                        continue
+                    if geo.local_offset_km(lat, lon)[2] <= max_km:
+                        near += 1
+            except Exception:
+                near = -1
             logger.info(
-                "[ais] snapshot: %d vessels (connected=%s last_msg=%.0fs ago)",
+                "[ais] snapshot: %d vessels (%d in radar range, connected=%s last_msg=%.0fs ago)",
                 len(out),
+                near,
                 client.connected,
                 (now - client.last_msg_ts) if client.last_msg_ts else -1,
             )

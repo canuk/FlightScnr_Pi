@@ -30,14 +30,12 @@ class TestVesselDeclutter(unittest.TestCase):
         self.assertFalse(vd.is_parked({"kind": "vessel", "sog_kt": 8.0}))
         self.assertFalse(vd.is_parked({"kind": "aircraft", "sog_kt": 0}))
 
-    def test_hide_parked(self):
-        parked = {"kind": "vessel", "stationary": True, "name": "X"}
+    def test_show_parked_when_min_speed_off(self):
+        parked = {"kind": "vessel", "stationary": True, "name": "X", "sog_kt": 0.0}
         moving = {"kind": "vessel", "sog_kt": 10, "name": "Y"}
-        with mock.patch.object(vd, "hide_parked_enabled", return_value=True):
-            self.assertFalse(vd.should_show_on_radar(parked))
-            self.assertTrue(vd.should_show_on_radar(moving))
-        with mock.patch.object(vd, "hide_parked_enabled", return_value=False):
+        with mock.patch.object(vd, "min_speed_kt", return_value=0):
             self.assertTrue(vd.should_show_on_radar(parked))
+            self.assertTrue(vd.should_show_on_radar(moving))
 
     def test_density_modes(self):
         parked = {"kind": "vessel", "stationary": True, "name": "PARK"}
@@ -51,6 +49,22 @@ class TestVesselDeclutter(unittest.TestCase):
         with mock.patch.object(vd, "density_mode", return_value="all_labels"):
             self.assertTrue(vd.should_label(parked))
             self.assertTrue(vd.should_label(moving))
+
+    def test_min_speed_filter(self):
+        slow = {"kind": "vessel", "sog_kt": 2.0, "name": "SLOW"}
+        fast = {"kind": "vessel", "sog_kt": 12.0, "name": "FAST"}
+        unknown = {"kind": "vessel", "name": "???"}
+        with mock.patch.object(vd, "min_speed_kt", return_value=0):
+            self.assertTrue(vd.should_show_on_radar(slow))
+            self.assertTrue(vd.should_show_on_radar(unknown))
+        with mock.patch.object(vd, "min_speed_kt", return_value=5):
+            self.assertFalse(vd.should_show_on_radar(slow))
+            self.assertTrue(vd.should_show_on_radar(fast))
+            self.assertFalse(vd.should_show_on_radar(unknown))
+            # Equal to threshold is hidden (must be strictly faster).
+            self.assertFalse(
+                vd.should_show_on_radar({"kind": "vessel", "sog_kt": 5.0})
+            )
 
 
 if __name__ == "__main__":

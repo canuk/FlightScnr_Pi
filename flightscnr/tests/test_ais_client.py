@@ -3,6 +3,7 @@
 import json
 import math
 import sys
+import time
 import unittest
 from pathlib import Path
 
@@ -81,11 +82,87 @@ class TestAisHelpers(unittest.TestCase):
         self.assertEqual(ships[0].length_m, 120)
         self.assertEqual(ships[0].beam_m, 16)
 
+    def test_ingest_class_b_position(self):
+        client = AisClient()
+        msg = {
+            "MessageType": "StandardClassBPositionReport",
+            "MetaData": {
+                "MMSI": 338123456,
+                "ShipName": "KOODORI@@@@",
+                "latitude": 37.81,
+                "longitude": -122.42,
+            },
+            "Message": {
+                "StandardClassBPositionReport": {
+                    "UserID": 338123456,
+                    "Latitude": 37.81,
+                    "Longitude": -122.42,
+                    "Cog": 45.0,
+                    "Sog": 0.1,
+                    "TrueHeading": 511,
+                }
+            },
+        }
+        client._ingest(json.dumps(msg))
+        ships = client.snapshot()
+        self.assertEqual(len(ships), 1)
+        self.assertEqual(ships[0].mmsi, 338123456)
+        self.assertEqual(ships[0].name, "KOODORI")
+        self.assertAlmostEqual(ships[0].sog_kt, 0.1)
+        self.assertTrue(math.isnan(ships[0].heading_deg))
+
     def test_ship_to_dict_nan(self):
         d = Ship(mmsi=1, lat=1.0, lon=2.0).to_dict()
         self.assertIsNone(d["sog_kt"])
         self.assertEqual(d["data_source"], "aisstream")
         self.assertTrue(math.isnan(float("nan")))
+
+    def test_subscribe_range_floor(self):
+        from utilities.ais_client import _subscribe_range_nm
+
+        # Default floor is 0 — watch tracks the display radius.
+        self.assertAlmostEqual(_subscribe_range_nm(2.0), 2.0)
+        self.assertAlmostEqual(_subscribe_range_nm(40.0), 40.0)
+
+    def test_ingest_static_data_report_a_b(self):
+        """aisstream uses ReportA/ReportB (not PartA/PartB) for msg 24."""
+        client = AisClient()
+        msg = {
+            "MessageType": "StaticDataReport",
+            "MetaData": {
+                "MMSI": 235012303,
+                "ShipName": "SHIMNA@@@@",
+                "latitude": 50.5692,
+                "longitude": -2.4428,
+            },
+            "Message": {
+                "StaticDataReport": {
+                    "UserID": 235012303,
+                    "PartNumber": 0,
+                    "ReportA": {"Name": "SHIMNA@@@@"},
+                    "ReportB": {
+                        "ShipType": 37,
+                        "Dimension": {"A": 8, "B": 2, "C": 1, "D": 1},
+                    },
+                }
+            },
+        }
+        client._ingest(json.dumps(msg))
+        ships = client.snapshot()
+        self.assertEqual(len(ships), 1)
+        self.assertEqual(ships[0].name, "SHIMNA")
+        self.assertEqual(ships[0].ship_type, 37)
+        self.assertEqual(ships[0].length_m, 10)
+
+    def test_evict_prefers_parked(self):
+        client = AisClient()
+        now = time.time()
+        parked = Ship(mmsi=1, lat=1.0, lon=1.0, sog_kt=0.0, nav_status=5, last_seen=now - 100)
+        moving = Ship(mmsi=2, lat=1.1, lon=1.1, sog_kt=12.0, nav_status=0, last_seen=now - 50)
+        client._ships = {1: parked, 2: moving}
+        self.assertTrue(client._evict_one_locked(now))
+        self.assertNotIn(1, client._ships)
+        self.assertIn(2, client._ships)
 
     def test_vessel_to_radar_entry(self):
         from utilities.ais_client import vessel_to_radar_entry

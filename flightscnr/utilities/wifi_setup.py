@@ -7,6 +7,7 @@ display) and submit home Wi-Fi credentials through the web portal.
 
 from __future__ import annotations
 
+import fcntl
 import json
 import logging
 import os
@@ -15,7 +16,9 @@ import secrets
 import subprocess
 import threading
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass
+from typing import Iterator
 
 logger = logging.getLogger("flightscnr.wifi_setup")
 
@@ -23,6 +26,10 @@ DATA_DIR = os.environ.get("FLIGHTSCNR_DATA_DIR", "/var/lib/flightscnr")
 AP_STATE_PATH = os.path.join(DATA_DIR, "setup_ap.json")
 # Cross-process signal: Flask writes this when join succeeds; display polls it.
 CONNECTED_FLAG_PATH = os.path.join(DATA_DIR, "wifi_setup_connected")
+# Cross-process: portal/display is mid client-join — AP watchdog must stay out.
+JOIN_BUSY_PATH = os.path.join(DATA_DIR, "wifi_setup_joining")
+RADIO_LOCK_PATH = os.path.join(DATA_DIR, "wifi_setup_radio.lock")
+JOIN_BUSY_STALE_S = 180.0
 AP_CONNECTION_NAME = "flightscnr-setup-ap"
 AP_SSID_PREFIX = "FlightScnr-Setup"
 WLAN_IFACE = os.environ.get("FLIGHTSCNR_WLAN", "wlan0")
@@ -33,6 +40,7 @@ _lock = threading.RLock()
 _ap_active = False
 _status_message = ""
 _last_error = ""
+_try_saved_busy = False
 
 
 @dataclass(frozen=True)
@@ -61,13 +69,28 @@ class ApCredentials:
 
 
 def _run(cmd: list[str], *, timeout: float = 30.0) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        cmd,
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-        check=False,
-    )
+    try:
+        return subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        logger.warning("Command timed out after %.0fs: %s", timeout, " ".join(cmd))
+        stdout = exc.stdout
+        stderr = exc.stderr
+        if isinstance(stdout, bytes):
+            stdout = stdout.decode("utf-8", errors="replace")
+        if isinstance(stderr, bytes):
+            stderr = stderr.decode("utf-8", errors="replace")
+        return subprocess.CompletedProcess(
+            cmd,
+            returncode=124,
+            stdout=stdout or "",
+            stderr=(stderr or "") + f"\nTimed out after {timeout:.0f}s",
+        )
 
 
 def _nmcli(*args: str, timeout: float = 30.0) -> subprocess.CompletedProcess:
@@ -194,14 +217,24 @@ def needs_wifi_setup() -> bool:
 _OFFLINE_GRACE_S = float(os.environ.get("FLIGHTSCNR_WIFI_OFFLINE_GRACE_S", "25") or 25)
 
 
+def offline_grace_s() -> float:
+    """Seconds offline before the setup hotspot should come up (boot + runtime)."""
+    return max(5.0, float(_OFFLINE_GRACE_S))
+
+
+def link_up() -> bool:
+    """True when ethernet or client Wi-Fi has connectivity."""
+    return ethernet_up() or active_client_wifi()
+
+
 def _wait_for_client_wifi(timeout_s: float) -> bool:
     """Return True if client Wi-Fi or ethernet comes up within timeout_s."""
     deadline = time.time() + max(0.0, timeout_s)
     while time.time() < deadline:
-        if active_client_wifi() or ethernet_up():
+        if link_up():
             return True
         time.sleep(1.0)
-    return active_client_wifi() or ethernet_up()
+    return link_up()
 
 
 def should_enter_setup_at_boot() -> bool:
@@ -214,18 +247,42 @@ def should_enter_setup_at_boot() -> bool:
         return False
     if force_requested():
         return True
-    if ethernet_up() or active_client_wifi():
+    if link_up():
         return False
     if not saved_client_wifi_names():
         return True
+    grace = offline_grace_s()
     logger.info(
         "Saved Wi-Fi present but not connected — waiting %.0fs before setup hotspot",
-        _OFFLINE_GRACE_S,
+        grace,
     )
-    if _wait_for_client_wifi(_OFFLINE_GRACE_S):
+    if _wait_for_client_wifi(grace):
         return False
     logger.info("Still offline after grace — entering Wi-Fi setup hotspot")
     return True
+
+
+def should_enter_setup_after_offline(offline_s: float) -> bool:
+    """True once the link has been down long enough to reopen the setup hotspot."""
+    if skip_requested():
+        return False
+    if force_requested():
+        return True
+    if link_up():
+        return False
+    if setup_mode_active() and ap_radio_active():
+        return False
+    return float(offline_s) >= offline_grace_s()
+
+
+def ap_radio_active() -> bool:
+    """True when wlan0 is actually associated with our setup AP profile."""
+    proc = _nmcli("-g", "GENERAL.CONNECTION", "device", "show", WLAN_IFACE, timeout=10.0)
+    con = (proc.stdout or "").strip()
+    if con != AP_CONNECTION_NAME:
+        return False
+    mode = _nmcli("-g", "802-11-wireless.mode", "connection", "show", con, timeout=10.0)
+    return (mode.stdout or "").strip().lower() == "ap"
 
 
 def mark_wifi_connected(ssid: str = "") -> None:
@@ -250,6 +307,95 @@ def clear_wifi_connected_flag() -> None:
 
 def wifi_connect_signaled() -> bool:
     return os.path.isfile(CONNECTED_FLAG_PATH)
+
+
+def _pid_alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def mark_client_join_busy(reason: str = "") -> None:
+    """Tell other processes (display AP watchdog) not to touch the radio."""
+    os.makedirs(DATA_DIR, exist_ok=True)
+    tmp = JOIN_BUSY_PATH + ".tmp"
+    payload = {"pid": os.getpid(), "at": time.time(), "reason": reason or ""}
+    try:
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(payload, fh)
+        os.replace(tmp, JOIN_BUSY_PATH)
+    except OSError as exc:
+        logger.warning("Could not write Wi-Fi join-busy flag: %s", exc)
+
+
+def clear_client_join_busy() -> None:
+    try:
+        if os.path.isfile(JOIN_BUSY_PATH):
+            os.unlink(JOIN_BUSY_PATH)
+    except OSError:
+        pass
+
+
+def client_join_busy() -> bool:
+    """True while portal/try-saved is switching the radio to a client network."""
+    try:
+        with open(JOIN_BUSY_PATH, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except FileNotFoundError:
+        return False
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        clear_client_join_busy()
+        return False
+    if not isinstance(data, dict):
+        clear_client_join_busy()
+        return False
+    try:
+        pid = int(data.get("pid") or 0)
+        started = float(data.get("at") or 0.0)
+    except (TypeError, ValueError):
+        clear_client_join_busy()
+        return False
+    age = time.time() - started
+    if age > JOIN_BUSY_STALE_S or not _pid_alive(pid):
+        clear_client_join_busy()
+        return False
+    return True
+
+
+@contextmanager
+def _radio_lock(timeout_s: float = 90.0) -> Iterator[None]:
+    """Serialize AP start/stop and client joins across display + Flask processes."""
+    os.makedirs(DATA_DIR, exist_ok=True)
+    fh = open(RADIO_LOCK_PATH, "a+", encoding="utf-8")
+    deadline = time.time() + max(1.0, timeout_s)
+    locked = False
+    try:
+        while True:
+            try:
+                fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                locked = True
+                break
+            except BlockingIOError:
+                if time.time() >= deadline:
+                    raise TimeoutError("Wi-Fi radio lock timed out")
+                time.sleep(0.2)
+        yield
+    finally:
+        if locked:
+            try:
+                fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+            except OSError:
+                pass
+        try:
+            fh.close()
+        except OSError:
+            pass
 
 
 def setup_mode_active() -> bool:
@@ -367,9 +513,33 @@ def _detect_gateway() -> str:
 def ensure_setup_ap() -> ApCredentials:
     """Bring up the setup hotspot; idempotent."""
     global _ap_active
+    # Portal join owns the radio — do not yank it back into AP mode mid-connect.
+    if client_join_busy():
+        creds = _load_or_create_ap_creds()
+        logger.info("Skipping setup AP start — client join in progress")
+        return creds
+
     creds = _load_or_create_ap_creds()
     with _lock:
-        if _ap_active:
+        # Don't trust the in-memory flag alone — try-saved / NM can leave it stale.
+        if _ap_active and ap_radio_active():
+            try:
+                gw = _detect_gateway()
+                if gw != creds.gateway:
+                    creds = ApCredentials(creds.ssid, creds.password, gw)
+                    _save_ap_creds(creds)
+            except Exception:
+                pass
+            return creds
+        _ap_active = False
+
+    with _radio_lock():
+        if client_join_busy():
+            logger.info("Skipping setup AP start — client join in progress")
+            return creds
+        if ap_radio_active():
+            with _lock:
+                _ap_active = True
             try:
                 gw = _detect_gateway()
                 if gw != creds.gateway:
@@ -379,93 +549,197 @@ def ensure_setup_ap() -> ApCredentials:
                 pass
             return creds
 
-    _set_status("Starting setup Wi-Fi hotspot…")
-    _write_captive_dns(creds.gateway)
+        _set_status("Starting setup Wi-Fi hotspot…")
+        _write_captive_dns(creds.gateway)
 
-    # Remove stale AP profile so we recreate cleanly.
-    _nmcli("connection", "delete", AP_CONNECTION_NAME)
+        # Free the radio from any lingering client association (common after a drop).
+        _nmcli("device", "disconnect", WLAN_IFACE, timeout=20.0)
+        time.sleep(1.0)
 
-    proc = _nmcli(
-        "device",
-        "wifi",
-        "hotspot",
-        "ifname",
-        WLAN_IFACE,
-        "con-name",
-        AP_CONNECTION_NAME,
-        "ssid",
-        creds.ssid,
-        "password",
-        creds.password,
-        timeout=60.0,
-    )
-    if proc.returncode != 0:
-        # Fallback: explicit AP connection with shared IPv4.
-        _nmcli(
-            "connection",
-            "add",
-            "type",
+        # Remove stale AP profile so we recreate cleanly.
+        _nmcli("connection", "delete", AP_CONNECTION_NAME)
+
+        proc = _nmcli(
+            "device",
             "wifi",
+            "hotspot",
             "ifname",
             WLAN_IFACE,
             "con-name",
             AP_CONNECTION_NAME,
             "ssid",
             creds.ssid,
-            "wifi.mode",
-            "ap",
-            "wifi-sec.key-mgmt",
-            "wpa-psk",
-            "wifi-sec.psk",
+            "password",
             creds.password,
-            "ipv4.method",
-            "shared",
-            "ipv6.method",
-            "ignore",
+            timeout=60.0,
         )
-        proc = _nmcli("connection", "up", AP_CONNECTION_NAME, timeout=60.0)
         if proc.returncode != 0:
-            _set_error(
-                (proc.stderr or proc.stdout or "Failed to start setup hotspot").strip()
+            # Fallback: explicit AP connection with shared IPv4.
+            _nmcli(
+                "connection",
+                "add",
+                "type",
+                "wifi",
+                "ifname",
+                WLAN_IFACE,
+                "con-name",
+                AP_CONNECTION_NAME,
+                "ssid",
+                creds.ssid,
+                "wifi.mode",
+                "ap",
+                "wifi-sec.key-mgmt",
+                "wpa-psk",
+                "wifi-sec.psk",
+                creds.password,
+                "ipv4.method",
+                "shared",
+                "ipv6.method",
+                "ignore",
             )
-            raise RuntimeError(_last_error)
+            proc = _nmcli("connection", "up", AP_CONNECTION_NAME, timeout=60.0)
+            if proc.returncode != 0:
+                _set_error(
+                    (proc.stderr or proc.stdout or "Failed to start setup hotspot").strip()
+                )
+                raise RuntimeError(_last_error)
 
-    # Harden a bit when supported.
-    _nmcli(
-        "connection",
-        "modify",
-        AP_CONNECTION_NAME,
-        "connection.autoconnect",
-        "no",
-        "wifi-sec.proto",
-        "rsn",
-        "wifi-sec.pairwise",
-        "ccmp",
-    )
+        # Harden a bit when supported.
+        _nmcli(
+            "connection",
+            "modify",
+            AP_CONNECTION_NAME,
+            "connection.autoconnect",
+            "no",
+            "wifi-sec.proto",
+            "rsn",
+            "wifi-sec.pairwise",
+            "ccmp",
+        )
 
-    time.sleep(1.0)
-    gateway = _detect_gateway()
-    creds = ApCredentials(creds.ssid, creds.password, gateway)
-    _save_ap_creds(creds)
-    _write_captive_dns(gateway)
-    # Reload shared dnsmasq by bouncing the AP connection once DNS file exists.
-    _nmcli("connection", "up", AP_CONNECTION_NAME, timeout=60.0)
+        time.sleep(1.0)
+        gateway = _detect_gateway()
+        creds = ApCredentials(creds.ssid, creds.password, gateway)
+        _save_ap_creds(creds)
+        _write_captive_dns(gateway)
+        # Reload shared dnsmasq by bouncing the AP connection once DNS file exists.
+        if ap_radio_active():
+            bounce = _nmcli("connection", "up", AP_CONNECTION_NAME, timeout=60.0)
+            if bounce.returncode != 0:
+                logger.warning(
+                    "AP DNS bounce failed: %s",
+                    (bounce.stderr or bounce.stdout or "").strip(),
+                )
 
-    with _lock:
-        _ap_active = True
-    _set_status(f"Setup hotspot ready: {creds.ssid}")
-    return creds
+        if not ap_radio_active():
+            msg = "Setup hotspot started but wlan is not in AP mode"
+            _set_error(msg)
+            raise RuntimeError(msg)
+
+        with _lock:
+            _ap_active = True
+        _set_status(f"Setup hotspot ready: {creds.ssid}")
+        return creds
 
 
 def stop_setup_ap() -> None:
     """Tear down the setup hotspot and captive DNS."""
     global _ap_active
-    _remove_captive_dns()
-    _nmcli("connection", "down", AP_CONNECTION_NAME)
-    _nmcli("connection", "delete", AP_CONNECTION_NAME)
+    with _radio_lock():
+        _remove_captive_dns()
+        _nmcli("connection", "down", AP_CONNECTION_NAME, timeout=20.0)
+        _nmcli("connection", "delete", AP_CONNECTION_NAME, timeout=20.0)
+        with _lock:
+            _ap_active = False
+        _set_status("Setup hotspot stopped")
+
+
+def try_saved_wifi(*, timeout_s: float | None = None) -> tuple[bool, str]:
+    """Leave the setup AP and let NetworkManager join a saved client profile.
+
+    Always restores the setup AP if the join fails, so the QR screen never
+    sits over a dead hotspot (nmcli timeouts used to skip the restore path).
+    """
+    global _try_saved_busy
+    if link_up():
+        mark_wifi_connected()
+        return True, "Already connected"
+
+    names = saved_client_wifi_names()
+    if not names:
+        return False, "No saved Wi-Fi networks yet — join one below"
+
     with _lock:
-        _ap_active = False
-    _set_status("Setup hotspot stopped")
+        if _try_saved_busy:
+            return False, "Already trying saved Wi-Fi…"
+        _try_saved_busy = True
+
+    wait_s = (
+        float(timeout_s)
+        if timeout_s is not None
+        else float(
+            os.environ.get("FLIGHTSCNR_WIFI_TRY_SAVED_S", str(offline_grace_s()))
+            or offline_grace_s()
+        )
+    )
+    restore_ap = True
+    mark_client_join_busy("try-saved")
+    try:
+        _set_status("Trying saved Wi-Fi…")
+        stop_setup_ap()
+        time.sleep(1.0)
+
+        for name in names:
+            _nmcli(
+                "connection",
+                "modify",
+                name,
+                "connection.autoconnect",
+                "yes",
+                timeout=15.0,
+            )
+
+        first = names[0]
+        with _radio_lock():
+            up = _nmcli(
+                "connection",
+                "up",
+                first,
+                timeout=min(45.0, max(15.0, wait_s)),
+            )
+        if up.returncode != 0:
+            logger.info(
+                "Primary saved profile %r did not come up (rc=%s) — waiting %.0fs",
+                first,
+                up.returncode,
+                wait_s,
+            )
+
+        if _wait_for_client_wifi(wait_s):
+            _set_status("Connected via saved Wi-Fi")
+            mark_wifi_connected()
+            restore_ap = False
+            return True, "Connected via saved Wi-Fi"
+
+        msg = "Saved Wi-Fi not found — setup hotspot restored"
+        _set_error(msg)
+        return False, msg
+    except Exception as exc:
+        logger.exception("try_saved_wifi failed")
+        msg = f"Saved Wi-Fi retry failed: {exc}"
+        _set_error(msg)
+        return False, msg
+    finally:
+        if restore_ap and not link_up():
+            try:
+                # Clear busy before restore so ensure_setup_ap is allowed.
+                clear_client_join_busy()
+                ensure_setup_ap()
+            except Exception:
+                logger.exception("Failed to restore setup AP after try-saved")
+        clear_client_join_busy()
+        with _lock:
+            _try_saved_busy = False
 
 
 def list_wifi_networks(*, rescan: bool = True) -> list[dict]:
@@ -507,87 +781,112 @@ def connect_to_wifi(ssid: str, password: str = "") -> tuple[bool, str]:
         return False, "SSID is required"
     password = password or ""
 
+    if client_join_busy():
+        return False, "Another Wi-Fi join is already in progress — wait a moment"
+
     _set_status(f"Connecting to “{ssid}”…")
-    # Bring down the AP so the radio can associate as a client.
-    stop_setup_ap()
-    time.sleep(1.0)
+    mark_client_join_busy(f"connect:{ssid}")
+    restore_ap = True
+    con_name = ""
+    try:
+        # Bring down the AP so the radio can associate as a client.
+        stop_setup_ap()
+        time.sleep(1.0)
 
-    # Delete any prior profile with the same name to avoid stale PSKs.
-    safe_name = re.sub(r"[^\w.\-]+", "_", ssid)[:48] or "wifi"
-    con_name = f"flightscnr-{safe_name}"
-    _nmcli("connection", "delete", con_name)
-
-    add_cmd = [
-        "connection",
-        "add",
-        "type",
-        "wifi",
-        "ifname",
-        WLAN_IFACE,
-        "con-name",
-        con_name,
-        "ssid",
-        ssid,
-        "ipv4.method",
-        "auto",
-        "ipv6.method",
-        "auto",
-        "connection.autoconnect",
-        "yes",
-    ]
-    if password:
-        add_cmd.extend(
-            [
-                "wifi-sec.key-mgmt",
-                "wpa-psk",
-                "wifi-sec.psk",
-                password,
-            ]
-        )
-    else:
-        add_cmd.extend(["wifi-sec.key-mgmt", "none"])
-
-    proc = _nmcli(*add_cmd, timeout=30.0)
-    if proc.returncode != 0:
-        msg = (proc.stderr or proc.stdout or "Could not create Wi-Fi profile").strip()
-        _set_error(msg)
-        # Try to restore setup AP so the user can retry.
-        try:
-            ensure_setup_ap()
-        except Exception:
-            logger.exception("Failed to restore setup AP after connect error")
-        return False, msg
-
-    proc = _nmcli("connection", "up", con_name, timeout=60.0)
-    if proc.returncode != 0:
-        msg = (proc.stderr or proc.stdout or f"Could not join “{ssid}”").strip()
-        _set_error(msg)
+        # Delete any prior profile with the same name to avoid stale PSKs.
+        safe_name = re.sub(r"[^\w.\-]+", "_", ssid)[:48] or "wifi"
+        con_name = f"flightscnr-{safe_name}"
         _nmcli("connection", "delete", con_name)
-        try:
-            ensure_setup_ap()
-        except Exception:
-            logger.exception("Failed to restore setup AP after join failure")
-        return False, msg
 
-    # Wait briefly for an address.
-    for _ in range(20):
+        # autoconnect=no until after an explicit `connection up`. Adding with
+        # autoconnect=yes lets NM auto-activate while we also call up — that
+        # double activation yields "base network connection was interrupted".
+        add_cmd = [
+            "connection",
+            "add",
+            "type",
+            "wifi",
+            "ifname",
+            WLAN_IFACE,
+            "con-name",
+            con_name,
+            "ssid",
+            ssid,
+            "ipv4.method",
+            "auto",
+            "ipv6.method",
+            "auto",
+            "connection.autoconnect",
+            "no",
+        ]
+        if password:
+            add_cmd.extend(
+                [
+                    "wifi-sec.key-mgmt",
+                    "wpa-psk",
+                    "wifi-sec.psk",
+                    password,
+                ]
+            )
+        else:
+            add_cmd.extend(["wifi-sec.key-mgmt", "none"])
+
+        with _radio_lock():
+            proc = _nmcli(*add_cmd, timeout=30.0)
+            if proc.returncode != 0:
+                msg = (
+                    proc.stderr or proc.stdout or "Could not create Wi-Fi profile"
+                ).strip()
+                _set_error(msg)
+                return False, msg
+
+            proc = _nmcli("connection", "up", con_name, timeout=60.0)
+            if proc.returncode != 0:
+                msg = (
+                    proc.stderr or proc.stdout or f"Could not join “{ssid}”"
+                ).strip()
+                _set_error(msg)
+                _nmcli("connection", "delete", con_name)
+                return False, msg
+
+        # Wait briefly for an address.
+        for _ in range(20):
+            if active_client_wifi():
+                break
+            time.sleep(0.5)
+
         if active_client_wifi():
+            _nmcli(
+                "connection",
+                "modify",
+                con_name,
+                "connection.autoconnect",
+                "yes",
+                timeout=15.0,
+            )
             _set_status(f"Connected to “{ssid}”")
             mark_wifi_connected(ssid)
+            restore_ap = False
             return True, f"Connected to “{ssid}”"
-        time.sleep(0.5)
 
-    if active_client_wifi():
-        mark_wifi_connected(ssid)
-        return True, f"Connected to “{ssid}”"
-
-    msg = f"Joined “{ssid}” but no IP yet — check the password and try again"
-    _set_error(msg)
-    try:
-        ensure_setup_ap()
-    except Exception:
-        logger.exception("Failed to restore setup AP after no-IP")
-    return False, msg
+        msg = f"Joined “{ssid}” but no IP yet — check the password and try again"
+        _set_error(msg)
+        return False, msg
+    except Exception as exc:
+        logger.exception("connect_to_wifi failed")
+        msg = f"Could not join “{ssid}”: {exc}"
+        _set_error(msg)
+        if con_name:
+            _nmcli("connection", "delete", con_name)
+        return False, msg
+    finally:
+        if restore_ap and not link_up():
+            try:
+                clear_client_join_busy()
+                ensure_setup_ap()
+            except Exception:
+                logger.exception("Failed to restore setup AP after join failure")
+        clear_client_join_busy()
 
 
 def portal_ready() -> bool:

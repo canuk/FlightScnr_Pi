@@ -103,7 +103,7 @@ def draw_ship_icon(surface, cx, cy, heading_deg, color, compact=False, flight=No
         pygame.draw.circle(surface, theme.BG, (int(cx), int(cy)), max(1, r - 2), 1)
         return
 
-    scale = theme.s(10) / 10.0
+    scale = theme.s(5) / 10.0
     pts = [_map_local(x * scale, y * scale, cx, cy, heading_deg) for x, y in _SHIP_ARROW]
     if len(pts) >= 3:
         pygame.draw.polygon(surface, color, pts)

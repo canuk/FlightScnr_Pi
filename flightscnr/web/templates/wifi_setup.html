@@ -85,6 +85,18 @@
             opacity: .55;
             cursor: wait;
         }
+        .btn-secondary {
+            width: 100%;
+            margin-top: .7rem;
+            background: transparent;
+            color: var(--text);
+            border: 1px solid var(--border);
+        }
+        .btn-secondary:disabled {
+            opacity: .55;
+            cursor: wait;
+        }
+        .btn-secondary.hidden { display: none; }
         .btn-ghost {
             background: transparent;
             color: var(--muted);
@@ -122,8 +134,9 @@
         <label for="password">Password</label>
         <input id="password" type="password" autocomplete="current-password" placeholder="Leave blank if open">
         <button type="button" class="btn-primary" id="btn-connect">Connect</button>
+        <button type="button" class="btn-secondary hidden" id="btn-try-saved">Try saved Wi‑Fi</button>
         <div class="status" id="status"></div>
-        <p class="hint">Stay on this page until you see success. The round display will leave setup mode automatically.</p>
+        <p class="hint">Stay on this page until you see success. The round display will leave setup mode automatically. If your home network is already saved, use Try saved Wi‑Fi instead.</p>
     </div>
 </main>
 <script>
@@ -133,6 +146,17 @@ const statusEl = $("status");
 function setStatus(msg, kind) {
     statusEl.textContent = msg || "";
     statusEl.className = "status" + (kind ? " " + kind : "");
+}
+
+async function refreshStatus() {
+    try {
+        const r = await fetch("/wifi/status.json");
+        const data = await r.json();
+        const btn = $("btn-try-saved");
+        if (data.has_saved) btn.classList.remove("hidden");
+        else btn.classList.add("hidden");
+        if (data.client_connected) setStatus("Connected — leaving setup…", "ok");
+    } catch (e) { /* ignore */ }
 }
 
 async function loadNetworks(rescan) {
@@ -157,6 +181,7 @@ async function loadNetworks(rescan) {
             });
         }
         setStatus(networks.length ? `${networks.length} networks` : "No networks found", "");
+        refreshStatus();
     } catch (e) {
         setStatus(e.message || "Scan failed", "err");
     }
@@ -170,6 +195,7 @@ async function connect() {
         return;
     }
     $("btn-connect").disabled = true;
+    $("btn-try-saved").disabled = true;
     setStatus("Connecting — this may take up to a minute…");
     try {
         const r = await fetch("/wifi/connect", {
@@ -186,11 +212,35 @@ async function connect() {
         setStatus(e.message || "Connection failed", "err");
     } finally {
         $("btn-connect").disabled = false;
+        $("btn-try-saved").disabled = false;
+    }
+}
+
+async function trySaved() {
+    $("btn-connect").disabled = true;
+    $("btn-try-saved").disabled = true;
+    setStatus("Leaving setup hotspot and trying saved Wi‑Fi…");
+    try {
+        const r = await fetch("/wifi/try-saved", { method: "POST" });
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok || !data.ok) {
+            throw new Error(data.message || "Saved Wi‑Fi not available");
+        }
+        setStatus(data.message || "Connected!", "ok");
+    } catch (e) {
+        setStatus(e.message || "Saved Wi‑Fi not available", "err");
+        loadNetworks(true);
+    } finally {
+        $("btn-connect").disabled = false;
+        $("btn-try-saved").disabled = false;
+        refreshStatus();
     }
 }
 
 $("btn-rescan").addEventListener("click", () => loadNetworks(true));
 $("btn-connect").addEventListener("click", connect);
+$("btn-try-saved").addEventListener("click", trySaved);
+refreshStatus();
 loadNetworks(true);
 </script>
 </body>

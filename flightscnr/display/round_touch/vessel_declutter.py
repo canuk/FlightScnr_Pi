@@ -21,15 +21,6 @@ def short_tags_enabled() -> bool:
         return _bool_env("VESSEL_SHORT_TAGS", True)
 
 
-def hide_parked_enabled() -> bool:
-    try:
-        from config import VESSEL_HIDE_PARKED
-
-        return bool(VESSEL_HIDE_PARKED)
-    except ImportError:
-        return _bool_env("VESSEL_HIDE_PARKED", True)
-
-
 def hierarchy_enabled() -> bool:
     try:
         from config import VESSEL_HIERARCHY
@@ -91,9 +82,25 @@ def is_parked(flight: dict | None) -> bool:
 def should_show_on_radar(flight: dict | None) -> bool:
     if not is_vessel(flight):
         return True
-    if hide_parked_enabled() and is_parked(flight):
-        return False
+    min_kt = min_speed_kt()
+    if min_kt > 0:
+        sog = flight.get("sog_kt")
+        try:
+            if sog is None or float(sog) <= float(min_kt):
+                return False
+        except (TypeError, ValueError):
+            return False
     return True
+
+
+def min_speed_kt() -> float:
+    """Runtime min SOG floor from on-device / portal settings (0 = off)."""
+    try:
+        from display.round_touch import settings
+
+        return float(settings.vessel_min_speed_kt())
+    except Exception:
+        return 0.0
 
 
 def should_label(flight: dict | None) -> bool:

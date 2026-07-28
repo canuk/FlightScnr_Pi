@@ -193,6 +193,18 @@
                 <option value="both">Aircraft + marine</option>
             </select>
             <p class="hint">Marine needs an aisstream.io API key below. Free for non-commercial use.</p>
+            <label for="vessel_min_speed">Marine min speed (kt)</label>
+            <select id="vessel_min_speed">
+                <option value="0">Any (no floor)</option>
+                <option value="1">&gt; 1 kt</option>
+                <option value="2">&gt; 2 kt</option>
+                <option value="3">&gt; 3 kt</option>
+                <option value="5">&gt; 5 kt</option>
+                <option value="8">&gt; 8 kt</option>
+                <option value="10">&gt; 10 kt</option>
+                <option value="15">&gt; 15 kt</option>
+            </select>
+            <p class="hint">Hide AIS vessels at or below this speed over ground. Use to declutter anchored/moored traffic while keeping movers.</p>
             <button class="btn btn-primary" id="btn-radar" style="margin-top:.7rem" type="button">Save radar settings</button>
             <div id="radar-status" class="status"></div>
         </div>
@@ -658,6 +670,7 @@ async function loadAll() {
         if ($("show_wildfires")) $("show_wildfires").checked = !!r.show_wildfires;
         if ($("show_ground_vehicles")) $("show_ground_vehicles").checked = r.show_ground_vehicles !== false;
         $("traffic_mode").value = r.traffic_mode || (r.ais_enabled ? "both" : "aircraft");
+        if ($("vessel_min_speed")) $("vessel_min_speed").value = String(r.vessel_min_speed_kt ?? 0);
     } catch (_) {}
 
     try {
@@ -775,6 +788,7 @@ async function saveRadar() {
                 map_style: $("map_style").value,
                 vfr_map_opacity: Number($("vfr_opacity") ? $("vfr_opacity").value : 45),
                 traffic_mode: $("traffic_mode").value,
+                vessel_min_speed_kt: Number($("vessel_min_speed") ? $("vessel_min_speed").value : 0),
             }),
         });
         showStatus("radar-status", "Radar settings saved.");
@@ -852,6 +866,7 @@ async function saveAndReloadSettings() {
                 map_style: $("map_style").value,
                 vfr_map_opacity: Number($("vfr_opacity") ? $("vfr_opacity").value : 45),
                 traffic_mode: $("traffic_mode").value,
+                vessel_min_speed_kt: Number($("vessel_min_speed") ? $("vessel_min_speed").value : 0),
             }),
         });
         await jsonFetch("/display", {

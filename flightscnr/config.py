@@ -273,9 +273,7 @@ SHOW_AIRLINE_LOGOS = _bool(os.environ.get("SHOW_AIRLINE_LOGOS", "False"))
 # --- AIS vessel radar declutter (config.h) ---
 # One-line vessel name only (no type/speed); never show MMSI as a label.
 VESSEL_SHORT_TAGS = _bool(os.environ.get("VESSEL_SHORT_TAGS", "True"))
-# Hide anchored/moored / near-zero SOG vessels from the radar entirely.
-VESSEL_HIDE_PARKED = _bool(os.environ.get("VESSEL_HIDE_PARKED", "True"))
-# Dim parked icons; keep moving ships brighter (when parked are still shown).
+# Dim parked icons; keep moving ships brighter.
 VESSEL_HIERARCHY = _bool(os.environ.get("VESSEL_HIERARCHY", "True"))
 # Label policy: all_labels | moving_only | icons_only
 _raw_density = (os.environ.get("VESSEL_DENSITY_MODE", "moving_only") or "moving_only").strip().lower()
@@ -285,7 +283,7 @@ elif _raw_density in ("icons", "icons_only", "icon"):
     VESSEL_DENSITY_MODE = "icons_only"
 else:
     VESSEL_DENSITY_MODE = "moving_only"
-# SOG below this (knots) counts as parked when nav status is unknown.
+# SOG below this (knots) counts as parked for hierarchy / label density.
 VESSEL_PARKED_SOG_KT = float(os.environ.get("VESSEL_PARKED_SOG_KT", "0.5"))
 
 

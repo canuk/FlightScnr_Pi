@@ -44,11 +44,9 @@ SHOW_AIRLINE_LOGOS = False
 // AIS vessel radar declutter
 // One-line name only (no type/speed); never label with MMSI
 VESSEL_SHORT_TAGS = True
-// Hide anchored/moored / near-zero SOG vessels from the radar
-VESSEL_HIDE_PARKED = True
-// Dim parked icons; brighter moving hulls (when parked are shown)
+// Dim parked icons; brighter moving hulls
 VESSEL_HIERARCHY = True
 // Label policy: all_labels | moving_only | icons_only
 VESSEL_DENSITY_MODE = moving_only
-// SOG below this (knots) counts as parked when nav status is unknown
+// SOG below this (knots) counts as parked for hierarchy / label density
 VESSEL_PARKED_SOG_KT = 0.5

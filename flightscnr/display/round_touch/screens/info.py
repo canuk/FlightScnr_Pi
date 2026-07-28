@@ -54,6 +54,7 @@ OPTIONS_ACTIONS = (
     "aircraft_tag",
     "min_height",
     "max_height",
+    "vessel_min_speed",
     "map_style",
     "vfr_opacity",
     "precipitation",
@@ -459,6 +460,7 @@ def _options_row_labels() -> list[str]:
         f"Traffic labels: {aircraft_tag}",
         f"Min height: {settings.min_height_ft()} ft",
         f"Max height: {settings.max_height_ft()} ft",
+        f"Vessel min speed: {settings.vessel_min_speed_label()}",
         f"Map: {settings.map_style_label()}",
         "",  # VFR opacity slider
         f"Precipitation: {precip}",

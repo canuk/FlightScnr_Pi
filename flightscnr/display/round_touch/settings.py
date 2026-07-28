@@ -15,6 +15,8 @@ _settings_mtime: float | None = None
 _disk_synced = True
 
 MIN_HEIGHT_OPTIONS = (0, 500, 1000, 1500, 2000, 2500, 3000, 3500, 4000, 4500, 5000)
+# AIS vessels slower than or equal to this (kt) are hidden; 0 = no speed floor.
+VESSEL_MIN_SPEED_OPTIONS = (0, 1, 2, 3, 5, 8, 10, 15)
 # Portal / persistence presets (fine steps).
 MAX_HEIGHT_OPTIONS = (
     1000, 1500, 2000, 2500, 3000, 3500, 4000, 4500, 5000,
@@ -56,6 +58,8 @@ _defaults = {
     "show_wildfires": False,
     # Airport ground vehicles (GRND/GVEH/… icon category) on the radar.
     "show_ground_vehicles": True,
+    # Hide AIS vessels at or below this SOG (knots). 0 = show all speeds.
+    "vessel_min_speed_kt": 0,
     "scale_index": 1,
     "theme_index": color_presets.DEFAULT_THEME_INDEX,
     "theme_custom": False,
@@ -120,6 +124,18 @@ def _snap_min_height(value) -> int:
     if v in MIN_HEIGHT_OPTIONS:
         return v
     return min(MIN_HEIGHT_OPTIONS, key=lambda opt: abs(opt - v))
+
+
+def _snap_vessel_min_speed(value) -> int:
+    try:
+        v = int(round(float(value)))
+    except (TypeError, ValueError):
+        return 0
+    if v < 0:
+        v = 0
+    if v in VESSEL_MIN_SPEED_OPTIONS:
+        return v
+    return min(VESSEL_MIN_SPEED_OPTIONS, key=lambda opt: abs(opt - v))
 
 
 def _snap_max_height(value) -> int:
@@ -318,6 +334,13 @@ def _load():
         migrated = True
     else:
         state["show_ground_vehicles"] = bool(state.get("show_ground_vehicles"))
+    if "vessel_min_speed_kt" not in data:
+        state["vessel_min_speed_kt"] = 0
+        migrated = True
+    else:
+        state["vessel_min_speed_kt"] = _snap_vessel_min_speed(
+            state.get("vessel_min_speed_kt", 0)
+        )
     if color_presets.migrate_theme_index(state):
         migrated = True
     if migrated:
@@ -348,6 +371,7 @@ def _settings_snapshot(state: dict) -> tuple:
         state.get("show_precipitation"),
         state.get("show_wildfires"),
         state.get("show_ground_vehicles"),
+        state.get("vessel_min_speed_kt"),
         state.get("min_height_ft"),
         state.get("max_height_ft"),
         state.get("brightness_percent"),
@@ -592,6 +616,31 @@ def toggle_show_ground_vehicles():
 
 def set_show_ground_vehicles(enabled: bool):
     _state["show_ground_vehicles"] = bool(enabled)
+    _save(_state)
+
+
+def vessel_min_speed_kt() -> int:
+    """Minimum SOG (knots) for AIS vessels on radar; 0 disables the floor."""
+    return _snap_vessel_min_speed(_state.get("vessel_min_speed_kt", 0))
+
+
+def vessel_min_speed_label() -> str:
+    kt = vessel_min_speed_kt()
+    if kt <= 0:
+        return "any"
+    return f">{kt} kt"
+
+
+def cycle_vessel_min_speed():
+    opts = VESSEL_MIN_SPEED_OPTIONS
+    current = vessel_min_speed_kt()
+    idx = opts.index(current) if current in opts else 0
+    _state["vessel_min_speed_kt"] = opts[(idx + 1) % len(opts)]
+    _save(_state)
+
+
+def set_vessel_min_speed_kt(value) -> None:
+    _state["vessel_min_speed_kt"] = _snap_vessel_min_speed(value)
     _save(_state)
 
 

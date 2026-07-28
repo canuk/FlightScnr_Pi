@@ -137,6 +137,10 @@ class RoundTouchDisplay:
         self._wifi_setup_mode = False
         self._last_wifi_setup_poll = 0.0
         self._wifi_setup_redraw = False
+        self._wifi_try_saved_busy = False
+        self._wifi_offline_since: float | None = None
+        self._last_wifi_link_poll = 0.0
+        self._wifi_ap_starting = False
         self._last_clock_minute = -1
         self._last_clock_draw = 0.0
         self._last_radar_draw = 0
@@ -186,22 +190,12 @@ class RoundTouchDisplay:
 
         radar._init_sweep()
         try:
-            self._wifi_setup_mode = bool(wifi_setup_util.should_enter_setup_at_boot())
+            enter_setup = bool(wifi_setup_util.should_enter_setup_at_boot())
         except Exception:
             logger.exception("Wi-Fi setup probe failed")
-            self._wifi_setup_mode = False
-        if self._wifi_setup_mode:
-            self.screen = SCREEN_WIFI_SETUP
-            logger.info("Entering Wi-Fi setup hotspot mode")
-            try:
-                wifi_setup_util.clear_wifi_connected_flag()
-            except Exception:
-                pass
-            Thread(
-                target=self._ensure_wifi_setup_ap,
-                name="wifi-setup-ap",
-                daemon=True,
-            ).start()
+            enter_setup = False
+        if enter_setup:
+            self._enter_wifi_setup(reason="boot")
         else:
             map_bg.request_background()
             map_bg.prewarm_all_scales()
@@ -219,13 +213,52 @@ class RoundTouchDisplay:
                 pass
         self._safe_draw()
 
+    def _enter_wifi_setup(self, *, reason: str = "") -> None:
+        """Show the QR screen and start the captive hotspot (idempotent)."""
+        if self._wifi_setup_mode and self.screen == SCREEN_WIFI_SETUP:
+            if (
+                not self._wifi_ap_starting
+                and not wifi_setup_util.client_join_busy()
+                and not wifi_setup_util.ap_radio_active()
+            ):
+                self._wifi_ap_starting = True
+                Thread(
+                    target=self._ensure_wifi_setup_ap,
+                    name="wifi-setup-ap",
+                    daemon=True,
+                ).start()
+            return
+        if wifi_setup_util.skip_requested():
+            return
+        logger.info(
+            "Entering Wi-Fi setup hotspot mode%s",
+            f" ({reason})" if reason else "",
+        )
+        self._wifi_setup_mode = True
+        self._wifi_offline_since = None
+        self._wifi_try_saved_busy = False
+        self.screen = SCREEN_WIFI_SETUP
+        try:
+            wifi_setup_util.clear_wifi_connected_flag()
+        except Exception:
+            pass
+        if not self._wifi_ap_starting and not wifi_setup_util.client_join_busy():
+            self._wifi_ap_starting = True
+            Thread(
+                target=self._ensure_wifi_setup_ap,
+                name="wifi-setup-ap",
+                daemon=True,
+            ).start()
+        self._wifi_setup_redraw = True
+
     def _ensure_wifi_setup_ap(self) -> None:
         """Start the setup hotspot off the UI thread (never call pygame here)."""
         try:
             wifi_setup_util.ensure_setup_ap()
         except Exception:
             logger.exception("Failed to start Wi-Fi setup hotspot")
-        # Main loop picks this up — pygame is not thread-safe on this display.
+        finally:
+            self._wifi_ap_starting = False
         self._wifi_setup_redraw = True
 
     def _leave_wifi_setup(self) -> None:
@@ -242,12 +275,73 @@ class RoundTouchDisplay:
         except Exception:
             pass
         self._wifi_setup_mode = False
+        self._wifi_try_saved_busy = False
+        self._wifi_ap_starting = False
+        self._wifi_offline_since = None
         self._fatal_error = None
         map_bg.request_background()
         map_bg.prewarm_all_scales()
         rainviewer_overlay.request_overlay()
         wildfire_overlay.request_refresh(force=True)
         self._open_screen(SCREEN_RADAR)
+
+    def _start_try_saved_wifi(self) -> None:
+        """Tear down the AP and retry saved client profiles (off the UI thread)."""
+        if self._wifi_try_saved_busy or self._wifi_ap_starting:
+            return
+        if not wifi_setup_util.saved_client_wifi_names():
+            return
+        self._wifi_try_saved_busy = True
+        self._wifi_setup_redraw = True
+
+        def _worker():
+            try:
+                wifi_setup_util.try_saved_wifi()
+            except Exception:
+                logger.exception("Try-saved Wi-Fi failed")
+            finally:
+                self._wifi_try_saved_busy = False
+                self._wifi_setup_redraw = True
+
+        Thread(target=_worker, name="wifi-try-saved", daemon=True).start()
+
+    def _tick_wifi_link(self) -> None:
+        """If client Wi-Fi/ethernet stays down, reopen the setup hotspot after a grace."""
+        if self._wifi_setup_mode or self.screen == SCREEN_WIFI_SETUP:
+            return
+        if wifi_setup_util.skip_requested():
+            self._wifi_offline_since = None
+            return
+        now = time.time()
+        if now - self._last_wifi_link_poll < 2.0:
+            return
+        self._last_wifi_link_poll = now
+        try:
+            up = wifi_setup_util.link_up()
+        except Exception:
+            logger.debug("Wi-Fi link poll failed", exc_info=True)
+            return
+        if up:
+            if self._wifi_offline_since is not None:
+                logger.info("Network link restored")
+            self._wifi_offline_since = None
+            return
+        if self._wifi_offline_since is None:
+            self._wifi_offline_since = now
+            logger.info(
+                "Network link down — will enter Wi-Fi setup after %.0fs",
+                wifi_setup_util.offline_grace_s(),
+            )
+            return
+        offline_s = now - self._wifi_offline_since
+        try:
+            should = wifi_setup_util.should_enter_setup_after_offline(offline_s)
+        except Exception:
+            logger.debug("Wi-Fi drop setup check failed", exc_info=True)
+            return
+        if should:
+            self._enter_wifi_setup(reason=f"offline {offline_s:.0f}s")
+            self._safe_draw()
 
     def _tick_wifi_setup(self) -> None:
         if self.screen != SCREEN_WIFI_SETUP:
@@ -262,13 +356,39 @@ class RoundTouchDisplay:
         try:
             connected = (
                 wifi_setup_util.wifi_connect_signaled()
-                or wifi_setup_util.active_client_wifi()
+                or wifi_setup_util.link_up()
             )
         except Exception:
             logger.debug("Wi-Fi setup poll failed", exc_info=True)
             return
         if connected:
             self._leave_wifi_setup()
+            return
+        # Keep the radio in AP mode while the QR screen is up. try-saved used
+        # to stop the hotspot and then time out without restoring it. Skip while
+        # the portal is mid-join — otherwise we interrupt NM client activation.
+        if (
+            not self._wifi_ap_starting
+            and not self._wifi_try_saved_busy
+            and not wifi_setup_util.client_join_busy()
+            and not wifi_setup_util.ap_radio_active()
+        ):
+            logger.warning("Setup screen up but AP radio idle — restarting hotspot")
+            self._wifi_ap_starting = True
+            Thread(
+                target=self._ensure_wifi_setup_ap,
+                name="wifi-setup-ap-watchdog",
+                daemon=True,
+            ).start()
+
+    def _handle_wifi_setup_tap(self, x: float, y: float) -> bool:
+        """Handle taps on the QR setup screen. Returns True if consumed."""
+        rect = wifi_setup_screen.try_saved_button_rect()
+        if rect is None or not rect.collidepoint(int(x), int(y)):
+            return False
+        self._start_try_saved_wifi()
+        self._safe_draw()
+        return True
 
     def _refresh_ais_vessels(self) -> None:
         """Re-read the local AIS vessel table (WebSocket feed is separate)."""
@@ -434,7 +554,9 @@ class RoundTouchDisplay:
 
         bezel_applied = False
         if self.screen == SCREEN_WIFI_SETUP:
-            wifi_setup_screen.draw_wifi_setup(self.surface)
+            wifi_setup_screen.draw_wifi_setup(
+                self.surface, try_saved_busy=self._wifi_try_saved_busy
+            )
         elif self.screen == SCREEN_RADAR:
             _t = time.perf_counter()
             radar_flights = self._radar_flights()
@@ -785,6 +907,8 @@ class RoundTouchDisplay:
             settings.cycle_min_height()
         elif action == "max_height":
             settings.cycle_max_height()
+        elif action == "vessel_min_speed":
+            settings.cycle_vessel_min_speed()
         elif action == "sweep":
             settings.toggle_sweep_line()
         elif action == "precipitation":
@@ -1460,7 +1584,12 @@ class RoundTouchDisplay:
         if time.time() < self._boot_until:
             return
         if self.screen == SCREEN_WIFI_SETUP:
-            # Captive portal owns input during first-time Wi-Fi setup.
+            # Only the try-saved control is interactive; portal owns new joins.
+            gesture = self.input.consume_gesture()
+            if gesture and gesture[0] == "tap":
+                tap = gesture[1]
+                if self._handle_wifi_setup_tap(tap[0], tap[1]):
+                    return
             return
 
         self._handle_scroll_drag()
@@ -2224,6 +2353,9 @@ class RoundTouchDisplay:
                 ):
                     self._weather_redraw_pending = False
                     self._safe_draw()
+
+                # Re-open captive setup if known Wi-Fi stays down past the grace window.
+                self._tick_wifi_link()
 
                 if self._fatal_error:
                     # Don't freeze forever during Wi-Fi setup if a draw glitch set fatal
