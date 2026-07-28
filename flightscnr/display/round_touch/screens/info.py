@@ -31,8 +31,9 @@ from display.round_touch import color_presets, draw, nav, settings, theme
 PAGE_MAIN = 0
 PAGE_DISPLAY = 1
 PAGE_OPTIONS = 2
-PAGE_COLORS = 3
-PAGE_COUNT = 4
+PAGE_LAYERS = 3
+PAGE_COLORS = 4
+PAGE_COUNT = 5
 
 FOOTER_BUTTONS = ("prev", "next", "radar")
 
@@ -49,6 +50,7 @@ DISPLAY_ACTIONS = (
     "rotate",
     "brightness",
 )
+# Traffic / map controls — kept short so Airports is not buried behind scroll.
 OPTIONS_ACTIONS = (
     "traffic",
     "aircraft_tag",
@@ -57,8 +59,12 @@ OPTIONS_ACTIONS = (
     "vessel_min_speed",
     "map_style",
     "vfr_opacity",
+)
+# Overlay toggles on their own settings page (no scroll required).
+LAYERS_ACTIONS = (
     "precipitation",
     "wildfires",
+    "airports",
     "ground_vehicles",
     "idle_clock",
 )
@@ -117,6 +123,8 @@ def _breadcrumb(page: int) -> list[str]:
         trail.append("Display")
     elif page == PAGE_OPTIONS:
         trail.append("Options")
+    elif page == PAGE_LAYERS:
+        trail.append("Layers")
     elif page == PAGE_COLORS:
         trail.append("Theme")
     return trail
@@ -254,7 +262,7 @@ def _display_font():
 
 
 def _settings_row_page(page: int) -> bool:
-    return page in (PAGE_DISPLAY, PAGE_OPTIONS)
+    return page in (PAGE_DISPLAY, PAGE_OPTIONS, PAGE_LAYERS)
 
 
 def _row_actions(page: int) -> tuple[str, ...]:
@@ -262,6 +270,8 @@ def _row_actions(page: int) -> tuple[str, ...]:
         return DISPLAY_ACTIONS
     if page == PAGE_OPTIONS:
         return OPTIONS_ACTIONS
+    if page == PAGE_LAYERS:
+        return LAYERS_ACTIONS
     return ()
 
 
@@ -451,10 +461,6 @@ def _display_row_labels() -> list[str]:
 
 def _options_row_labels() -> list[str]:
     aircraft_tag = "on" if settings.show_aircraft_tag() else "off"
-    precip = "on" if settings.show_precipitation() else "off"
-    wildfires = "on" if settings.show_wildfires() else "off"
-    ground_veh = "on" if settings.show_ground_vehicles() else "off"
-    idle = "on" if settings.auto_idle_clock_enabled() else "off"
     return [
         f"Traffic: {settings.traffic_mode_label()}",
         f"Traffic labels: {aircraft_tag}",
@@ -463,8 +469,19 @@ def _options_row_labels() -> list[str]:
         f"Vessel min speed: {settings.vessel_min_speed_label()}",
         f"Map: {settings.map_style_label()}",
         "",  # VFR opacity slider
+    ]
+
+
+def _layers_row_labels() -> list[str]:
+    precip = "on" if settings.show_precipitation() else "off"
+    wildfires = "on" if settings.show_wildfires() else "off"
+    airports = "on" if settings.show_airports() else "off"
+    ground_veh = "on" if settings.show_ground_vehicles() else "off"
+    idle = "on" if settings.auto_idle_clock_enabled() else "off"
+    return [
         f"Precipitation: {precip}",
         f"Wildfires: {wildfires}",
+        f"Airports: {airports}",
         f"Ground vehicles: {ground_veh}",
         f"Idle clock: {idle}",
     ]
@@ -667,6 +684,16 @@ def draw_info(surface, page: int, scroll_offset: int = 0, display_focus: int = 0
             top,
             bottom,
             draw_vfr_opacity_slider=True,
+        )
+
+    elif page == PAGE_LAYERS:
+        max_scroll = _draw_settings_rows(
+            surface,
+            _layers_row_labels(),
+            scroll_offset,
+            display_focus,
+            top,
+            bottom,
         )
 
     else:

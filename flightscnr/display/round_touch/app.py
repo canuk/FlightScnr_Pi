@@ -833,7 +833,7 @@ class RoundTouchDisplay:
         self._vfr_opacity_slider_active = False
         if page != self.settings_page:
             self._scroll.reset()
-            if page not in (info.PAGE_DISPLAY, info.PAGE_OPTIONS):
+            if page not in (info.PAGE_DISPLAY, info.PAGE_OPTIONS, info.PAGE_LAYERS):
                 self._display_focus = 0
         self.settings_page = page
 
@@ -920,10 +920,18 @@ class RoundTouchDisplay:
             wildfire_overlay.invalidate()
             if settings.show_wildfires():
                 wildfire_overlay.request_refresh(force=True)
+        elif action == "airports":
+            from display.round_touch import airport_overlay
+
+            settings.toggle_show_airports()
+            airport_overlay.invalidate()
         elif action == "ground_vehicles":
             settings.toggle_show_ground_vehicles()
         elif action == "map_style":
             settings.cycle_map_style()
+            from display.round_touch import airport_overlay
+
+            airport_overlay.invalidate()
         elif action == "vfr_opacity":
             # VFR opacity is a drag slider; taps are handled via vfr_opacity_slider_at.
             return
@@ -1554,7 +1562,7 @@ class RoundTouchDisplay:
 
     def _handle_settings_tap(self, x: int | None = None, y: int | None = None):
         if (
-            self.settings_page in (info.PAGE_DISPLAY, info.PAGE_OPTIONS)
+            self.settings_page in (info.PAGE_DISPLAY, info.PAGE_OPTIONS, info.PAGE_LAYERS)
             and x is not None
             and y is not None
         ):
@@ -1733,6 +1741,8 @@ class RoundTouchDisplay:
             elif self.screen == SCREEN_CLOCK_SETTINGS:
                 self._open_screen(SCREEN_CLOCK)
             elif self.screen == SCREEN_SETTINGS and self.settings_page == info.PAGE_COLORS:
+                self._set_settings_page(info.PAGE_LAYERS)
+            elif self.screen == SCREEN_SETTINGS and self.settings_page == info.PAGE_LAYERS:
                 self._set_settings_page(info.PAGE_OPTIONS)
             elif self.screen == SCREEN_SETTINGS and self.settings_page == info.PAGE_OPTIONS:
                 self._set_settings_page(info.PAGE_DISPLAY)

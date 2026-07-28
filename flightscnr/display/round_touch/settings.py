@@ -56,6 +56,8 @@ _defaults = {
     "show_sweep": True,
     "show_precipitation": True,
     "show_wildfires": False,
+    # Major airport location marks (unlabeled) on the radar.
+    "show_airports": False,
     # Airport ground vehicles (GRND/GVEH/… icon category) on the radar.
     "show_ground_vehicles": True,
     # Hide AIS vessels at or below this SOG (knots). 0 = show all speeds.
@@ -329,6 +331,11 @@ def _load():
         migrated = True
     else:
         state["show_wildfires"] = bool(state.get("show_wildfires"))
+    if "show_airports" not in data:
+        state["show_airports"] = False
+        migrated = True
+    else:
+        state["show_airports"] = bool(state.get("show_airports"))
     if "show_ground_vehicles" not in data:
         state["show_ground_vehicles"] = True
         migrated = True
@@ -370,6 +377,7 @@ def _settings_snapshot(state: dict) -> tuple:
         state.get("show_sweep"),
         state.get("show_precipitation"),
         state.get("show_wildfires"),
+        state.get("show_airports"),
         state.get("show_ground_vehicles"),
         state.get("vessel_min_speed_kt"),
         state.get("min_height_ft"),
@@ -602,6 +610,20 @@ def toggle_show_wildfires():
 
 def set_show_wildfires(enabled: bool):
     _state["show_wildfires"] = bool(enabled)
+    _save(_state)
+
+
+def show_airports() -> bool:
+    return bool(_state.get("show_airports", False))
+
+
+def toggle_show_airports():
+    _state["show_airports"] = not show_airports()
+    _save(_state)
+
+
+def set_show_airports(enabled: bool):
+    _state["show_airports"] = bool(enabled)
     _save(_state)
 
 

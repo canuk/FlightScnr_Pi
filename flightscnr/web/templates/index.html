@@ -182,6 +182,11 @@
             </div>
             <p class="hint">In California: <a href="https://www.fire.ca.gov/incidents" target="_blank" rel="noopener">CAL FIRE</a> (no API key). Rest of USA/Canada: <a href="https://data-nifc.opendata.arcgis.com/" target="_blank" rel="noopener">NIFC WFIGS</a> / <a href="https://fire.airnow.gov/" target="_blank" rel="noopener">AirNow</a> large fires (no API key). Outside USA/Canada: <a href="https://firms.modaps.eosdis.nasa.gov/api/area/" target="_blank" rel="noopener">NASA FIRMS</a> hotspots (free <a href="https://firms.modaps.eosdis.nasa.gov/api/map_key/" target="_blank" rel="noopener">MAP_KEY</a> in API Keys). Tap a fire for details. Refreshes every 15 minutes and on recenter.</p>
             <div class="chk">
+                <label for="show_airports">Show airports</label>
+                <span class="switch"><input id="show_airports" type="checkbox"><span class="track"></span></span>
+            </div>
+            <p class="hint">OurAirports runway centerlines on dark and light maps (not drawn on VFR — the chart already shows runways). Large, medium, and small airports in range. Heliports and closed fields/runways are skipped. First enable downloads the free OurAirports runway database (cached offline after that).</p>
+            <div class="chk">
                 <label for="show_ground_vehicles">Show ground vehicles</label>
                 <span class="switch"><input id="show_ground_vehicles" type="checkbox"><span class="track"></span></span>
             </div>
@@ -668,6 +673,7 @@ async function loadAll() {
         $("show_sweep").checked = !!r.show_sweep_line;
         $("show_precip").checked = r.show_precipitation !== false;
         if ($("show_wildfires")) $("show_wildfires").checked = !!r.show_wildfires;
+        if ($("show_airports")) $("show_airports").checked = !!r.show_airports;
         if ($("show_ground_vehicles")) $("show_ground_vehicles").checked = r.show_ground_vehicles !== false;
         $("traffic_mode").value = r.traffic_mode || (r.ais_enabled ? "both" : "aircraft");
         if ($("vessel_min_speed")) $("vessel_min_speed").value = String(r.vessel_min_speed_kt ?? 0);
@@ -784,6 +790,7 @@ async function saveRadar() {
                 show_sweep_line: $("show_sweep").checked,
                 show_precipitation: $("show_precip").checked,
                 show_wildfires: $("show_wildfires") ? $("show_wildfires").checked : false,
+                show_airports: $("show_airports") ? $("show_airports").checked : false,
                 show_ground_vehicles: $("show_ground_vehicles") ? $("show_ground_vehicles").checked : true,
                 map_style: $("map_style").value,
                 vfr_map_opacity: Number($("vfr_opacity") ? $("vfr_opacity").value : 45),
@@ -862,6 +869,7 @@ async function saveAndReloadSettings() {
                 show_sweep_line: $("show_sweep").checked,
                 show_precipitation: $("show_precip").checked,
                 show_wildfires: $("show_wildfires") ? $("show_wildfires").checked : false,
+                show_airports: $("show_airports") ? $("show_airports").checked : false,
                 show_ground_vehicles: $("show_ground_vehicles") ? $("show_ground_vehicles").checked : true,
                 map_style: $("map_style").value,
                 vfr_map_opacity: Number($("vfr_opacity") ? $("vfr_opacity").value : 45),

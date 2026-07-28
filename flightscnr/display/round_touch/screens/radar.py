@@ -6,7 +6,18 @@ import time
 
 import pygame
 
-from display.round_touch import aircraft, draw, geo, map_bg, rainviewer_overlay, scale, settings, theme, wildfire_overlay
+from display.round_touch import (
+    aircraft,
+    airport_overlay,
+    draw,
+    geo,
+    map_bg,
+    rainviewer_overlay,
+    scale,
+    settings,
+    theme,
+    wildfire_overlay,
+)
 from display.round_touch import alert_prefs, frame_debug
 from display.round_touch import vessel_declutter
 from utilities import aircraft_alert
@@ -128,6 +139,7 @@ def _build_frame_layer(build: pygame.Surface, backdrop, flights, offset) -> None
     _t = time.perf_counter()
     build.blit(backdrop, (0, 0))
     _t = _rebuild_stage("2r_blit", _t)
+    airport_overlay.draw_airports(build, pan_offset=offset)
     wildfire_overlay.draw_fires(build, pan_offset=offset)
     _t = _rebuild_stage("2r_fires", _t)
     _draw_flights(build, flights)
@@ -331,6 +343,7 @@ def draw_radar(
                         raise
             bezel_applied = True
         else:
+            airport_overlay.draw_airports(surface, pan_offset=offset)
             wildfire_overlay.draw_fires(surface, pan_offset=offset)
             _draw_flights(surface, flights)
             _draw_status(surface, flights)
@@ -932,9 +945,10 @@ def _draw_map_attribution(surface):
     if not parts:
         return
     text = " · ".join(parts)
-    font = draw.load_font(theme.s(11))
+    font = draw.load_font(theme.s(8))
     rendered = font.render(text, True, theme.HINT)
-    y = theme.CENTER_Y + int(theme.VISIBLE_RADIUS * 0.52)
+    # Sit near the bottom rim (was ~0.52·R — mid-lower and too prominent).
+    y = theme.CENTER_Y + theme.VISIBLE_RADIUS - theme.s(22) - rendered.get_height()
     half = draw.circle_half_width_at_row(y, rendered.get_height())
     x = theme.CENTER_X + half - rendered.get_width() - theme.s(4)
     surface.blit(rendered, (x, y))

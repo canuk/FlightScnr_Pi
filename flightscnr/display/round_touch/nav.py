@@ -17,7 +17,7 @@ _BTN_ICON = theme.LABEL
 _BTN_ICON_ACCENT = theme.SWEEP
 
 # Settings sub-page labels (must match info.py page constants)
-SETTINGS_PAGES = ("Main", "Display", "Options", "Theme")
+SETTINGS_PAGES = ("Main", "Display", "Options", "Layers", "Theme")
 
 
 class ScrollState:

@@ -1,0 +1,186 @@
+"""
+OurAirports runway centerlines for the radar overlay.
+
+Downloads runways.csv once, caches as runways.json next to airports.json.
+Source: https://github.com/davidmegginson/ourairports-data
+"""
+
+from __future__ import annotations
+
+import csv
+import json
+import logging
+import os
+from io import StringIO
+
+import requests
+
+logger = logging.getLogger(__name__)
+
+BASE_DIR = os.path.dirname(os.path.dirname(__file__))
+CACHE_FILE = os.path.join(BASE_DIR, "runways.json")
+CSV_URL = (
+    "https://raw.githubusercontent.com/davidmegginson/ourairports-data/main/runways.csv"
+)
+CACHE_VERSION = 1
+
+_db: dict[str, list[dict]] = {}
+_loaded = False
+
+
+def _as_float(value) -> float | None:
+    try:
+        if value is None or str(value).strip() == "":
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _as_closed(value) -> bool:
+    raw = str(value or "").strip().lower()
+    return raw in ("1", "true", "yes", "y")
+
+
+def runway_from_csv_row(row: dict) -> tuple[str, dict] | None:
+    """Parse one OurAirports runway row → (airport_ident, segment) or None."""
+    if _as_closed(row.get("closed")):
+        return None
+    ident = (row.get("airport_ident") or "").strip().upper()
+    if not ident:
+        return None
+    le_lat = _as_float(row.get("le_latitude_deg"))
+    le_lon = _as_float(row.get("le_longitude_deg"))
+    he_lat = _as_float(row.get("he_latitude_deg"))
+    he_lon = _as_float(row.get("he_longitude_deg"))
+    if None in (le_lat, le_lon, he_lat, he_lon):
+        return None
+    if not (
+        -90.0 <= le_lat <= 90.0
+        and -90.0 <= he_lat <= 90.0
+        and -180.0 <= le_lon <= 180.0
+        and -180.0 <= he_lon <= 180.0
+    ):
+        return None
+    # Degenerate / helipad stubs with identical ends.
+    if abs(le_lat - he_lat) < 1e-7 and abs(le_lon - he_lon) < 1e-7:
+        return None
+    length_ft = _as_float(row.get("length_ft"))
+    seg = {
+        "le_lat": le_lat,
+        "le_lon": le_lon,
+        "he_lat": he_lat,
+        "he_lon": he_lon,
+        "le_ident": (row.get("le_ident") or "").strip().upper(),
+        "he_ident": (row.get("he_ident") or "").strip().upper(),
+    }
+    if length_ft is not None:
+        seg["length_ft"] = int(round(length_ft))
+    return ident, seg
+
+
+def build_db_from_csv_text(text: str) -> dict[str, list[dict]]:
+    """Build airport_ident → runway segment list from OurAirports CSV text."""
+    reader = csv.DictReader(StringIO(text or ""))
+    db: dict[str, list[dict]] = {}
+    for row in reader:
+        parsed = runway_from_csv_row(row)
+        if not parsed:
+            continue
+        ident, seg = parsed
+        db.setdefault(ident, []).append(seg)
+    return db
+
+
+def _download_and_build() -> dict[str, list[dict]]:
+    logger.info("[Runways] Downloading OurAirports runways.csv…")
+    try:
+        resp = requests.get(CSV_URL, timeout=60)
+        resp.raise_for_status()
+        db = build_db_from_csv_text(resp.text)
+        cache_data = {"_version": CACHE_VERSION, "runways": db}
+        with open(CACHE_FILE, "w", encoding="utf-8") as fh:
+            json.dump(cache_data, fh)
+        n_seg = sum(len(v) for v in db.values())
+        logger.info(
+            "[Runways] Cached %d segments at %d airports → %s (v%d)",
+            n_seg,
+            len(db),
+            CACHE_FILE,
+            CACHE_VERSION,
+        )
+        print(
+            f"[Runways] Database built — {n_seg} segments / {len(db)} airports "
+            f"(v{CACHE_VERSION})"
+        )
+        return db
+    except Exception as exc:
+        logger.warning("[Runways] Download failed: %s", exc)
+        print(f"[Runways] Download failed: {exc}")
+        return {}
+
+
+def _load() -> None:
+    global _db, _loaded
+    if _loaded:
+        return
+    stale: dict | None = None
+    if os.path.exists(CACHE_FILE):
+        try:
+            with open(CACHE_FILE, encoding="utf-8") as fh:
+                raw = json.load(fh)
+            if isinstance(raw, dict) and raw.get("_version") == CACHE_VERSION:
+                _db = raw.get("runways") or {}
+                _loaded = True
+                return
+            version_found = raw.get("_version", "none") if isinstance(raw, dict) else "legacy"
+            print(
+                f"[Runways] Cache version mismatch (found: {version_found}, "
+                f"need: {CACHE_VERSION}) — rebuilding"
+            )
+            if isinstance(raw, dict) and isinstance(raw.get("runways"), dict):
+                stale = raw["runways"]
+        except Exception as exc:
+            print(f"[Runways] Cache load failed: {exc} — re-downloading")
+    _db = _download_and_build()
+    if not _db and stale:
+        print("[Runways] Using previous cache (degraded)")
+        _db = stale
+    _loaded = True
+
+
+def get_runways(airport_ident: str) -> list[dict]:
+    """Runway segments for an ICAO/ident (empty if unknown)."""
+    _load()
+    if not airport_ident:
+        return []
+    return list(_db.get(airport_ident.strip().upper()) or [])
+
+
+def runways_for_idents(idents) -> list[dict]:
+    """Flat list of segments for many airport idents, each tagged with ``ident``."""
+    _load()
+    out: list[dict] = []
+    seen = set()
+    for raw in idents or []:
+        ident = (raw or "").strip().upper()
+        if not ident or ident in seen:
+            continue
+        seen.add(ident)
+        for seg in _db.get(ident) or []:
+            item = dict(seg)
+            item["ident"] = ident
+            out.append(item)
+    return out
+
+
+def refresh() -> None:
+    """Force re-download of the runway database."""
+    global _db, _loaded
+    _loaded = False
+    if os.path.exists(CACHE_FILE):
+        try:
+            os.remove(CACHE_FILE)
+        except OSError:
+            pass
+    _load()

@@ -182,6 +182,133 @@ class TestAirportsModule:
             result = airports_mod.icao_to_iata("KJFK")
             assert result == "JFK"
 
+    def test_build_db_from_csv_text_keeps_type(self):
+        """CSV builder persists type and ICAO ident for radar filtering."""
+        import utilities.airports as airports_mod
+
+        csv_text = (
+            "ident,type,name,latitude_deg,longitude_deg,iata_code,municipality,coordinates\n"
+            "KSFO,large_airport,San Francisco Intl,,,SFO,San Francisco,\"37.6198, -122.3748\"\n"
+            "KHAF,small_airport,Half Moon Bay,,,HAF,Half Moon Bay,\"37.5134, -122.5012\"\n"
+            "KOAK,medium_airport,Metro Oakland Intl,,,OAK,Oakland,\"37.7213, -122.2207\"\n"
+        )
+        db = airports_mod.build_db_from_csv_text(csv_text)
+        assert db["KSFO"]["type"] == "large_airport"
+        assert db["KSFO"]["ident"] == "KSFO"
+        assert db["SFO"]["ident"] == "KSFO"
+        assert db["KOAK"]["type"] == "medium_airport"
+        assert db["KHAF"]["type"] == "small_airport"
+
+    def test_iter_airports_near_filters_type_and_dedupes(self):
+        """Nearby query keeps large/medium ICAO points and skips IATA dupes."""
+        import utilities.airports as airports_mod
+
+        airports_mod._loaded = True
+        airports_mod._db = {
+            "SFO": {
+                "lat": 37.6198,
+                "lon": -122.3748,
+                "type": "large_airport",
+                "ident": "KSFO",
+                "name": "San Francisco",
+            },
+            "KSFO": {
+                "lat": 37.6198,
+                "lon": -122.3748,
+                "type": "large_airport",
+                "ident": "KSFO",
+                "name": "San Francisco",
+            },
+            "KOAK": {
+                "lat": 37.7213,
+                "lon": -122.2207,
+                "type": "medium_airport",
+                "ident": "KOAK",
+                "name": "Oakland",
+            },
+            "KHAF": {
+                "lat": 37.5134,
+                "lon": -122.5012,
+                "type": "small_airport",
+                "ident": "KHAF",
+                "name": "Half Moon Bay",
+            },
+            "KORD": {
+                "lat": 41.978,
+                "lon": -87.904,
+                "type": "large_airport",
+                "ident": "KORD",
+                "name": "Chicago",
+            },
+        }
+        near = airports_mod.iter_airports_near(37.62, -122.37, 30.0)
+        idents = [a["ident"] for a in near]
+        assert idents.count("KSFO") == 1
+        assert "KOAK" in idents
+        assert "KHAF" in idents  # small_airport included for GA fields
+        assert "KORD" not in idents  # far away
+        only_large = airports_mod.iter_airports_near(
+            37.62, -122.37, 30.0, types={"large_airport"}
+        )
+            assert [a["ident"] for a in only_large] == ["KSFO"]
+
+
+class TestRunwaysModule:
+    """Tests for utilities/runways.py (OurAirports)."""
+
+    def test_build_db_from_csv_text(self):
+        import utilities.runways as runways_mod
+
+        csv_text = (
+            "id,airport_ref,airport_ident,length_ft,width_ft,surface,lighted,closed,"
+            "le_ident,le_latitude_deg,le_longitude_deg,le_elevation_ft,le_heading_degT,"
+            "le_displaced_threshold_ft,he_ident,he_latitude_deg,he_longitude_deg,"
+            "he_elevation_ft,he_heading_degT,he_displaced_threshold_ft\n"
+            '240772,3878,KSFO,11870,200,ASP,1,0,10L,37.628742,-122.39341,5,118,,'
+            "28R,37.613538,-122.35716,13,298,300\n"
+            "269408,6523,00A,80,80,ASPH-G,1,0,H1,,,,,,,,,,\n"
+            "1,1,XXCL,3000,50,ASP,0,1,09,37.0,-122.0,,,27,37.1,-122.1,,,\n"
+        )
+        db = runways_mod.build_db_from_csv_text(csv_text)
+        assert "KSFO" in db
+        assert len(db["KSFO"]) == 1
+        seg = db["KSFO"][0]
+        assert seg["le_ident"] == "10L"
+        assert seg["he_ident"] == "28R"
+        assert abs(seg["le_lat"] - 37.628742) < 1e-6
+        assert "00A" not in db  # helipad without endpoints
+        assert "XXCL" not in db  # closed
+
+    def test_runways_for_idents(self):
+        import utilities.runways as runways_mod
+
+        runways_mod._loaded = True
+        runways_mod._db = {
+            "KSFO": [
+                {
+                    "le_lat": 37.628742,
+                    "le_lon": -122.39341,
+                    "he_lat": 37.613538,
+                    "he_lon": -122.35716,
+                    "le_ident": "10L",
+                    "he_ident": "28R",
+                }
+            ],
+            "KOAK": [
+                {
+                    "le_lat": 37.7,
+                    "le_lon": -122.2,
+                    "he_lat": 37.71,
+                    "he_lon": -122.21,
+                    "le_ident": "12",
+                    "he_ident": "30",
+                }
+            ],
+        }
+        segs = runways_mod.runways_for_idents(["KSFO", "ksfo", "KOAK", "KZZZ"])
+        assert len(segs) == 2
+        assert {s["ident"] for s in segs} == {"KSFO", "KOAK"}
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Airlines Tests
