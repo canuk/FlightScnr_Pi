@@ -38,14 +38,12 @@ def _vessel_rows(f: dict, title_font, body_font, detail_font) -> list[tuple[str,
     nav_name = f.get("nav_status_name") or ""
 
     telemetry: list[str] = []
-    sog = f.get("sog_kt")
-    try:
-        if sog is not None:
-            telemetry.append(f"{float(sog):.1f} kt")
-    except (TypeError, ValueError):
-        pass
-    speed_str = common.format_speed(f.get("ground_speed"))
-    if speed_str and not telemetry:
+    # SOG is knots from AIS; convert with the same global unit preset as aircraft.
+    speed_src = f.get("sog_kt")
+    if speed_src is None:
+        speed_src = f.get("ground_speed")
+    speed_str = common.format_speed(speed_src, allow_zero=True)
+    if speed_str:
         telemetry.append(speed_str)
     heading = f.get("heading")
     if heading is not None and int(heading) > 0:

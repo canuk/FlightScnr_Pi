@@ -1,7 +1,10 @@
 """
 OurAirports runway centerlines for the radar overlay.
 
-Downloads runways.csv once, caches as runways.json next to airports.json.
+Prefers the bundled CSV shipped with the app
+(``assets/data/runways.csv``), builds ``runways.json`` once for fast
+lookups, and only hits the network if the bundle is missing.
+
 Source: https://github.com/davidmegginson/ourairports-data
 """
 
@@ -19,6 +22,7 @@ logger = logging.getLogger(__name__)
 
 BASE_DIR = os.path.dirname(os.path.dirname(__file__))
 CACHE_FILE = os.path.join(BASE_DIR, "runways.json")
+BUNDLED_CSV = os.path.join(BASE_DIR, "assets", "data", "runways.csv")
 CSV_URL = (
     "https://raw.githubusercontent.com/davidmegginson/ourairports-data/main/runways.csv"
 )
@@ -92,32 +96,72 @@ def build_db_from_csv_text(text: str) -> dict[str, list[dict]]:
     return db
 
 
-def _download_and_build() -> dict[str, list[dict]]:
+def _write_cache(db: dict[str, list[dict]]) -> None:
+    cache_data = {"_version": CACHE_VERSION, "runways": db}
+    try:
+        with open(CACHE_FILE, "w", encoding="utf-8") as fh:
+            json.dump(cache_data, fh)
+    except OSError as exc:
+        logger.warning("[Runways] Could not write cache %s: %s", CACHE_FILE, exc)
+
+
+def _build_from_csv_path(path: str, *, source: str) -> dict[str, list[dict]]:
+    logger.info("[Runways] Building database from %s…", source)
+    with open(path, encoding="utf-8") as fh:
+        db = build_db_from_csv_text(fh.read())
+    if not db:
+        return {}
+    _write_cache(db)
+    n_seg = sum(len(v) for v in db.values())
+    logger.info(
+        "[Runways] Cached %d segments at %d airports → %s (v%d, %s)",
+        n_seg,
+        len(db),
+        CACHE_FILE,
+        CACHE_VERSION,
+        source,
+    )
+    print(
+        f"[Runways] Database built — {n_seg} segments / {len(db)} airports "
+        f"(v{CACHE_VERSION}, {source})"
+    )
+    return db
+
+
+def _download_csv_to(path: str) -> bool:
+    """Download OurAirports CSV to ``path``. Returns True on success."""
     logger.info("[Runways] Downloading OurAirports runways.csv…")
     try:
         resp = requests.get(CSV_URL, timeout=60)
         resp.raise_for_status()
-        db = build_db_from_csv_text(resp.text)
-        cache_data = {"_version": CACHE_VERSION, "runways": db}
-        with open(CACHE_FILE, "w", encoding="utf-8") as fh:
-            json.dump(cache_data, fh)
-        n_seg = sum(len(v) for v in db.values())
-        logger.info(
-            "[Runways] Cached %d segments at %d airports → %s (v%d)",
-            n_seg,
-            len(db),
-            CACHE_FILE,
-            CACHE_VERSION,
-        )
-        print(
-            f"[Runways] Database built — {n_seg} segments / {len(db)} airports "
-            f"(v{CACHE_VERSION})"
-        )
-        return db
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(resp.text)
+        return True
     except Exception as exc:
         logger.warning("[Runways] Download failed: %s", exc)
         print(f"[Runways] Download failed: {exc}")
-        return {}
+        return False
+
+
+def _build_db() -> dict[str, list[dict]]:
+    """Build from bundled CSV, else download, else empty."""
+    if os.path.isfile(BUNDLED_CSV):
+        try:
+            return _build_from_csv_path(BUNDLED_CSV, source="bundled CSV")
+        except Exception as exc:
+            logger.warning("[Runways] Bundled CSV failed: %s", exc)
+            print(f"[Runways] Bundled CSV failed: {exc}")
+
+    # No usable bundle — try network, write next to cache for next time.
+    download_path = os.path.join(BASE_DIR, "runways.csv")
+    if _download_csv_to(download_path):
+        try:
+            return _build_from_csv_path(download_path, source="downloaded CSV")
+        except Exception as exc:
+            logger.warning("[Runways] Downloaded CSV parse failed: %s", exc)
+            print(f"[Runways] Downloaded CSV parse failed: {exc}")
+    return {}
 
 
 def _load() -> None:
@@ -141,8 +185,8 @@ def _load() -> None:
             if isinstance(raw, dict) and isinstance(raw.get("runways"), dict):
                 stale = raw["runways"]
         except Exception as exc:
-            print(f"[Runways] Cache load failed: {exc} — re-downloading")
-    _db = _download_and_build()
+            print(f"[Runways] Cache load failed: {exc} — rebuilding")
+    _db = _build_db()
     if not _db and stale:
         print("[Runways] Using previous cache (degraded)")
         _db = stale
@@ -175,7 +219,7 @@ def runways_for_idents(idents) -> list[dict]:
 
 
 def refresh() -> None:
-    """Force re-download of the runway database."""
+    """Force rebuild of the runway database (bundled CSV, else download)."""
     global _db, _loaded
     _loaded = False
     if os.path.exists(CACHE_FILE):

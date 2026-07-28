@@ -907,6 +907,8 @@ class RoundTouchDisplay:
             settings.cycle_min_height()
         elif action == "max_height":
             settings.cycle_max_height()
+        elif action == "aircraft_min_speed":
+            settings.cycle_aircraft_min_speed()
         elif action == "vessel_min_speed":
             settings.cycle_vessel_min_speed()
         elif action == "sweep":

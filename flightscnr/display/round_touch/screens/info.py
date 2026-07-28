@@ -50,18 +50,19 @@ DISPLAY_ACTIONS = (
     "rotate",
     "brightness",
 )
-# Traffic / map controls — kept short so Airports is not buried behind scroll.
+# Filter / map controls — kept short so rows fit the round viewport.
 OPTIONS_ACTIONS = (
-    "traffic",
     "aircraft_tag",
     "min_height",
     "max_height",
+    "aircraft_min_speed",
     "vessel_min_speed",
     "map_style",
     "vfr_opacity",
 )
-# Overlay toggles on their own settings page (no scroll required).
+# Overlay toggles + traffic mode on their own settings page (no scroll required).
 LAYERS_ACTIONS = (
+    "traffic",
     "precipitation",
     "wildfires",
     "airports",
@@ -440,21 +441,20 @@ def display_action_at(page: int, row: int) -> str | None:
 
 
 def _display_row_labels() -> list[str]:
-    units = settings.distance_units()
     rose = "on" if settings.show_compass_rose() else "off"
     rings = "on" if settings.show_range_rings() else "off"
     facing = settings.facing_label()
     sweep = "on" if settings.show_sweep_line() else "off"
     # Brightness is drawn as a slider; placeholder keeps row count aligned.
     return [
-        f"Facing: {facing}",
-        "Set radar center",
+        f"Change Compass Heading: {facing}",
+        "Click to Set Radar Center",
         f"Compass Rose: {rose}",
-        f"Range rings: {rings}",
-        f"Sweep line: {sweep}",
-        f"Units: {units}",
-        f"Range: {settings.scale_label()}",
-        f"Rotate: {settings.display_rotation()}°",
+        f"Radar Range Rings: {rings}",
+        f"Radar Sweep Line: {sweep}",
+        f"Units: {settings.unit_preset_label()}",
+        f"Radar Range: {settings.scale_label()}",
+        f"Rotate Screen: {settings.display_rotation()}°",
         "",  # brightness slider
     ]
 
@@ -462,12 +462,12 @@ def _display_row_labels() -> list[str]:
 def _options_row_labels() -> list[str]:
     aircraft_tag = "on" if settings.show_aircraft_tag() else "off"
     return [
-        f"Traffic: {settings.traffic_mode_label()}",
-        f"Traffic labels: {aircraft_tag}",
-        f"Min height: {settings.min_height_ft()} ft",
-        f"Max height: {settings.max_height_ft()} ft",
-        f"Vessel min speed: {settings.vessel_min_speed_label()}",
-        f"Map: {settings.map_style_label()}",
+        f"Traffic Labels: {aircraft_tag}",
+        f"Min Aircraft Altitude: {settings.min_height_ft()} ft",
+        f"Max Aircraft Altitude: {settings.max_height_ft()} ft",
+        f"Min Aircraft Speed: {settings.aircraft_min_speed_label()}",
+        f"Min Vessel Speed: {settings.vessel_min_speed_label()}",
+        f"Basemap: {settings.map_style_label()}",
         "",  # VFR opacity slider
     ]
 
@@ -479,11 +479,12 @@ def _layers_row_labels() -> list[str]:
     ground_veh = "on" if settings.show_ground_vehicles() else "off"
     idle = "on" if settings.auto_idle_clock_enabled() else "off"
     return [
-        f"Precipitation: {precip}",
-        f"Wildfires: {wildfires}",
-        f"Airports: {airports}",
-        f"Ground vehicles: {ground_veh}",
-        f"Idle clock: {idle}",
+        f"Select Traffic: {settings.traffic_mode_label()}",
+        f"Show Precipitation: {precip}",
+        f"Show Wildfires: {wildfires}",
+        f"Show Airports: {airports}",
+        f"Show Ground Vehicles: {ground_veh}",
+        f"Auto Idle Clock: {idle}",
     ]
 
 

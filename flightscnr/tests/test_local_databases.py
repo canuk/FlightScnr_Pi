@@ -250,7 +250,7 @@ class TestAirportsModule:
         only_large = airports_mod.iter_airports_near(
             37.62, -122.37, 30.0, types={"large_airport"}
         )
-            assert [a["ident"] for a in only_large] == ["KSFO"]
+        assert [a["ident"] for a in only_large] == ["KSFO"]
 
 
 class TestRunwaysModule:
@@ -278,6 +278,22 @@ class TestRunwaysModule:
         assert abs(seg["le_lat"] - 37.628742) < 1e-6
         assert "00A" not in db  # helipad without endpoints
         assert "XXCL" not in db  # closed
+
+    def test_bundled_csv_path_exists(self):
+        import utilities.runways as runways_mod
+
+        assert os.path.isfile(runways_mod.BUNDLED_CSV), runways_mod.BUNDLED_CSV
+
+    def test_build_db_from_bundled_csv_sample(self):
+        """Smoke-parse the shipped CSV — expect SFO among many airports."""
+        import utilities.runways as runways_mod
+
+        with open(runways_mod.BUNDLED_CSV, encoding="utf-8") as fh:
+            text = fh.read()
+        db = runways_mod.build_db_from_csv_text(text)
+        assert "KSFO" in db
+        assert len(db["KSFO"]) >= 1
+        assert sum(len(v) for v in db.values()) > 1000
 
     def test_runways_for_idents(self):
         import utilities.runways as runways_mod

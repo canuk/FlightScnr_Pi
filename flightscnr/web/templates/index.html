@@ -88,13 +88,15 @@
             <label for="range_index">Range</label>
             <select id="range_index"></select>
             <p class="hint">Outer radar range shown as mi / km / nm.</p>
-            <label for="dist_units">Distance units (device labels)</label>
+            <label for="dist_units">Units (distance, speed)</label>
             <select id="dist_units">
-                <option value="km">kilometers</option>
-                <option value="mi">statute miles</option>
-                <option value="nm">nautical miles</option>
+                <option value="nm_kts">nm, kts</option>
+                <option value="mi_mph">mi, mph</option>
+                <option value="km_kph">km, kph</option>
+                <option value="mi_kts">mi, kts</option>
+                <option value="km_kts">km, kts</option>
             </select>
-            <p class="hint">Unit used for range rings and distance text on the Pi display.</p>
+            <p class="hint">Distance for range rings / labels, and speed for aircraft/vessel readouts on the Pi display.</p>
             <label for="min_height">Min altitude floor (ft, 0 = off)</label>
             <select id="min_height">
                 <option value="0">0 (off)</option>
@@ -185,7 +187,7 @@
                 <label for="show_airports">Show airports</label>
                 <span class="switch"><input id="show_airports" type="checkbox"><span class="track"></span></span>
             </div>
-            <p class="hint">OurAirports runway centerlines on dark and light maps (not drawn on VFR — the chart already shows runways). Large, medium, and small airports in range. Heliports and closed fields/runways are skipped. First enable downloads the free OurAirports runway database (cached offline after that).</p>
+            <p class="hint">Marks large, medium, and small airports in range with the airport pin icon. On dark and light maps also draws OurAirports runway centerlines from the bundled runway database (skipped on VFR — the chart already shows runways). Heliports and closed fields/runways are skipped.</p>
             <div class="chk">
                 <label for="show_ground_vehicles">Show ground vehicles</label>
                 <span class="switch"><input id="show_ground_vehicles" type="checkbox"><span class="track"></span></span>
@@ -198,7 +200,7 @@
                 <option value="both">Aircraft + marine</option>
             </select>
             <p class="hint">Marine needs an aisstream.io API key below. Free for non-commercial use.</p>
-            <label for="vessel_min_speed">Marine min speed (kt)</label>
+            <label for="vessel_min_speed" id="vessel_min_speed_label">Marine min speed</label>
             <select id="vessel_min_speed">
                 <option value="0">Any (no floor)</option>
                 <option value="1">&gt; 1 kt</option>
@@ -209,7 +211,19 @@
                 <option value="10">&gt; 10 kt</option>
                 <option value="15">&gt; 15 kt</option>
             </select>
-            <p class="hint">Hide AIS vessels at or below this speed over ground. Use to declutter anchored/moored traffic while keeping movers.</p>
+            <p class="hint">Hide AIS vessels at or below this speed over ground. Use to declutter anchored/moored traffic while keeping movers. Options follow the Distance units setting above.</p>
+            <label for="aircraft_min_speed" id="aircraft_min_speed_label">Aircraft min speed</label>
+            <select id="aircraft_min_speed">
+                <option value="0">Any (no floor)</option>
+                <option value="20">&gt; 20 kt</option>
+                <option value="40">&gt; 40 kt</option>
+                <option value="60">&gt; 60 kt</option>
+                <option value="80">&gt; 80 kt</option>
+                <option value="100">&gt; 100 kt</option>
+                <option value="150">&gt; 150 kt</option>
+                <option value="200">&gt; 200 kt</option>
+            </select>
+            <p class="hint">Hide aircraft at or below this ground speed. Use to declutter taxiing/parked traffic while keeping airborne movers. Options follow the Distance units setting above.</p>
             <button class="btn btn-primary" id="btn-radar" style="margin-top:.7rem" type="button">Save radar settings</button>
             <div id="radar-status" class="status"></div>
         </div>
@@ -648,8 +662,9 @@ async function loadAll() {
     try {
         const r = await jsonFetch("/radar/json");
         currentScaleIndex = Number(r.scale_index ?? 1);
-        $("dist_units").value = r.distance_units || "km";
+        $("dist_units").value = r.unit_preset || legacyUnitPreset(r.distance_units) || "km_kph";
         populateRangeSelect(r.range_presets_mi);
+        syncMinSpeedUnitLabels();
         $("min_height").value = String(r.min_height_ft ?? 1000);
         $("max_height").value = String(r.max_height_ft ?? 100000);
         const theme = $("radar_theme");
@@ -677,6 +692,7 @@ async function loadAll() {
         if ($("show_ground_vehicles")) $("show_ground_vehicles").checked = r.show_ground_vehicles !== false;
         $("traffic_mode").value = r.traffic_mode || (r.ais_enabled ? "both" : "aircraft");
         if ($("vessel_min_speed")) $("vessel_min_speed").value = String(r.vessel_min_speed_kt ?? 0);
+        if ($("aircraft_min_speed")) $("aircraft_min_speed").value = String(r.aircraft_min_speed_kt ?? 0);
     } catch (_) {}
 
     try {
@@ -765,6 +781,56 @@ function syncVfrOpacityLabel() {
     if (el && $("vfr_opacity")) el.textContent = `${$("vfr_opacity").value}%`;
 }
 
+/** Match device speed labels from unit preset (…_kts / …_mph / …_kph). */
+function legacyUnitPreset(distanceUnits) {
+    if (distanceUnits === "mi") return "mi_mph";
+    if (distanceUnits === "nm") return "nm_kts";
+    if (distanceUnits === "km") return "km_kph";
+    return "";
+}
+
+function selectedUnitPreset() {
+    const v = ($("dist_units") && $("dist_units").value) || "km_kph";
+    if (v.includes("_")) return v;
+    return legacyUnitPreset(v) || "km_kph";
+}
+
+function distanceUnitFromSelect() {
+    return selectedUnitPreset().split("_")[0] || "km";
+}
+
+function speedUnitFromSelect() {
+    return selectedUnitPreset().split("_")[1] || "kph";
+}
+
+function formatSpeedFloorFromKt(kt) {
+    const n = Number(kt) || 0;
+    if (n <= 0) return "Any (no floor)";
+    const units = speedUnitFromSelect();
+    if (units === "mph") return `> ${Math.trunc(n * 1.15078)} mph`;
+    if (units === "kts") return `> ${Math.trunc(n)} kts`;
+    return `> ${Math.trunc(n * 1.852)} kph`;
+}
+
+function speedUnitSuffix() {
+    return speedUnitFromSelect();
+}
+
+function syncMinSpeedUnitLabels() {
+    const suffix = speedUnitSuffix();
+    const vesselLabel = $("vessel_min_speed_label");
+    const aircraftLabel = $("aircraft_min_speed_label");
+    if (vesselLabel) vesselLabel.textContent = `Marine min speed (${suffix})`;
+    if (aircraftLabel) aircraftLabel.textContent = `Aircraft min speed (${suffix})`;
+    for (const id of ["vessel_min_speed", "aircraft_min_speed"]) {
+        const sel = $(id);
+        if (!sel) continue;
+        for (const opt of sel.options) {
+            opt.textContent = formatSpeedFloorFromKt(opt.value);
+        }
+    }
+}
+
 async function saveRadar() {
     clearStatus("radar-status");
     try {
@@ -778,7 +844,8 @@ async function saveRadar() {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
-                distance_units: $("dist_units").value,
+                unit_preset: selectedUnitPreset(),
+                distance_units: distanceUnitFromSelect(),
                 scale_index: Number($("range_index").value),
                 min_height_ft: Number($("min_height").value),
                 max_height_ft: Number($("max_height").value),
@@ -796,6 +863,7 @@ async function saveRadar() {
                 vfr_map_opacity: Number($("vfr_opacity") ? $("vfr_opacity").value : 45),
                 traffic_mode: $("traffic_mode").value,
                 vessel_min_speed_kt: Number($("vessel_min_speed") ? $("vessel_min_speed").value : 0),
+                aircraft_min_speed_kt: Number($("aircraft_min_speed") ? $("aircraft_min_speed").value : 0),
             }),
         });
         showStatus("radar-status", "Radar settings saved.");
@@ -857,7 +925,8 @@ async function saveAndReloadSettings() {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
-                distance_units: $("dist_units").value,
+                unit_preset: selectedUnitPreset(),
+                distance_units: distanceUnitFromSelect(),
                 scale_index: Number($("range_index").value),
                 min_height_ft: Number($("min_height").value),
                 max_height_ft: Number($("max_height").value),
@@ -875,6 +944,7 @@ async function saveAndReloadSettings() {
                 vfr_map_opacity: Number($("vfr_opacity") ? $("vfr_opacity").value : 45),
                 traffic_mode: $("traffic_mode").value,
                 vessel_min_speed_kt: Number($("vessel_min_speed") ? $("vessel_min_speed").value : 0),
+                aircraft_min_speed_kt: Number($("aircraft_min_speed") ? $("aircraft_min_speed").value : 0),
             }),
         });
         await jsonFetch("/display", {
@@ -1155,6 +1225,7 @@ $("night_mode").addEventListener("change", toggleDimRow);
 $("range_index").addEventListener("change", syncRangeSelect);
 $("bright_pct").addEventListener("input", syncBrightLabel);
 if ($("vfr_opacity")) $("vfr_opacity").addEventListener("input", syncVfrOpacityLabel);
+if ($("dist_units")) $("dist_units").addEventListener("change", syncMinSpeedUnitLabels);
 
 document.addEventListener("DOMContentLoaded", () => {
     loadAll();

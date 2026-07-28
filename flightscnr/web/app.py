@@ -641,6 +641,11 @@ def radar_json():
     return jsonify(
         {
             "distance_units": units,
+            "unit_preset": settings.unit_preset(),
+            "unit_preset_options": [
+                {"id": p, "label": settings.UNIT_PRESET_LABELS[p]} for p in settings.UNIT_PRESETS
+            ],
+            "speed_units": settings.speed_units(),
             "scale_index": idx,
             "range_value": scale.format_display_value(idx, units),
             "range_presets_mi": list(scale.PRESET_STATUTE_MILES),
@@ -660,6 +665,7 @@ def radar_json():
             "traffic_mode": settings.traffic_mode(),
             "ais_enabled": settings.ais_enabled(),
             "vessel_min_speed_kt": settings.vessel_min_speed_kt(),
+            "aircraft_min_speed_kt": settings.aircraft_min_speed_kt(),
             "map_style": settings.map_style(),
             "map_style_options": list(settings.MAP_STYLES),
             "vfr_map_opacity": settings.vfr_map_opacity(),
@@ -679,7 +685,9 @@ def radar_save():
     from display.round_touch import map_bg, rainviewer_overlay, scale, settings
 
     data = request.get_json(silent=True) or {}
-    if "distance_units" in data:
+    if "unit_preset" in data:
+        settings.set_unit_preset(str(data.get("unit_preset") or ""))
+    elif "distance_units" in data:
         settings.set_distance_units(data.get("distance_units"))
     units = settings.distance_units()
     if "range_value" in data:
@@ -768,6 +776,11 @@ def radar_save():
             settings.set_vessel_min_speed_kt(data.get("vessel_min_speed_kt"))
         except (TypeError, ValueError):
             return jsonify({"ok": False, "message": "vessel_min_speed_kt must be a number"}), 400
+    if "aircraft_min_speed_kt" in data:
+        try:
+            settings.set_aircraft_min_speed_kt(data.get("aircraft_min_speed_kt"))
+        except (TypeError, ValueError):
+            return jsonify({"ok": False, "message": "aircraft_min_speed_kt must be a number"}), 400
     if "dump1090_enabled" in data or "dump1090_url" in data:
         from secrets_store import save_secrets_from_portal
 

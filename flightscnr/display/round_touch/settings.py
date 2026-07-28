@@ -17,6 +17,8 @@ _disk_synced = True
 MIN_HEIGHT_OPTIONS = (0, 500, 1000, 1500, 2000, 2500, 3000, 3500, 4000, 4500, 5000)
 # AIS vessels slower than or equal to this (kt) are hidden; 0 = no speed floor.
 VESSEL_MIN_SPEED_OPTIONS = (0, 1, 2, 3, 5, 8, 10, 15)
+# Aircraft slower than or equal to this GS (kt) are hidden; 0 = no speed floor.
+AIRCRAFT_MIN_SPEED_OPTIONS = (0, 20, 40, 60, 80, 100, 150, 200)
 # Portal / persistence presets (fine steps).
 MAX_HEIGHT_OPTIONS = (
     1000, 1500, 2000, 2500, 3000, 3500, 4000, 4500, 5000,
@@ -27,7 +29,18 @@ MAX_HEIGHT_OPTIONS = (
 MAX_HEIGHT_CYCLE_OPTIONS = (
     3000, 5000, 10000, 15000, 20000, 30000, 45000, 100000,
 )
-TRAFFIC_MODES = ("aircraft", "marine", "both")
+TRAFFIC_MODES = ("Aircraft Only", "Marine Only", "Aircraft & Marine")
+# Distance + speed pairs for Display → Units (stored as "{dist}_{speed}").
+UNIT_PRESETS = ("nm_kts", "mi_mph", "km_kph", "mi_kts", "km_kts")
+UNIT_PRESET_LABELS = {
+    "nm_kts": "nm, kts",
+    "mi_mph": "mi, mph",
+    "km_kph": "km, kph",
+    "mi_kts": "mi, kts",
+    "km_kts": "km, kts",
+}
+_LEGACY_DISTANCE_TO_PRESET = {"km": "km_kph", "mi": "mi_mph", "nm": "nm_kts"}
+# Stored ids for basemap (labels live in map_style_label()).
 MAP_STYLES = ("dark", "light", "vfr")
 
 # Waveshare DSI panels stay lit near ~3% (raw ~8/255); 10% was needlessly bright at night.
@@ -48,6 +61,7 @@ def clamp_vfr_opacity_percent(value: int) -> int:
 _defaults = {
     "brightness_percent": 100,
     "distance_units": "km",
+    "unit_preset": "km_kph",
     "show_compass_rose": True,
     "show_range_rings": True,
     "show_aircraft_tag": True,
@@ -62,6 +76,8 @@ _defaults = {
     "show_ground_vehicles": True,
     # Hide AIS vessels at or below this SOG (knots). 0 = show all speeds.
     "vessel_min_speed_kt": 0,
+    # Hide aircraft at or below this ground speed (knots). 0 = show all speeds.
+    "aircraft_min_speed_kt": 0,
     "scale_index": 1,
     "theme_index": color_presets.DEFAULT_THEME_INDEX,
     "theme_custom": False,
@@ -140,6 +156,18 @@ def _snap_vessel_min_speed(value) -> int:
     return min(VESSEL_MIN_SPEED_OPTIONS, key=lambda opt: abs(opt - v))
 
 
+def _snap_aircraft_min_speed(value) -> int:
+    try:
+        v = int(round(float(value)))
+    except (TypeError, ValueError):
+        return 0
+    if v < 0:
+        v = 0
+    if v in AIRCRAFT_MIN_SPEED_OPTIONS:
+        return v
+    return min(AIRCRAFT_MIN_SPEED_OPTIONS, key=lambda opt: abs(opt - v))
+
+
 def _snap_max_height(value) -> int:
     try:
         v = int(value)
@@ -148,6 +176,21 @@ def _snap_max_height(value) -> int:
     if v in MAX_HEIGHT_OPTIONS:
         return v
     return min(MAX_HEIGHT_OPTIONS, key=lambda opt: abs(opt - v))
+
+
+def _normalize_unit_preset(value) -> str:
+    raw = str(value or "").strip().lower().replace(" ", "").replace(",", "_")
+    if raw in UNIT_PRESETS:
+        return raw
+    # Accept "nm, kts" / "mi mph" style labels.
+    compact = raw.replace("-", "_")
+    for key, label in UNIT_PRESET_LABELS.items():
+        if compact == label.replace(" ", "").replace(",", "_"):
+            return key
+    # Legacy distance-only values.
+    if raw in _LEGACY_DISTANCE_TO_PRESET:
+        return _LEGACY_DISTANCE_TO_PRESET[raw]
+    return "km_kph"
 
 
 def _env_min_height() -> int:
@@ -193,6 +236,9 @@ def _seed_from_env(state: dict) -> None:
         from display.round_touch import map_bg, scale
 
         state["distance_units"] = "mi" if DISTANCE_UNITS.strip().lower() == "imperial" else "km"
+        state["unit_preset"] = (
+            "mi_mph" if state["distance_units"] == "mi" else "km_kph"
+        )
         state["scale_index"] = scale.index_for_radius_nm(SEARCH_RADIUS_NM)
         state["min_height_ft"] = _snap_min_height(MIN_HEIGHT)
         state["max_height_ft"] = _snap_max_height(MAX_HEIGHT)
@@ -280,6 +326,24 @@ def _load():
     if "distance_units" not in state:
         state["distance_units"] = "km"
         migrated = True
+    # Compound distance+speed presets (nm,kts / mi,mph / …).
+    preset = _normalize_unit_preset(state.get("unit_preset"))
+    if "unit_preset" not in data or preset not in UNIT_PRESETS:
+        preset = _normalize_unit_preset(
+            state.get("unit_preset")
+            or _LEGACY_DISTANCE_TO_PRESET.get(
+                str(state.get("distance_units", "km")).lower(), "km_kph"
+            )
+        )
+        state["unit_preset"] = preset
+        migrated = True
+    else:
+        state["unit_preset"] = preset
+    # Keep distance_units in sync for range rings / older readers.
+    dist = preset.split("_", 1)[0]
+    if state.get("distance_units") != dist:
+        state["distance_units"] = dist
+        migrated = True
     if "tracked_stats_mode" in state:
         del state["tracked_stats_mode"]
         migrated = True
@@ -348,6 +412,13 @@ def _load():
         state["vessel_min_speed_kt"] = _snap_vessel_min_speed(
             state.get("vessel_min_speed_kt", 0)
         )
+    if "aircraft_min_speed_kt" not in data:
+        state["aircraft_min_speed_kt"] = 0
+        migrated = True
+    else:
+        state["aircraft_min_speed_kt"] = _snap_aircraft_min_speed(
+            state.get("aircraft_min_speed_kt", 0)
+        )
     if color_presets.migrate_theme_index(state):
         migrated = True
     if migrated:
@@ -367,6 +438,7 @@ def _settings_snapshot(state: dict) -> tuple:
     return (
         state.get("scale_index"),
         state.get("distance_units"),
+        state.get("unit_preset"),
         state.get("theme_index"),
         state.get("theme_custom"),
         tuple(color_presets.normalize_rgb(state.get("custom_theme_rgb"))),
@@ -380,6 +452,7 @@ def _settings_snapshot(state: dict) -> tuple:
         state.get("show_airports"),
         state.get("show_ground_vehicles"),
         state.get("vessel_min_speed_kt"),
+        state.get("aircraft_min_speed_kt"),
         state.get("min_height_ft"),
         state.get("max_height_ft"),
         state.get("brightness_percent"),
@@ -545,11 +618,27 @@ def set_brightness_percent(value: int, *, persist: bool = True):
         _disk_synced = False
 
 
+def unit_preset() -> str:
+    return _normalize_unit_preset(_state.get("unit_preset") or _state.get("distance_units"))
+
+
+def unit_preset_label() -> str:
+    return UNIT_PRESET_LABELS.get(unit_preset(), "km, kph")
+
+
 def distance_units() -> str:
-    units = str(_state.get("distance_units", "km")).lower()
-    if units not in ("km", "mi", "nm"):
-        return "km"
-    return units
+    """Distance half of the unit preset: km | mi | nm."""
+    preset = _normalize_unit_preset(_state.get("unit_preset") or _state.get("distance_units"))
+    dist = preset.split("_", 1)[0]
+    return dist if dist in ("km", "mi", "nm") else "km"
+
+
+def speed_units() -> str:
+    """Speed half of the unit preset: kts | mph | kph."""
+    preset = unit_preset()
+    parts = preset.split("_", 1)
+    speed = parts[1] if len(parts) > 1 else "kph"
+    return speed if speed in ("kts", "mph", "kph") else "kph"
 
 
 def distance_in_miles():
@@ -557,18 +646,25 @@ def distance_in_miles():
 
 
 def toggle_distance_units():
-    order = ["km", "mi", "nm"]
-    cur = distance_units()
-    _state["distance_units"] = order[(order.index(cur) + 1) % len(order)]
+    opts = UNIT_PRESETS
+    cur = unit_preset()
+    idx = opts.index(cur) if cur in opts else 0
+    nxt = opts[(idx + 1) % len(opts)]
+    _state["unit_preset"] = nxt
+    _state["distance_units"] = nxt.split("_", 1)[0]
     _save(_state)
 
 
 def set_distance_units(units: str):
-    raw = str(units or "").strip().lower()
-    if raw not in ("km", "mi", "nm"):
-        raw = "km"
-    _state["distance_units"] = raw
+    """Accept a unit preset id, label, or legacy km/mi/nm distance code."""
+    preset = _normalize_unit_preset(units)
+    _state["unit_preset"] = preset
+    _state["distance_units"] = preset.split("_", 1)[0]
     _save(_state)
+
+
+def set_unit_preset(value: str) -> None:
+    set_distance_units(value)
 
 
 def show_sweep_line() -> bool:
@@ -641,16 +737,32 @@ def set_show_ground_vehicles(enabled: bool):
     _save(_state)
 
 
+def format_speed_floor_label(kt: int) -> str:
+    """Display a knot-based speed floor using the global speed units.
+
+    Matches ``screens.common.format_speed``. Thresholds remain knots.
+    """
+    try:
+        value = int(kt)
+    except (TypeError, ValueError):
+        return "any"
+    if value <= 0:
+        return "any"
+    units = speed_units()
+    if units == "mph":
+        return f"{int(value * 1.15078)} mph"
+    if units == "kts":
+        return f"{int(value)} kts"
+    return f"{int(value * 1.852)} kph"
+
+
 def vessel_min_speed_kt() -> int:
     """Minimum SOG (knots) for AIS vessels on radar; 0 disables the floor."""
     return _snap_vessel_min_speed(_state.get("vessel_min_speed_kt", 0))
 
 
 def vessel_min_speed_label() -> str:
-    kt = vessel_min_speed_kt()
-    if kt <= 0:
-        return "any"
-    return f">{kt} kt"
+    return format_speed_floor_label(vessel_min_speed_kt())
 
 
 def cycle_vessel_min_speed():
@@ -666,14 +778,36 @@ def set_vessel_min_speed_kt(value) -> None:
     _save(_state)
 
 
+def aircraft_min_speed_kt() -> int:
+    """Minimum ground speed (knots) for aircraft on radar; 0 disables the floor."""
+    return _snap_aircraft_min_speed(_state.get("aircraft_min_speed_kt", 0))
+
+
+def aircraft_min_speed_label() -> str:
+    return format_speed_floor_label(aircraft_min_speed_kt())
+
+
+def cycle_aircraft_min_speed():
+    opts = AIRCRAFT_MIN_SPEED_OPTIONS
+    current = aircraft_min_speed_kt()
+    idx = opts.index(current) if current in opts else 0
+    _state["aircraft_min_speed_kt"] = opts[(idx + 1) % len(opts)]
+    _save(_state)
+
+
+def set_aircraft_min_speed_kt(value) -> None:
+    _state["aircraft_min_speed_kt"] = _snap_aircraft_min_speed(value)
+    _save(_state)
+
+
 def map_style() -> str:
     raw = str(_state.get("map_style") or "dark").strip().lower()
     return raw if raw in MAP_STYLES else "dark"
 
 
 def map_style_label() -> str:
-    labels = {"dark": "dark", "light": "light", "vfr": "VFR"}
-    return labels.get(map_style(), "dark")
+    labels = {"dark": "Dark", "light": "Light", "vfr": "VFR Sectional"}
+    return labels.get(map_style(), "Dark")
 
 
 def set_map_style(value: str) -> str:

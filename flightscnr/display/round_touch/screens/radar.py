@@ -457,6 +457,14 @@ def _above_min_height(flight) -> bool:
             and aircraft_type_icons.is_ground_vehicle(flight)
         ):
             return False
+        min_kt = float(settings.aircraft_min_speed_kt())
+        if min_kt > 0:
+            gs = flight.get("ground_speed")
+            try:
+                if gs is None or float(gs) <= min_kt:
+                    return False
+            except (TypeError, ValueError):
+                return False
     except Exception:
         pass
     try:
@@ -721,11 +729,16 @@ def _draw_flights(surface, flights):
             if pos:
                 rim_items.append((dist_km, flight, pos))
 
-    # Draw parked vessels under moving ones when hierarchy is on.
+    # Draw order: lower key first (underneath). Vessels under aircraft;
+    # within vessels, parked under moving when hierarchy is on.
     def _draw_order(item):
         dist_km, flight, _ = item
-        parked = 1 if vessel_declutter.is_parked(flight) else 0
-        return (parked, -dist_km)
+        layer = 0 if vessel_declutter.is_vessel(flight) else 1
+        if vessel_declutter.is_vessel(flight) and vessel_declutter.hierarchy_enabled():
+            vessel_rank = 0 if vessel_declutter.is_parked(flight) else 1
+        else:
+            vessel_rank = 1
+        return (layer, vessel_rank, -dist_km)
 
     rim_items.sort(key=_draw_order)
     inner_items.sort(key=_draw_order)
@@ -976,9 +989,12 @@ def pick_flight_at(flights, tap_x, tap_y, alt_x=None, alt_y=None):
 
     best = None
     best_d2 = None
+    best_score = None
     # Match the drawn glyph, not the wide callsign/type tag beside it.
     hit_r = max(theme.TAP_PICK_RADIUS, theme.AIRCRAFT_ICON_RADIUS + theme.s(10))
     hit_r2 = hit_r * hit_r
+    # Prefer aircraft when icons overlap — matches vessels-under-aircraft draw order.
+    vessel_bias = theme.s(10) ** 2
     for flight in _visible_flights(flights):
         if not aircraft_alert.is_shown_on_radar(flight):
             continue
@@ -988,9 +1004,13 @@ def pick_flight_at(flights, tap_x, tap_y, alt_x=None, alt_y=None):
         x, y = pos
         for px, py in points:
             d2 = (x - px) ** 2 + (y - py) ** 2
-            if d2 <= hit_r2 and (best_d2 is None or d2 < best_d2):
+            if d2 > hit_r2:
+                continue
+            score = d2 + (vessel_bias if vessel_declutter.is_vessel(flight) else 0)
+            if best_score is None or score < best_score:
                 best = flight
                 best_d2 = d2
+                best_score = score
     return best, best_d2
 
 

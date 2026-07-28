@@ -3,17 +3,28 @@
 from display.round_touch import draw, logos, settings, theme
 
 
-def format_speed(ground_speed) -> str | None:
-    """Format ground speed using display units from Settings → Display."""
-    if ground_speed is None or ground_speed <= 0:
+def format_speed(ground_speed, *, allow_zero: bool = False) -> str | None:
+    """Format ground/SOG speed (knots) using Display → Units speed half.
+
+    By default speeds ``<= 0`` are omitted (typical for missing ADS-B GS).
+    Pass ``allow_zero=True`` for AIS vessels that may be stationary.
+    """
+    if ground_speed is None:
         return None
-    kts = float(ground_speed)
-    units = settings.distance_units()
-    if units == "mi":
+    try:
+        kts = float(ground_speed)
+    except (TypeError, ValueError):
+        return None
+    if kts < 0:
+        return None
+    if kts <= 0 and not allow_zero:
+        return None
+    units = settings.speed_units()
+    if units == "mph":
         return f"{int(kts * 1.15078)} mph"
-    if units == "nm":
+    if units == "kts":
         return f"{int(kts)} kts"
-    return f"{int(kts * 1.852)} km/h"
+    return f"{int(kts * 1.852)} kph"
 
 
 def format_local_distance(dist_km: float) -> str:

@@ -15,6 +15,13 @@
 #   sudo bash install-pi.sh [install] [--no-start] [--skip-apt]
 #   bash install-pi.sh update
 #
+# If apt fails with "MergeList" / "no Package: header" (corrupt local index):
+#   sudo rm -rf /var/lib/apt/lists/*
+#   sudo apt-get clean
+#   sudo apt-get update
+#   sudo bash install-pi.sh
+# Or re-run install-pi.sh — it clears lists once and retries automatically.
+#
 set -euo pipefail
 
 ENV_DEST="/etc/flightscnr.env"
@@ -59,7 +66,28 @@ log_warn() { echo "    ⚠ $*"; }
 
 install_apt_packages() {
     log_step "Installing system packages"
-    apt-get update -qq
+
+    local update_log
+    update_log="$(mktemp /tmp/flightscnr-apt-update.XXXXXX)"
+    if ! apt-get update -qq >"$update_log" 2>&1; then
+        cat "$update_log" >&2
+        if grep -qiE \
+            'MergeList|no Package: header|package lists or status file could not be parsed' \
+            "$update_log"
+        then
+            log_warn "Corrupt apt package lists detected — clearing /var/lib/apt/lists and retrying once"
+            rm -rf /var/lib/apt/lists/*
+            mkdir -p /var/lib/apt/lists/partial
+            apt-get clean || true
+            apt-get update -qq
+        else
+            rm -f "$update_log"
+            echo "apt-get update failed (see output above)" >&2
+            exit 1
+        fi
+    fi
+    rm -f "$update_log"
+
     DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
         build-essential \
         python3-pip python3-venv python3-dev \
@@ -575,6 +603,11 @@ Usage:
   bash install-pi.sh update [--no-start]
       git pull + re-sync + restart (skips apt for speed)
       --no-start  skip service restart (portal update schedules it after status write)
+
+If apt fails with MergeList / "no Package: header" (corrupt index cache):
+  sudo rm -rf /var/lib/apt/lists/* && sudo apt-get clean && sudo apt-get update
+  sudo bash install-pi.sh
+  (install also auto-clears lists once and retries)
 
 EOF
 }
