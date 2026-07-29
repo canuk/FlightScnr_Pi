@@ -16,6 +16,8 @@ A [round **4in touch display**](https://www.waveshare.com/4inch-dsi-lcd-c.htm?&a
 
 Contributions are welcome. If you find a bug, have an idea, or want to improve the project, open a [pull request](https://github.com/yashmulgaonkar/FlightScnr_Pi/pulls). For larger changes, opening an [issue](https://github.com/yashmulgaonkar/FlightScnr_Pi/issues) first is helpful so we can discuss the approach.
 
+Join the [FlightScnrPi community on **Discord**](https://discord.gg/wjqgUjv8Re) for any questions or troubleshooting help.
+
 ---
 
 ## What it does
