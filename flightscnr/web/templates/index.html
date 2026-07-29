@@ -75,6 +75,16 @@
         .update-ver{font-size:.82rem;color:var(--muted);margin:.15rem 0}
         .btn-danger{background:#4a1515;border-color:#7a2222}
         .btn-danger:hover{background:#5c1a1a}
+        .fav-list{margin-top:.35rem}
+        .fav-row{display:flex;gap:.55rem;align-items:flex-start;padding:.65rem 0;
+        border-bottom:1px solid rgba(120,120,120,.22)}
+        .fav-row:last-child{border-bottom:none}
+        .fav-meta{flex:1;min-width:0}
+        .fav-meta strong{display:block;font-size:.92rem}
+        .fav-meta span{display:block;font-size:.78rem;color:var(--muted);margin-top:.15rem;
+        word-break:break-word}
+        .fav-empty{color:var(--muted);font-size:.88rem;padding:.4rem 0 .2rem}
+        .btn-sm{padding:.4rem .65rem;font-size:.8rem}
         .system-card .body{padding-top:.75rem}
         .hidden{display:none}
     </style>
@@ -249,6 +259,34 @@
             <p class="hint">Hide aircraft at or below this ground speed. Use to declutter taxiing/parked traffic while keeping airborne movers. Options follow the Distance units setting above.</p>
             <button class="btn btn-primary" id="btn-radar" style="margin-top:.7rem" type="button">Save radar settings</button>
             <div id="radar-status" class="status"></div>
+        </div>
+    </details>
+
+    <details class="card" open>
+        <summary><span class="ico">&#9873;</span>Favorite Locations<span class="sum">saved centers, up to 10</span><span class="chev">&#9656;</span></summary>
+        <div class="body">
+            <details class="card" open style="margin:0 0 .75rem;border-color:var(--fline)">
+                <summary><span class="ico">&#43;</span>Add New Location<span class="sum">Location Details</span><span class="chev">&#9656;</span></summary>
+                <div class="body">
+                    <label for="fav_icao">ICAO Code (optional)</label>
+                    <input id="fav_icao" type="text" autocomplete="off" placeholder="e.g. EGLL" maxlength="4">
+                    <button class="btn btn-sm" id="btn-fav-search" style="margin:.35rem 0 .55rem" type="button">Search ICAO</button>
+                    <label for="fav_name">Location Name</label>
+                    <input id="fav_name" type="text" autocomplete="off" placeholder="e.g. Heathrow" maxlength="40">
+                    <label for="fav_position">Location Position (lat, lon)</label>
+                    <input id="fav_position" type="text" autocomplete="off" placeholder="e.g. 51.470748, -0.459909">
+                    <p class="hint">Radar center above is Home. After Set Radar Center on the Pi you can Update the active favorite, Save as Home, or keep as Custom. The last center is what reboot restores. Max 10 favorites.</p>
+                    <button class="btn btn-primary" id="btn-fav-add" style="margin-top:.5rem" type="button">Add location</button>
+                    <div id="fav-add-status" class="status"></div>
+                </div>
+            </details>
+            <details class="card" open style="margin:0;border-color:var(--fline)">
+                <summary><span class="ico">&#9733;</span>Saved Locations<span class="sum">up to 10</span><span class="chev">&#9656;</span></summary>
+                <div class="body">
+                    <div id="fav-list" class="fav-list"><p class="fav-empty">No locations saved yet.</p></div>
+                    <div id="fav-list-status" class="status"></div>
+                </div>
+            </details>
         </div>
     </details>
 
@@ -805,6 +843,10 @@ async function loadAll() {
     } catch (_) {}
 
     try {
+        await loadFavourites();
+    } catch (_) {}
+
+    try {
         const t = await jsonFetch("/tracked/json");
         $("current-tracked").textContent = t.callsign ? `Currently tracking: ${t.callsign}` : "Not currently tracking a flight.";
     } catch (_) {}
@@ -1103,6 +1145,93 @@ async function saveAlerts() {
     }
 }
 
+function escapeHtml(s) {
+    return String(s ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+}
+
+async function loadFavourites() {
+    const data = await jsonFetch("/favourites/json");
+    const list = $("fav-list");
+    const locs = data.locations || [];
+    if (!locs.length) {
+        list.innerHTML = '<p class="fav-empty">No locations saved yet.</p>';
+        return data;
+    }
+    list.innerHTML = locs.map((loc) => {
+        const icao = loc.icao ? ` · ${escapeHtml(loc.icao)}` : "";
+        const pos = `${Number(loc.lat).toFixed(6)}, ${Number(loc.lon).toFixed(6)}`;
+        return `<div class="fav-row">
+            <div class="fav-meta">
+                <strong>${escapeHtml(loc.name)}${icao}</strong>
+                <span>${escapeHtml(pos)}</span>
+            </div>
+            <button class="btn btn-sm btn-danger" type="button" data-fav-delete="${escapeHtml(loc.id)}">Delete</button>
+        </div>`;
+    }).join("");
+    return data;
+}
+
+async function searchFavouriteIcao() {
+    clearStatus("fav-add-status");
+    const code = ($("fav_icao").value || "").trim().toUpperCase();
+    if (!code) {
+        showStatus("fav-add-status", "Enter an ICAO or IATA code first.", true);
+        return;
+    }
+    try {
+        const data = await jsonFetch(`/airports/lookup?code=${encodeURIComponent(code)}`);
+        if (data.icao) $("fav_icao").value = data.icao;
+        if (data.name && !($("fav_name").value || "").trim()) $("fav_name").value = data.name;
+        $("fav_position").value =
+            `${Number(data.lat).toFixed(6)}, ${Number(data.lon).toFixed(6)}`;
+        showStatus("fav-add-status", `Found ${data.name || data.icao}. Edit the name if you like, then Add.`);
+    } catch (e) {
+        showStatus("fav-add-status", e.message, true);
+    }
+}
+
+async function addFavourite() {
+    clearStatus("fav-add-status");
+    try {
+        const data = await jsonFetch("/favourites/add", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                icao: ($("fav_icao").value || "").trim().toUpperCase(),
+                name: ($("fav_name").value || "").trim(),
+                position: ($("fav_position").value || "").trim(),
+            }),
+        });
+        $("fav_icao").value = "";
+        $("fav_name").value = "";
+        $("fav_position").value = "";
+        showStatus("fav-add-status", data.message || "Added.");
+        await loadFavourites();
+    } catch (e) {
+        showStatus("fav-add-status", e.message, true);
+    }
+}
+
+async function deleteFavourite(id) {
+    clearStatus("fav-list-status");
+    if (!id) return;
+    try {
+        const data = await jsonFetch("/favourites/delete", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ id }),
+        });
+        showStatus("fav-list-status", data.message || "Deleted.");
+        await loadFavourites();
+    } catch (e) {
+        showStatus("fav-list-status", e.message, true);
+    }
+}
+
 async function saveApiKeys(restart) {
     clearStatus("api-keys-status");
     try {
@@ -1292,6 +1421,13 @@ $("btn-cancel-save").addEventListener("click", cancelSave);
 $("btn-route").addEventListener("click", searchRoute);
 $("btn-keys-save").addEventListener("click", () => saveApiKeys(false));
 $("btn-keys-restart").addEventListener("click", () => saveApiKeys(true));
+$("btn-fav-search").addEventListener("click", searchFavouriteIcao);
+$("btn-fav-add").addEventListener("click", addFavourite);
+$("fav-list").addEventListener("click", (ev) => {
+    const btn = ev.target.closest("[data-fav-delete]");
+    if (!btn) return;
+    deleteFavourite(btn.getAttribute("data-fav-delete"));
+});
 $("night_mode").addEventListener("change", toggleDimRow);
 $("range_index").addEventListener("change", syncRangeSelect);
 $("bright_pct").addEventListener("input", syncBrightLabel);

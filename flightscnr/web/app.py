@@ -20,7 +20,6 @@ if BASE_DIR not in sys.path:
 
 from config import (
     WEB_PORT,
-    format_location_home,
     location_configured,
     parse_lat_lon_pair,
     reload_location_override,
@@ -322,8 +321,17 @@ def location_json():
     reload_location_override()
     if not location_configured():
         return jsonify({"location": "", "configured": False})
+    # Portal edits Home (cycle slot); live/reboot center is location.json.
+    try:
+        from utilities import favourite_locations
+
+        location = favourite_locations.format_home_location()
+    except Exception:
+        from config import format_location_home
+
+        location = format_location_home()
     return jsonify({
-        "location": format_location_home(),
+        "location": location,
         "configured": True,
     })
 
@@ -341,6 +349,9 @@ def location_set():
     except ValueError as exc:
         return jsonify({"message": str(exc)}), 400
     try:
+        from utilities import favourite_locations
+
+        favourite_locations.set_home(lat, lon)
         set_location_home(lat, lon)
         # Force weather + timezone for the new center (display also refreshes
         # when it picks up location.json).
@@ -362,11 +373,107 @@ def location_set():
         except Exception:
             print("Map/precip refresh after location save failed")
         return jsonify({
-            "message": f"Radar center saved: {format_location_home()}",
-            "location": format_location_home(),
+            "message": f"Radar center saved: {favourite_locations.format_home_location()}",
+            "location": favourite_locations.format_home_location(),
         })
     except Exception as e:
         return jsonify({"message": f"Error saving location: {e}"}), 500
+
+
+@app.get("/airports/lookup")
+def airports_lookup():
+    code = (request.args.get("code") or "").strip()
+    try:
+        from utilities import favourite_locations
+
+        result = favourite_locations.lookup_icao(code)
+    except ValueError as exc:
+        return jsonify({"found": False, "message": str(exc)}), 404
+    except Exception as exc:
+        return jsonify({"found": False, "message": str(exc)}), 500
+    return jsonify({"found": True, **result})
+
+
+@app.get("/favourites/json")
+def favourites_json():
+    from utilities import favourite_locations
+
+    hlat, hlon = favourite_locations.home_coords()
+    return jsonify({
+        "locations": favourite_locations.locations(),
+        "active_index": favourite_locations.active_index(),
+        "max": favourite_locations.MAX_FAVOURITES,
+        "home": {
+            "lat": hlat,
+            "lon": hlon,
+            "label": favourite_locations.format_home_location(),
+        },
+    })
+
+
+@app.post("/favourites/add")
+def favourites_add():
+    from utilities import favourite_locations
+
+    data = request.get_json(force=True) or {}
+    name = (data.get("name") or "").strip()
+    icao = (data.get("icao") or "").strip().upper()
+    raw_pos = (data.get("position") or data.get("location") or "").strip()
+    lat = lon = None
+    if raw_pos:
+        try:
+            lat, lon = parse_lat_lon_pair(raw_pos)
+        except ValueError as exc:
+            return jsonify({"message": str(exc)}), 400
+    elif data.get("lat") is not None and data.get("lon") is not None:
+        try:
+            lat = float(data["lat"])
+            lon = float(data["lon"])
+        except (TypeError, ValueError) as exc:
+            return jsonify({"message": f"Invalid coordinates: {exc}"}), 400
+    if icao and (not name or lat is None):
+        try:
+            looked = favourite_locations.lookup_icao(icao)
+        except ValueError as exc:
+            return jsonify({"message": str(exc)}), 400
+        if not name:
+            name = looked["name"]
+        if lat is None:
+            lat, lon = looked["lat"], looked["lon"]
+        icao = looked.get("icao") or icao
+    if lat is None or lon is None:
+        return jsonify({"message": "Enter coordinates or search an ICAO code"}), 400
+    if not name:
+        return jsonify({"message": "Enter a location name"}), 400
+    try:
+        entry = favourite_locations.add_location(
+            name=name, lat=lat, lon=lon, icao=icao
+        )
+    except ValueError as exc:
+        return jsonify({"message": str(exc)}), 400
+    except Exception as exc:
+        return jsonify({"message": f"Error saving favourite: {exc}"}), 500
+    return jsonify({"message": f"Added {entry['name']}.", "location": entry})
+
+
+@app.post("/favourites/delete")
+def favourites_delete():
+    from utilities import favourite_locations
+
+    data = request.get_json(force=True) or {}
+    entry_id = (data.get("id") or "").strip()
+    if not entry_id:
+        return jsonify({"message": "Missing favourite id"}), 400
+    try:
+        ok = favourite_locations.delete_location(entry_id)
+    except Exception as exc:
+        return jsonify({"message": f"Error deleting favourite: {exc}"}), 500
+    if not ok:
+        return jsonify({"message": "Favourite not found"}), 404
+    return jsonify({
+        "message": "Favourite deleted.",
+        "locations": favourite_locations.locations(),
+    })
 
 
 @app.post("/tracked/set")

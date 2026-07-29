@@ -194,6 +194,31 @@ def set_location_home(lat: float, lon: float):
         _location_file_mtime = None
 
 
+def apply_location_home(lat: float, lon: float, *, source: str = "favourite") -> bool:
+    """Apply radar center in memory only (does not update location.json).
+
+    Prefer ``set_location_home`` when the center should survive reboot.
+    """
+    return _apply_home(lat, lon, source)
+
+
+def master_location_home() -> tuple[float, float]:
+    """Persisted reboot-default center from location.json, else current home."""
+    if os.path.isfile(LOCATION_FILE):
+        try:
+            with open(LOCATION_FILE, encoding="utf-8") as fh:
+                data = json.load(fh)
+            return float(data["lat"]), float(data["lon"])
+        except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError):
+            pass
+    return float(LOCATION_HOME[0]), float(LOCATION_HOME[1])
+
+
+def format_master_location() -> str:
+    lat, lon = master_location_home()
+    return f"{lat:.6f}, {lon:.6f}"
+
+
 def reload_location_override() -> bool:
     """Reload location.json when changed by another process (e.g. web portal)."""
     global _location_file_mtime

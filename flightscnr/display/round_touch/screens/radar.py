@@ -42,6 +42,8 @@ _frame_layer: pygame.Surface | None = None
 _frame_layer_key = None
 _frame_layer_at = 0.0
 _frame_layer_gen = 0
+# True when the published layer includes an alert rim stroke (rebuild to clear).
+_rim_baked_in_layer = False
 # How often the fire/aircraft layer is rebuilt. The beam wants ~60fps, but
 # redrawing every icon and tag costs ~6–20ms, so aircraft refresh at ~5Hz —
 # still smooth for traffic, and halves worker SDL/GIL contention vs the
@@ -55,7 +57,12 @@ _layer_build_cost_s = 0.0
 
 
 def _layer_ttl_s() -> float:
-    return max(_FRAME_LAYER_TTL_S, _layer_build_cost_s * 3.0)
+    ttl = max(_FRAME_LAYER_TTL_S, _layer_build_cost_s * 3.0)
+    # Rim pulse is ~2Hz; keep the baked stroke in sync without leaving the
+    # fast dirty-rect present path.
+    if aircraft_alert.rim_flash_active():
+        return min(ttl, 0.12)
+    return ttl
 
 
 def _init_sweep():
@@ -90,10 +97,12 @@ def take_rebuild_counts() -> dict:
 def invalidate_frame_layer() -> None:
     """Force the fire/aircraft layer to rebuild on the next radar frame."""
     global _frame_layer, _frame_layer_key, _frame_layer_at, _frame_layer_gen
+    global _rim_baked_in_layer
     _frame_layer = None
     _frame_layer_key = None
     _frame_layer_at = 0.0
     _frame_layer_gen += 1
+    _rim_baked_in_layer = False
     # Keep spare/cooling buffers so the next rebuild paints a free surface
     # instead of the one present may still be reading.
 
@@ -121,6 +130,8 @@ _layer_lock = threading.Lock()
 
 def frame_layer_due() -> bool:
     """True when the ~10Hz aircraft layer wants a rebuild before the next frame."""
+    if _rim_baked_in_layer and not aircraft_alert.rim_flash_active():
+        return True
     return _frame_layer is None or (
         time.time() - _frame_layer_at
     ) >= _layer_ttl_s() - theme.SWEEP_FRAME_MS / 1000.0
@@ -136,7 +147,7 @@ def _take_build_surface() -> pygame.Surface:
     return build
 
 
-def _publish_frame_layer(build: pygame.Surface, key) -> pygame.Surface:
+def _publish_frame_layer(build: pygame.Surface, key, *, rim_baked: bool = False) -> pygame.Surface:
     """Publish ``build`` and retire the previous layer through a cooling slot.
 
     Triple-buffer: published (readable) → cooling (one-gen grace) → spare
@@ -144,12 +155,13 @@ def _publish_frame_layer(build: pygame.Surface, key) -> pygame.Surface:
     blit/present and raises ``pygame.error: Surfaces must not be locked``.
     """
     global _frame_layer, _frame_layer_key, _frame_layer_at, _frame_layer_gen
-    global _layer_spare, _layer_cooling
+    global _layer_spare, _layer_cooling, _rim_baked_in_layer
     old = _frame_layer
     _frame_layer = build
     _frame_layer_key = key
     _frame_layer_at = time.time()
     _frame_layer_gen += 1
+    _rim_baked_in_layer = bool(rim_baked)
     if (
         _layer_cooling is not None
         and _layer_cooling.get_size() == (theme.SIZE, theme.SIZE)
@@ -164,8 +176,11 @@ def _publish_frame_layer(build: pygame.Surface, key) -> pygame.Surface:
     return build
 
 
-def _build_frame_layer(build: pygame.Surface, backdrop, flights, offset) -> None:
-    """Paint fires/aircraft/status onto ``build`` (caller owns locking)."""
+def _build_frame_layer(build: pygame.Surface, backdrop, flights, offset) -> bool:
+    """Paint fires/aircraft/status onto ``build`` (caller owns locking).
+
+    Returns True when an alert rim stroke was baked into ``build``.
+    """
     global _layer_build_cost_s
     _t0 = _t = time.perf_counter()
     build.blit(backdrop, (0, 0))
@@ -178,8 +193,17 @@ def _build_frame_layer(build: pygame.Surface, backdrop, flights, offset) -> None
     _draw_map_attribution(build)
     _t = _rebuild_stage("2r_status", _t)
     # Bake the round mask here: aircraft and tags are the only things that reach
-    # past the rim; sweep/rim flash drawn on top stay inside the circle.
+    # past the rim; sweep drawn on top stays inside the circle. Alert rim is
+    # baked into the static layer so the fast dirty-rect present path can stay
+    # active (drawing the rim into the logical buffer every tick forced a
+    # full-frame rotate/flip and strobed the display).
     draw.apply_round_bezel(build)
+    rim_baked = False
+    if aircraft_alert.rim_flash_active():
+        color = aircraft_alert.rim_flash_color()
+        if color is not None:
+            _draw_alert_rim_flash(build)
+            rim_baked = True
     _rebuild_stage("2r_bezel", _t)
     cost = time.perf_counter() - _t0
     # Stronger decay toward cheap steady-state so cold misses don't lock TTL.
@@ -187,6 +211,7 @@ def _build_frame_layer(build: pygame.Surface, backdrop, flights, offset) -> None
         cost if _layer_build_cost_s <= 0.0
         else 0.5 * _layer_build_cost_s + 0.5 * cost
     )
+    return rim_baked
 
 
 def prewarm_frame_layer(flights) -> None:
@@ -212,7 +237,7 @@ def prewarm_frame_layer(flights) -> None:
 
     # Paint while only this worker owns ``build`` — do not hold _layer_lock.
     _rebuild_counts["layer"] += 1
-    _build_frame_layer(build, backdrop, flights, None)
+    rim_baked = _build_frame_layer(build, backdrop, flights, None)
     # Private snapshot before publish: rotation.prewarm_base must never lock
     # the live published surface concurrent with present/blit.
     snap = build.copy()
@@ -223,7 +248,7 @@ def prewarm_frame_layer(flights) -> None:
             if _layer_spare is None and build.get_size() == (theme.SIZE, theme.SIZE):
                 _layer_spare = build
             return
-        _publish_frame_layer(build, (theme.SIZE, backdrop_gen))
+        _publish_frame_layer(build, (theme.SIZE, backdrop_gen), rim_baked=rim_baked)
         gen = _frame_layer_gen
 
     from display.round_touch import rotation
@@ -341,8 +366,8 @@ def _ensure_frame_layer(backdrop, flights, offset) -> pygame.Surface | None:
         # Never paint into the published surface — present/rim-flash may still
         # be blitting it. Same spare→publish→cool path as prewarm_frame_layer.
         build = _take_build_surface()
-        _build_frame_layer(build, backdrop, flights, offset)
-        return _publish_frame_layer(build, key)
+        rim_baked = _build_frame_layer(build, backdrop, flights, offset)
+        return _publish_frame_layer(build, key, rim_baked=rim_baked)
     finally:
         _layer_lock.release()
 
@@ -356,6 +381,7 @@ def draw_radar(
     pan_mode: bool = False,
     pan_offset: tuple[int, int] | None = None,
     pan_release_to_save: bool = False,
+    pan_commit_choice: bool = False,
 ) -> bool:
     """Draw the radar. Returns True when the round bezel is already applied."""
     alert_prefs.reload()
@@ -385,12 +411,23 @@ def draw_radar(
         )
     elif calibrate:
         _draw_facing_calibrate_overlay(surface)
+    elif pan_commit_choice:
+        # Live center already applied; ask how to book-mark it.
+        layer = _ensure_frame_layer(backdrop, flights, offset)
+        if layer is not None:
+            try:
+                surface.blit(layer, (0, 0))
+            except pygame.error as exc:
+                if "locked" not in str(exc).lower():
+                    raise
+            bezel_applied = True
+        _draw_pan_commit_overlay(surface)
     else:
         layer = _ensure_frame_layer(backdrop, flights, offset)
         if layer is not None:
             # Fast present composites from this layer directly; skip the unused
             # logical-buffer blit (~3–4ms) while the sweep is animating.
-            if not settings.show_sweep_line() or aircraft_alert.rim_flash_active():
+            if not settings.show_sweep_line():
                 try:
                     surface.blit(layer, (0, 0))
                 except pygame.error as exc:
@@ -404,20 +441,18 @@ def draw_radar(
             _draw_flights(surface, flights)
             _draw_status(surface, flights)
             _draw_map_attribution(surface)
+            if aircraft_alert.rim_flash_active():
+                _draw_alert_rim_flash(surface)
         # Sweep is composited in present() on the fast path so we can skip a
         # full-frame rotate every tick. Fall back to in-buffer draw when the
-        # layer isn't available (or during alert rim flash).
-        if settings.show_sweep_line() and (
-            layer is None or aircraft_alert.rim_flash_active()
-        ):
+        # layer isn't available.
+        if settings.show_sweep_line() and layer is None:
             draw.draw_sweep_line(
                 surface,
                 current_sweep_angle(),
                 theme.SWEEP,
                 width=max(2, theme.s(2)),
             )
-        if aircraft_alert.rim_flash_active():
-            _draw_alert_rim_flash(surface)
 
     return bezel_applied
 
@@ -976,6 +1011,86 @@ def _draw_map_pan_overlay(
         max(3, theme.s(4)),
         max(1, theme.s(2)),
     )
+
+
+# Last-drawn commit-choice button rects for hit testing (logical coords).
+_pan_commit_buttons: list[tuple[str, pygame.Rect]] = []
+
+
+def _draw_pan_commit_overlay(surface):
+    """After a pan save: choose Update favorite / Save as Home / rim=Custom."""
+    global _pan_commit_buttons
+    from utilities import favourite_locations
+
+    title = draw.load_font(theme.s(14), bold=True)
+    font = draw.load_font(theme.s(11))
+    fav = favourite_locations.active_favorite()
+    buttons: list[tuple[str, str]] = []
+    if fav is not None:
+        name = (fav.get("name") or "Favorite")[:14]
+        buttons.append(("update_fav", f"Update {name}"))
+    buttons.append(("save_home", "Save as Home"))
+
+    lines = [
+        ("Center saved", title, theme.LABEL),
+        ("Choose how to store it", font, theme.HINT),
+        ("Tap rim to keep as Custom", font, theme.MUTED),
+    ]
+    pad_x = theme.s(10)
+    pad_y = theme.s(8)
+    gap = theme.s(2)
+    btn_h = theme.s(28)
+    btn_gap = theme.s(6)
+    rendered = [(fo.render(text, True, color), fo) for text, fo, color in lines]
+    text_w = max(r.get_width() for r, _ in rendered)
+    btn_font = draw.load_font(theme.s(12), bold=True)
+    btn_labels = [btn_font.render(label, True, theme.LABEL) for _, label in buttons]
+    btn_inner_w = max((b.get_width() for b in btn_labels), default=theme.s(80))
+    btn_w = max(theme.s(120), btn_inner_w + theme.s(16))
+    text_h = sum(r.get_height() for r, _ in rendered) + gap * (len(rendered) - 1)
+    panel_w = max(text_w, btn_w) + pad_x * 2
+    panel_h = (
+        text_h
+        + pad_y * 2
+        + btn_gap
+        + len(buttons) * btn_h
+        + max(0, len(buttons) - 1) * btn_gap
+    )
+    panel_rect = pygame.Rect(0, 0, panel_w, panel_h)
+    panel_rect.centerx = theme.CENTER_X
+    panel_rect.centery = theme.CENTER_Y + theme.s(8)
+    panel = pygame.Surface((panel_w, panel_h), pygame.SRCALPHA)
+    panel.fill((0, 0, 0, 210))
+    pygame.draw.rect(panel, (*theme.GRID[:3], 100), panel.get_rect(), max(1, theme.s(1)))
+    surface.blit(panel, panel_rect.topleft)
+    y = panel_rect.top + pad_y
+    for surf, _fo in rendered:
+        surface.blit(surf, surf.get_rect(midtop=(theme.CENTER_X, y)))
+        y += surf.get_height() + gap
+    y += btn_gap
+    _pan_commit_buttons = []
+    for (action, _label), label_surf in zip(buttons, btn_labels):
+        btn_rect = pygame.Rect(0, 0, btn_w, btn_h)
+        btn_rect.centerx = theme.CENTER_X
+        btn_rect.top = y
+        pygame.draw.rect(surface, (40, 40, 40), btn_rect, border_radius=theme.s(6))
+        pygame.draw.rect(
+            surface, theme.GRID, btn_rect, max(1, theme.s(1)), border_radius=theme.s(6)
+        )
+        surface.blit(label_surf, label_surf.get_rect(center=btn_rect.center))
+        _pan_commit_buttons.append((action, btn_rect.copy()))
+        y += btn_h + btn_gap
+
+
+def pan_commit_hit(x: int, y: int) -> str | None:
+    """Return 'update_fav', 'save_home', 'custom' (rim), or None."""
+    for action, rect in _pan_commit_buttons:
+        if rect.collidepoint(x, y):
+            return action
+    dist = math.hypot(x - theme.CENTER_X, y - theme.CENTER_Y)
+    if dist >= theme.VISIBLE_RADIUS - theme.s(48):
+        return "custom"
+    return None
 
 
 def _draw_facing_calibrate_overlay(surface):

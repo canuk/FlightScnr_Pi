@@ -51,6 +51,7 @@ FOOTER_BUTTONS = ("prev", "next", "radar")
 DISPLAY_ACTIONS = (
     "facing",
     "recenter",
+    "favourite",
     "compass",
     "range_rings",
     "sweep",
@@ -443,14 +444,18 @@ def display_action_at(page: int, row: int) -> str | None:
 
 
 def _display_row_labels() -> list[str]:
+    from utilities import favourite_locations
+
     rose = "on" if settings.show_compass_rose() else "off"
     rings = "on" if settings.show_range_rings() else "off"
     facing = settings.facing_label()
     sweep = "on" if settings.show_sweep_line() else "off"
+    fav = favourite_locations.active_label()
     # Brightness is drawn as a slider; placeholder keeps row count aligned.
     return [
         f"Change Compass Heading: {facing}",
         "Click to Set Radar Center",
+        f"Favorite Locations: {fav}",
         f"Compass Rose: {rose}",
         f"Radar Range Rings: {rings}",
         f"Radar Sweep Line: {sweep}",

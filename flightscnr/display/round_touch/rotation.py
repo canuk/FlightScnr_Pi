@@ -186,7 +186,10 @@ def present_radar_sweep(
             if frame_debug.ENABLED:
                 frame_debug.stage("4r_rotate", time.perf_counter() - _t)
 
-    if swap_in:
+    if swap_in or (_needs_full and _rot_base is not None):
+        # swap_in: new static layer. _needs_full: another screen (settings, etc.)
+        # overwrote the framebuffer — dirty-rect erase would paint the sweep on
+        # stale pixels and look like a full refresh every beam step.
         if display.get_size() != _rot_base.get_size():
             display.fill((0, 0, 0))
             origin_off = _center_offset(display, _rot_base)

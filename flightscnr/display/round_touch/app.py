@@ -188,6 +188,9 @@ class RoundTouchDisplay:
         self._pan_drag_start = None
         self._long_press_pan = long_press_pan.LongPressPanController()
         self._pan_drag_was_active = False
+        self._pan_commit_choice = False
+        self._pan_commit_lat: float | None = None
+        self._pan_commit_lon: float | None = None
         self._frame_draws: list[float] = []
         self._frame_gaps: list[float] = []
         self._frame_prev_at = 0.0
@@ -517,7 +520,7 @@ class RoundTouchDisplay:
             and settings.show_sweep_line()
             and not self._calibrating_facing
             and not self._panning_map
-            and not aircraft_alert.rim_flash_active()
+            and not self._pan_commit_choice
         ):
             layer, layer_gen = radar.frame_layer_snapshot()
             if layer is not None:
@@ -583,6 +586,7 @@ class RoundTouchDisplay:
                 pan_mode=self._panning_map,
                 pan_offset=self._pan_offset if self._panning_map else None,
                 pan_release_to_save=self._long_press_pan.from_long_press,
+                pan_commit_choice=self._pan_commit_choice,
             )
             if FRAME_DEBUG:
                 self._stage("2_radar", time.perf_counter() - _t)
@@ -839,8 +843,12 @@ class RoundTouchDisplay:
         )
 
     def _radar_modal_active(self) -> bool:
-        """Facing calibrate or map pan — swallow navigation and pause traffic."""
-        return self._calibrating_facing or self._panning_map
+        """Facing calibrate, map pan, or post-pan bookmark choice."""
+        return (
+            self._calibrating_facing
+            or self._panning_map
+            or self._pan_commit_choice
+        )
 
     def _return_to_radar(self):
         self._fatal_error = None
@@ -848,6 +856,8 @@ class RoundTouchDisplay:
             self._cancel_facing_calibrate()
         if self._panning_map:
             self._cancel_map_pan()
+        if self._pan_commit_choice:
+            self._cancel_pan_commit_choice()
         previous = self.screen
         if self.screen == SCREEN_TRACKED:
             tracked.reset_marquee()
@@ -878,7 +888,9 @@ class RoundTouchDisplay:
             return
         try:
             flights = self._radar_flights() if hasattr(self, "_radar_flights") else self.flights
-            aircraft_alert.reflash_for_visible_alerts(flights or self.flights)
+            if aircraft_alert.reflash_for_visible_alerts(flights or self.flights):
+                # Bake the rim into the next layer rebuild (fast present path).
+                radar.invalidate_frame_layer()
         except Exception:
             logger.debug("Alert reflash on radar entry failed", exc_info=True)
 
@@ -936,6 +948,8 @@ class RoundTouchDisplay:
             self._begin_facing_calibrate()
         elif action == "recenter":
             self._begin_map_pan()
+        elif action == "favourite":
+            self._cycle_favourite_location()
         elif action == "aircraft_tag":
             settings.toggle_show_aircraft_tag()
         elif action == "min_height":
@@ -1036,18 +1050,16 @@ class RoundTouchDisplay:
         self._long_press_pan.clear_from_long_press()
         self._refresh_flights()
 
-    def _save_map_pan(self):
-        """Persist the geographic point under the crosshair as LOCATION_HOME."""
-        if not self._panning_map:
-            return
-        from config import set_location_home
-        from display.round_touch import geo, weather_data
+    def _cancel_pan_commit_choice(self):
+        self._pan_commit_choice = False
+        self._pan_commit_lat = None
+        self._pan_commit_lon = None
 
-        ox, oy = self._pan_offset
-        lat, lon = geo.screen_to_lat_lon(
-            theme.CENTER_X - ox,
-            theme.CENTER_Y - oy,
-        )
+    def _apply_live_center(self, lat: float, lon: float) -> None:
+        """Persist live/reboot center and refresh map layers."""
+        from config import set_location_home
+        from display.round_touch import weather_data
+
         set_location_home(lat, lon)
         map_bg.invalidate()
         map_bg.prewarm_all_scales()
@@ -1056,11 +1068,6 @@ class RoundTouchDisplay:
         wildfire_overlay.invalidate()
         wildfire_overlay.request_refresh(force=True)
         self._position_smoother.reset()
-        self._panning_map = False
-        self._pan_offset = (0, 0)
-        self._pan_drag_start = None
-        self._pan_drag_was_active = False
-        self._long_press_pan.clear_from_long_press()
 
         def _after_recenter():
             try:
@@ -1071,6 +1078,76 @@ class RoundTouchDisplay:
                 self._weather_redraw_pending = True
 
         Thread(target=_after_recenter, daemon=True).start()
+        self.overhead.grab_data()
+        self._refresh_flights()
+
+    def _save_map_pan(self):
+        """Apply live center, then ask how to bookmark it (favorite / Home / Custom)."""
+        if not self._panning_map:
+            return
+        from display.round_touch import geo
+
+        ox, oy = self._pan_offset
+        lat, lon = geo.screen_to_lat_lon(
+            theme.CENTER_X - ox,
+            theme.CENTER_Y - oy,
+        )
+        self._panning_map = False
+        self._pan_offset = (0, 0)
+        self._pan_drag_start = None
+        self._pan_drag_was_active = False
+        self._long_press_pan.clear_from_long_press()
+        self._apply_live_center(lat, lon)
+        self._pan_commit_lat = lat
+        self._pan_commit_lon = lon
+        self._pan_commit_choice = True
+
+    def _finish_pan_commit_choice(self, action: str) -> None:
+        """Bookmark the pending center: update_fav | save_home | custom."""
+        if not self._pan_commit_choice:
+            return
+        lat = self._pan_commit_lat
+        lon = self._pan_commit_lon
+        self._cancel_pan_commit_choice()
+        if lat is None or lon is None:
+            return
+        from utilities import favourite_locations
+
+        if action == "update_fav":
+            if not favourite_locations.update_active_favorite(lat, lon):
+                favourite_locations.set_custom_active()
+        elif action == "save_home":
+            favourite_locations.set_home(lat, lon)
+        else:
+            favourite_locations.set_custom_active()
+
+    def _cycle_favourite_location(self):
+        """Touch cycle: Home → favourites → Home; persist so reboot keeps it."""
+        from config import set_location_home
+        from display.round_touch import weather_data
+        from utilities import favourite_locations
+
+        if not favourite_locations.locations():
+            return
+        _idx, lat, lon, _label = favourite_locations.cycle_active()
+        set_location_home(lat, lon)
+        map_bg.invalidate()
+        map_bg.prewarm_all_scales()
+        rainviewer_overlay.invalidate()
+        rainviewer_overlay.request_overlay()
+        wildfire_overlay.invalidate()
+        wildfire_overlay.request_refresh(force=True)
+        self._position_smoother.reset()
+
+        def _after_favourite():
+            try:
+                weather_data.after_radar_center_changed(lat, lon)
+            except Exception:
+                logger.exception("Weather/timezone refresh after favourite cycle failed")
+            else:
+                self._weather_redraw_pending = True
+
+        Thread(target=_after_favourite, daemon=True).start()
         self.overhead.grab_data()
         self._refresh_flights()
 
@@ -1686,12 +1763,18 @@ class RoundTouchDisplay:
         ):
             self._note_activity()
 
-        # Facing calibrate / map pan: center tap saves; rim tap cancels.
-        # Swipes from drag gestures are discarded so they don't navigate or abort.
+        # Facing calibrate / map pan / pan-commit choice: modal swallows nav.
         if self._radar_modal_active() and self.screen == SCREEN_RADAR:
             if swipe != input_handler.SWIPE_NONE:
                 return
             if tap:
+                if self._pan_commit_choice:
+                    action = radar.pan_commit_hit(tap[0], tap[1])
+                    if action:
+                        self._finish_pan_commit_choice(action)
+                        self._note_activity()
+                        self._safe_draw()
+                    return
                 action = self._facing_tap_action(tap[0], tap[1])
                 if action == "save":
                     if self._calibrating_facing:
@@ -2065,6 +2148,7 @@ class RoundTouchDisplay:
             if not self.overhead.processing:
                 self.overhead.grab_data()
             if aircraft_alert.check_new_aircraft(self.flights):
+                radar.invalidate_frame_layer()
                 # Don't bury attention on Idle clock / forecast — jump back to radar.
                 if self.screen in (
                     SCREEN_CLOCK,
