@@ -289,7 +289,7 @@ def _backdrop_cache_key(*, pan_mode: bool, calibrate: bool):
         rainviewer_overlay.cache_token(),
         settings.show_compass_rose(),
         settings.show_range_rings(),
-        settings.show_aircraft_tag(),
+        settings.traffic_labels(),
         settings.theme_index(),
         settings.theme_custom(),
         settings.theme_rgb(),
@@ -529,11 +529,13 @@ def _tag_block_metrics():
     sub_font = draw.load_font(theme.FONT_TAG_SUB, bold=True)
     main_h = main_font.get_height()
     sub_h = sub_font.get_height()
-    # Font metrics include extra leading; tuck rows to keep tags compact.
-    tuck_main = theme.s(6)
-    tuck_sub = theme.s(4)
-    offsets = [0, main_h - tuck_main, main_h - tuck_main + sub_h - tuck_sub]
-    block_h = offsets[-1] + sub_h
+    # Font height includes generous leading. Apply the same tuck to every row so
+    # tags stay compact without the old callsign/type overlap (tuck_main was 6).
+    tuck = theme.s(4)
+    step_main = max(theme.s(9), main_h - tuck)
+    step_sub = max(theme.s(8), sub_h - tuck)
+    offsets = [0, step_main, step_main + step_sub]
+    block_h = offsets[-1] + step_sub
     return block_h, offsets, main_font, sub_font
 
 
@@ -632,12 +634,14 @@ def _draw_vessel_tag(surface, x, y, flight):
 
 
 def _draw_aircraft_tag(surface, x, y, flight):
-    if not settings.show_aircraft_tag():
-        return
     if flight.get("kind") == "vessel":
+        if not settings.show_marine_labels():
+            return
         if not vessel_declutter.should_label(flight):
             return
         _draw_vessel_tag(surface, x, y, flight)
+        return
+    if not settings.show_aircraft_labels():
         return
 
     block_h, offsets, main_font, sub_font = _tag_block_metrics()

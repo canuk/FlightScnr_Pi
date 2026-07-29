@@ -772,6 +772,7 @@ def radar_json():
             "show_compass_rose": settings.show_compass_rose(),
             "show_range_rings": settings.show_range_rings(),
             "show_aircraft_tag": settings.show_aircraft_tag(),
+            "traffic_labels": settings.traffic_labels(),
             "facing_deg": settings.facing_deg(),
             "show_sweep_line": settings.show_sweep_line(),
             "show_precipitation": settings.show_precipitation(),
@@ -862,7 +863,9 @@ def radar_save():
         settings.set_show_compass_rose(bool(data.get("show_compass_rose")))
     if "show_range_rings" in data:
         settings.set_show_range_rings(bool(data.get("show_range_rings")))
-    if "show_aircraft_tag" in data:
+    if "traffic_labels" in data:
+        settings.set_traffic_labels(data.get("traffic_labels"))
+    elif "show_aircraft_tag" in data:
         settings.set_show_aircraft_tag(bool(data.get("show_aircraft_tag")))
     if "facing_deg" in data:
         settings.set_facing_deg(data.get("facing_deg"))

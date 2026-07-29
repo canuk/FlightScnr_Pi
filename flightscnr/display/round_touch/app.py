@@ -951,7 +951,8 @@ class RoundTouchDisplay:
         elif action == "favourite":
             self._cycle_favourite_location()
         elif action == "aircraft_tag":
-            settings.toggle_show_aircraft_tag()
+            settings.cycle_traffic_labels()
+            radar.invalidate_frame_layer()
         elif action == "min_height":
             settings.cycle_min_height()
         elif action == "max_height":

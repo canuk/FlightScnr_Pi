@@ -51,7 +51,6 @@ FOOTER_BUTTONS = ("prev", "next", "radar")
 DISPLAY_ACTIONS = (
     "facing",
     "recenter",
-    "favourite",
     "compass",
     "range_rings",
     "sweep",
@@ -63,6 +62,7 @@ DISPLAY_ACTIONS = (
 # Filter / map controls — kept short so rows fit the round viewport.
 OPTIONS_ACTIONS = (
     "aircraft_tag",
+    "favourite",
     "min_height",
     "max_height",
     "aircraft_min_speed",
@@ -444,18 +444,14 @@ def display_action_at(page: int, row: int) -> str | None:
 
 
 def _display_row_labels() -> list[str]:
-    from utilities import favourite_locations
-
     rose = "on" if settings.show_compass_rose() else "off"
     rings = "on" if settings.show_range_rings() else "off"
     facing = settings.facing_label()
     sweep = "on" if settings.show_sweep_line() else "off"
-    fav = favourite_locations.active_label()
     # Brightness is drawn as a slider; placeholder keeps row count aligned.
     return [
         f"Change Compass Heading: {facing}",
         "Click to Set Radar Center",
-        f"Favorite Locations: {fav}",
         f"Compass Rose: {rose}",
         f"Radar Range Rings: {rings}",
         f"Radar Sweep Line: {sweep}",
@@ -467,9 +463,12 @@ def _display_row_labels() -> list[str]:
 
 
 def _options_row_labels() -> list[str]:
-    aircraft_tag = "on" if settings.show_aircraft_tag() else "off"
+    from utilities import favourite_locations
+
+    fav = favourite_locations.active_label()
     return [
-        f"Traffic Labels: {aircraft_tag}",
+        f"Traffic Labels: {settings.traffic_labels_label()}",
+        f"Favorite Locations: {fav}",
         f"Min Aircraft Altitude: {settings.min_height_ft()} ft",
         f"Max Aircraft Altitude: {settings.max_height_ft()} ft",
         f"Min Aircraft Speed: {settings.aircraft_min_speed_label()}",

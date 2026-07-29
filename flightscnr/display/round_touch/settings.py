@@ -44,6 +44,14 @@ TRAFFIC_MODE_LABELS = {
     "marine": "Marine Only",
     "both": "Aircraft & Marine",
 }
+# Callsign / vessel-name tags next to radar icons.
+TRAFFIC_LABEL_MODES = ("aircraft", "marine", "both", "off")
+TRAFFIC_LABEL_LABELS = {
+    "aircraft": "Aircraft Only",
+    "marine": "Marine Only",
+    "both": "Aircraft and Marine",
+    "off": "OFF",
+}
 # Distance + speed pairs for Display → Units (stored as "{dist}_{speed}").
 UNIT_PRESETS = ("nm_kts", "mi_mph", "km_kph", "mi_kts", "km_kts")
 UNIT_PRESET_LABELS = {
@@ -78,7 +86,10 @@ _defaults = {
     "unit_preset": "km_kph",
     "show_compass_rose": True,
     "show_range_rings": True,
+    # Legacy bool kept in sync with traffic_labels for older readers.
     "show_aircraft_tag": True,
+    # aircraft | marine | both | off — which callsign/name tags to draw
+    "traffic_labels": "both",
     # Real-world direction at the top of the screen (0=north-up).
     "facing_deg": 0.0,
     "show_sweep": True,
@@ -376,6 +387,19 @@ def _load():
             state["traffic_mode"] = mode if mode in TRAFFIC_MODES else "aircraft"
         migrated = True
     state["ais_enabled"] = state["traffic_mode"] in ("marine", "both")
+    # Migrate legacy show_aircraft_tag bool → traffic_labels enum
+    labels = str(state.get("traffic_labels") or "").strip().lower()
+    if "traffic_labels" not in data or labels not in TRAFFIC_LABEL_MODES:
+        if "show_aircraft_tag" in data:
+            state["traffic_labels"] = "both" if data.get("show_aircraft_tag") else "off"
+        else:
+            state["traffic_labels"] = (
+                labels if labels in TRAFFIC_LABEL_MODES else "both"
+            )
+        migrated = True
+    else:
+        state["traffic_labels"] = labels
+    state["show_aircraft_tag"] = state["traffic_labels"] != "off"
     state["facing_deg"] = _normalize_facing(state.get("facing_deg", 0))
     if "map_style" not in data:
         try:
@@ -474,6 +498,7 @@ def _settings_snapshot(state: dict) -> tuple:
         state.get("show_compass_rose"),
         state.get("show_range_rings"),
         state.get("show_aircraft_tag"),
+        state.get("traffic_labels"),
         _normalize_facing(state.get("facing_deg", 0)),
         state.get("show_sweep"),
         state.get("show_precipitation"),
@@ -1007,17 +1032,57 @@ def set_show_range_rings(enabled: bool):
 
 
 def show_aircraft_tag() -> bool:
-    return bool(_state.get("show_aircraft_tag", True))
+    """True when any traffic labels are enabled (legacy shim)."""
+    return traffic_labels() != "off"
+
+
+def traffic_labels() -> str:
+    """Which radar text tags to draw: aircraft, marine, both, or off."""
+    mode = str(_state.get("traffic_labels") or "").strip().lower()
+    if mode in TRAFFIC_LABEL_MODES:
+        return mode
+    return "both" if _state.get("show_aircraft_tag", True) else "off"
+
+
+def traffic_labels_label() -> str:
+    return TRAFFIC_LABEL_LABELS.get(traffic_labels(), "Aircraft and Marine")
+
+
+def show_aircraft_labels() -> bool:
+    return traffic_labels() in ("aircraft", "both")
+
+
+def show_marine_labels() -> bool:
+    return traffic_labels() in ("marine", "both")
+
+
+def cycle_traffic_labels():
+    """Cycle Aircraft Only → Marine Only → Aircraft and Marine → OFF."""
+    cur = traffic_labels()
+    try:
+        idx = TRAFFIC_LABEL_MODES.index(cur)
+    except ValueError:
+        idx = 0
+    set_traffic_labels(TRAFFIC_LABEL_MODES[(idx + 1) % len(TRAFFIC_LABEL_MODES)])
+
+
+def set_traffic_labels(mode: str):
+    raw = str(mode or "").strip().lower()
+    if raw not in TRAFFIC_LABEL_MODES:
+        raw = "both"
+    _state["traffic_labels"] = raw
+    _state["show_aircraft_tag"] = raw != "off"
+    _save(_state)
 
 
 def toggle_show_aircraft_tag():
-    _state["show_aircraft_tag"] = not show_aircraft_tag()
-    _save(_state)
+    """Legacy toggle: OFF ↔ Aircraft and Marine."""
+    set_traffic_labels("off" if show_aircraft_tag() else "both")
 
 
 def set_show_aircraft_tag(enabled: bool):
-    _state["show_aircraft_tag"] = bool(enabled)
-    _save(_state)
+    """Legacy setter: True → both, False → off."""
+    set_traffic_labels("both" if enabled else "off")
 
 
 def facing_deg() -> float:

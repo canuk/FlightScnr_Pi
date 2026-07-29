@@ -189,10 +189,13 @@
                 <label for="show_range_rings">Show range rings</label>
                 <span class="switch"><input id="show_range_rings" type="checkbox"><span class="track"></span></span>
             </div>
-            <div class="chk">
-                <label for="show_aircraft_tag">Show traffic labels</label>
-                <span class="switch"><input id="show_aircraft_tag" type="checkbox"><span class="track"></span></span>
-            </div>
+            <label for="traffic_labels">Traffic labels</label>
+            <select id="traffic_labels">
+                <option value="aircraft">Aircraft Only</option>
+                <option value="marine">Marine Only</option>
+                <option value="both">Aircraft and Marine</option>
+                <option value="off">OFF</option>
+            </select>
             <p class="hint">Callsign/type/altitude on aircraft, and vessel name tags. Turn off to declutter a busy radar; tap a symbol for details.</p>
             <label for="facing_deg">Facing direction (degrees)</label>
             <input id="facing_deg" type="number" min="0" max="359" step="1" value="0">
@@ -275,7 +278,7 @@
                     <input id="fav_name" type="text" autocomplete="off" placeholder="e.g. Heathrow" maxlength="40">
                     <label for="fav_position">Location Position (lat, lon)</label>
                     <input id="fav_position" type="text" autocomplete="off" placeholder="e.g. 51.470748, -0.459909">
-                    <p class="hint">Radar center above is Home. After Set Radar Center on the Pi you can Update the active favorite, Save as Home, or keep as Custom. The last center is what reboot restores. Max 10 favorites.</p>
+                    <p class="hint">Radar center above is Home. After Set Radar Center on the Pi you can Update the active favorite, Save as Home, or keep as Custom. The last center is what reboot restores. Cycle favorites under Settings → Options → Favorite Locations. Max 10 favorites.</p>
                     <button class="btn btn-primary" id="btn-fav-add" style="margin-top:.5rem" type="button">Add location</button>
                     <div id="fav-add-status" class="status"></div>
                 </div>
@@ -787,7 +790,7 @@ async function loadAll() {
         }
         $("show_compass").checked = !!r.show_compass_rose;
         if ($("show_range_rings")) $("show_range_rings").checked = r.show_range_rings !== false;
-        if ($("show_aircraft_tag")) $("show_aircraft_tag").checked = r.show_aircraft_tag !== false;
+        if ($("traffic_labels")) $("traffic_labels").value = r.traffic_labels || (r.show_aircraft_tag === false ? "off" : "both");
         $("facing_deg").value = String(Math.round(Number(r.facing_deg) || 0) % 360);
         $("show_sweep").checked = !!r.show_sweep_line;
         $("show_precip").checked = r.show_precipitation !== false;
@@ -962,7 +965,7 @@ async function saveRadar() {
                 runway_darkmap_rgb: readRgbInputs("runway"),
                 show_compass_rose: $("show_compass").checked,
                 show_range_rings: $("show_range_rings") ? $("show_range_rings").checked : true,
-                show_aircraft_tag: $("show_aircraft_tag").checked,
+                traffic_labels: $("traffic_labels") ? $("traffic_labels").value : "both",
                 facing_deg: Number($("facing_deg").value),
                 show_sweep_line: $("show_sweep").checked,
                 show_precipitation: $("show_precip").checked,
@@ -1045,7 +1048,7 @@ async function saveAndReloadSettings() {
                 runway_darkmap_rgb: readRgbInputs("runway"),
                 show_compass_rose: $("show_compass").checked,
                 show_range_rings: $("show_range_rings") ? $("show_range_rings").checked : true,
-                show_aircraft_tag: $("show_aircraft_tag").checked,
+                traffic_labels: $("traffic_labels") ? $("traffic_labels").value : "both",
                 facing_deg: Number($("facing_deg").value),
                 show_sweep_line: $("show_sweep").checked,
                 show_precipitation: $("show_precip").checked,
