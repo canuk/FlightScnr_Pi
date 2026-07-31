@@ -75,6 +75,19 @@ class TestAircraftTypeIcons(unittest.TestCase):
             self.assertEqual(_category_for_type(code), "small-prop-single", code)
             self.assertFalse(is_unknown_type({"plane": code}), code)
 
+    def test_piper_aztec_pa27(self):
+        """N131TV reports as PA27 (Aztec); hyphenated PA-27 must also map."""
+        from display.round_touch.aircraft_type_icons import (
+            _category_for_type,
+            icon_category,
+            is_unknown_type,
+        )
+
+        for code in ("PA27", "PA-27", "pa27", "PA23"):
+            self.assertEqual(_category_for_type(code), "small-prop-twin", code)
+            self.assertEqual(icon_category({"plane": code, "callsign": "N131TV"}), "small-prop-twin")
+            self.assertFalse(is_unknown_type({"plane": code}), code)
+
 
 if __name__ == "__main__":
     unittest.main()

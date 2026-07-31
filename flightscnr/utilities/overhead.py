@@ -507,6 +507,71 @@ def _adsbdb_aircraft(registration):
         return {}
 
 
+def _is_us_ga_registration(registration: str | None) -> bool:
+    reg = (registration or "").strip().upper()
+    return len(reg) >= 2 and reg.startswith("N") and reg[1].isdigit()
+
+
+def _apply_adsbdb_ga(
+    *,
+    registration: str,
+    plane: str = "",
+    airline_name: str = "",
+    stats: dict | None = None,
+) -> tuple[str, str]:
+    """Fill blank ICAO type / owner from adsbdb for US GA N-numbers.
+
+    Returns (plane, airline_name). Used so radar icons map even when ADS-B
+    omits ``t`` and FR24 has no aircraft_code (e.g. N131TV → PA27).
+    """
+    if not _is_us_ga_registration(registration):
+        return plane, airline_name
+    need_type = not (plane or "").strip()
+    need_owner = not (airline_name or "").strip()
+    if not need_type and not need_owner:
+        return plane, airline_name
+    if stats is not None:
+        stats["adsbdb_lookups"] = stats.get("adsbdb_lookups", 0) + 1
+    ac_info = _adsbdb_aircraft(registration.strip().upper())
+    if need_type:
+        icao = (ac_info.get("type") or "").strip()
+        if icao:
+            plane = icao
+    if need_owner:
+        owner = (ac_info.get("owner") or "").strip()
+        if owner:
+            airline_name = owner.title() if owner == owner.upper() else owner
+    return plane, airline_name
+
+
+def _enrich_entry_ga_type(entry: dict, stats: dict | None = None) -> bool:
+    """Fill blank plane type (and owner) on an overhead entry from adsbdb."""
+    if (entry.get("plane") or "").strip() and (entry.get("airline") or "").strip():
+        return False
+    reg = (entry.get("registration") or "").strip().upper()
+    if not reg:
+        cs = (entry.get("callsign") or "").strip().upper()
+        if _is_us_ga_registration(cs):
+            reg = cs
+            entry.setdefault("registration", reg)
+    if not _is_us_ga_registration(reg):
+        return False
+    plane, airline = _apply_adsbdb_ga(
+        registration=reg,
+        plane=entry.get("plane") or "",
+        airline_name=entry.get("airline") or "",
+        stats=stats,
+    )
+    changed = False
+    if plane and plane != (entry.get("plane") or ""):
+        entry["plane"] = plane
+        changed = True
+    if airline and not (entry.get("airline") or "").strip():
+        entry["airline"] = airline
+        changed = True
+    return changed
+
+
 # --- Audit Logging ---
 
 def _log_route_audit(callsign, aircraft_type, distance, source, origin, destination):
@@ -1000,6 +1065,15 @@ class Overhead:
                                 airline_name = local_airline
                             stats["airline_lookups"] += 1
 
+                        # GA owner + ICAO type from adsbdb when FR24/ADS-B omit them
+                        if f.registration and f.registration.startswith("N") and f.registration[1:2].isdigit():
+                            plane, airline_name = _apply_adsbdb_ga(
+                                registration=f.registration,
+                                plane=plane,
+                                airline_name=airline_name,
+                                stats=stats,
+                            )
+
                         # Helicopter detection — override owner_icao for logo display
                         if plane in HELICOPTER_TYPES:
                             owner_icao = "HELI"
@@ -1008,17 +1082,6 @@ class Overhead:
                         # GA airplane icon for N-number flights (no airline ICAO prefix)
                         elif not owner_icao and f.registration and f.registration.startswith("N") and f.registration[1:2].isdigit():
                             owner_icao = "GA"
-
-                        # GA owner lookup for N-number aircraft with no airline
-                        if (not airline_name and f.registration
-                                and f.registration.startswith("N")
-                                and f.registration[1:2].isdigit()):
-                            stats["adsbdb_lookups"] += 1
-                            ac_info = _adsbdb_aircraft(f.registration)
-                            if ac_info.get("owner"):
-                                airline_name = ac_info["owner"]
-                                if airline_name == airline_name.upper():
-                                    airline_name = airline_name.title()
 
                         # Livery note: when painted_as_id differs from operated_by_id
                         painted_as_id = self.safe_get(d, "schedule_info", "painted_as_id", default=0) or 0
@@ -1445,6 +1508,13 @@ class Overhead:
                 except Exception:
                     pass
 
+                # Fill blank ICAO types for US GA (N-reg) from adsbdb — ADS-B often
+                # omits ``t``; without this, PA27 etc. render as the unknown icon.
+                for entry in overhead_data:
+                    if entry.get("kind") == "vessel":
+                        continue
+                    _enrich_entry_ga_type(entry, stats)
+
             # --- STEP 2: Tracked flight (always check; display shows it when clock is up) ---
             tracked_callsign = load_tracked_callsign()
             if tracked_callsign:
@@ -1742,19 +1812,17 @@ class Overhead:
                 airline_icao_code = match.airline_icao or ""
                 airline_name = _airline_name_lookup(airline_icao_code)
 
-            # GA owner lookup for N-number aircraft
-            if (not airline_name and registration
-                    and registration.startswith("N")
-                    and registration[1:2].isdigit()):
-                ac_info = _adsbdb_aircraft(registration)
-                if ac_info.get("owner"):
-                    airline_name = ac_info["owner"]
-                    if airline_name == airline_name.upper():
-                        airline_name = airline_name.title()
-
             aircraft_type = match.aircraft_code or ""
             if not aircraft_type:
                 aircraft_type = self.safe_get(flight_details, "aircraft_info", "typecode", default="") or ""
+
+            # GA owner + ICAO type when FR24 omits them (e.g. N131TV → PA27)
+            if registration and registration.startswith("N") and registration[1:2].isdigit():
+                aircraft_type, airline_name = _apply_adsbdb_ga(
+                    registration=registration,
+                    plane=aircraft_type,
+                    airline_name=airline_name,
+                )
 
             flight_number = (
                 match.number

@@ -158,6 +158,7 @@ class RoundTouchDisplay:
         self._last_radar_draw = 0
         self._last_static_draw = 0
         self._display_focus = 0
+        self._system_confirm: str | None = None
         self._fatal_error = None
         self._scroll = nav.ScrollState()
         self._last_grab_seq = 0
@@ -515,15 +516,17 @@ class RoundTouchDisplay:
     def _present(self):
         # Fast radar path: reuse a cached rotated static layer and only redraw
         # the sweep wedge in display space (skips a full-frame rotate/tick).
+        # Sweep visibility is visual-only — still use this path when the beam
+        # is hidden so aircraft keep updating via the prewarmed layer.
         if (
             self.screen == SCREEN_RADAR
-            and settings.show_sweep_line()
             and not self._calibrating_facing
             and not self._panning_map
             and not self._pan_commit_choice
         ):
             layer, layer_gen = radar.frame_layer_snapshot()
             if layer is not None:
+                show_sweep = settings.show_sweep_line()
                 if FRAME_DEBUG:
                     _t = time.perf_counter()
                     rotation.present_radar_sweep(
@@ -532,6 +535,7 @@ class RoundTouchDisplay:
                         layer_gen,
                         radar.current_sweep_angle(),
                         theme.SWEEP,
+                        draw_sweep=show_sweep,
                     )
                     self._stage("4_present", time.perf_counter() - _t)
                 else:
@@ -541,6 +545,7 @@ class RoundTouchDisplay:
                         layer_gen,
                         radar.current_sweep_angle(),
                         theme.SWEEP,
+                        draw_sweep=show_sweep,
                     )
                 return
 
@@ -610,6 +615,7 @@ class RoundTouchDisplay:
                 self.settings_page,
                 self._scroll.offset,
                 self._display_focus,
+                system_confirm=self._system_confirm,
             )
         elif self.screen == SCREEN_DETAILS:
             self._scroll.max_offset = details.draw_details(self.surface, scroll_offset=self._scroll.offset)
@@ -876,6 +882,7 @@ class RoundTouchDisplay:
             self._rgb_slider_group = None
         self._brightness_slider_active = False
         self._vfr_opacity_slider_active = False
+        self._system_confirm = None
         if page != self.settings_page:
             self._scroll.reset()
             if page not in (info.PAGE_DISPLAY, info.PAGE_OPTIONS, info.PAGE_LAYERS):
@@ -1724,6 +1731,30 @@ class RoundTouchDisplay:
             if hit is not None:
                 group, channel = hit
                 self._apply_theme_slider(group, channel, x, persist=True)
+        elif self.settings_page == info.PAGE_SYSTEM and x is not None and y is not None:
+            action = info.system_action_at(x, y)
+            if action is None:
+                return
+            if info.system_needs_confirm(action):
+                self._system_confirm = action
+            else:
+                self._execute_system_action(action)
+
+    def _execute_system_action(self, action: str):
+        """Run reboot / shutdown / app restart after confirmation."""
+        from utilities import system_control
+
+        if action == "reboot":
+            result = system_control.request_reboot()
+        elif action == "shutdown":
+            result = system_control.request_shutdown()
+        elif action == "restart":
+            result = system_control.request_app_restart()
+        else:
+            return
+        if not result.get("ok"):
+            logger.warning("System action %s failed: %s", action, result.get("message"))
+            self._fatal_error = result.get("message") or f"{action} failed"
 
     def _handle_navigation(self):
         if time.time() < self._boot_until:
@@ -1883,6 +1914,8 @@ class RoundTouchDisplay:
                 self._open_screen(SCREEN_CLOCK)
             elif self.screen == SCREEN_CLOCK_SETTINGS:
                 self._open_screen(SCREEN_CLOCK)
+            elif self.screen == SCREEN_SETTINGS and self.settings_page == info.PAGE_SYSTEM:
+                self._set_settings_page(info.PAGE_COLORS)
             elif self.screen == SCREEN_SETTINGS and self.settings_page == info.PAGE_COLORS:
                 self._set_settings_page(info.PAGE_LAYERS)
             elif self.screen == SCREEN_SETTINGS and self.settings_page == info.PAGE_LAYERS:
@@ -1982,21 +2015,35 @@ class RoundTouchDisplay:
                 self._return_to_radar()
                 self._safe_draw()
         elif tap and self.screen == SCREEN_SETTINGS:
-            action = info.tap_footer_action(tap[0], tap[1])
-            if action == "prev":
-                prev = info.prev_page(self.settings_page)
-                if prev is not None:
-                    self._set_settings_page(prev)
-            elif action == "next":
-                nxt = info.next_page(self.settings_page)
-                if nxt is not None:
-                    self._set_settings_page(nxt)
-            elif action == "radar":
-                self._return_to_radar()
+            if self._system_confirm is not None:
+                hit = info.system_confirm_hit(tap[0], tap[1])
+                if hit == "confirm":
+                    action = self._system_confirm
+                    self._system_confirm = None
+                    self._execute_system_action(action)
+                elif hit == "cancel":
+                    self._system_confirm = None
+                # Taps outside the dialog buttons dismiss without acting.
+                else:
+                    self._system_confirm = None
+                self._note_activity()
+                self._safe_draw()
             else:
-                self._handle_settings_tap(tap[0], tap[1])
-            self._note_activity()
-            self._safe_draw()
+                action = info.tap_footer_action(tap[0], tap[1])
+                if action == "prev":
+                    prev = info.prev_page(self.settings_page)
+                    if prev is not None:
+                        self._set_settings_page(prev)
+                elif action == "next":
+                    nxt = info.next_page(self.settings_page)
+                    if nxt is not None:
+                        self._set_settings_page(nxt)
+                elif action == "radar":
+                    self._return_to_radar()
+                else:
+                    self._handle_settings_tap(tap[0], tap[1])
+                self._note_activity()
+                self._safe_draw()
 
     def _tick_timeout(self):
         if time.time() < self._boot_until:
@@ -2556,7 +2603,9 @@ class RoundTouchDisplay:
                     time.sleep(0.05)
                 elif self.screen == SCREEN_RADAR:
                     radar.tick_sweep()
-                    frame_ms = theme.SWEEP_FRAME_MS if settings.show_sweep_line() else 50
+                    # Keep radar cadence even when the sweep beam is hidden so
+                    # prewarmed aircraft layers present promptly.
+                    frame_ms = theme.SWEEP_FRAME_MS
                     # Stamp the schedule *before* drawing. Stamping after made the
                     # interval = draw_time + frame_ms (~35ms) and capped the sweep
                     # at ~28fps even when draws were cheap enough for ~50fps.
@@ -2569,9 +2618,11 @@ class RoundTouchDisplay:
                         # on this loop made the sweep hitch every layer TTL.
                         # Skip while _grab holds the GIL so prewarm and merge
                         # don't stack into a multi-hundred-ms unmarked stall.
+                        # Always prewarm while on radar — show_sweep_line only
+                        # controls the beam visual; without this the static
+                        # layer never refreshes and traffic freezes.
                         if (
-                            settings.show_sweep_line()
-                            and not self._calibrating_facing
+                            not self._calibrating_facing
                             and not self._panning_map
                             and not self._radar_modal_active()
                             and not self.overhead.processing
@@ -2632,9 +2683,9 @@ class RoundTouchDisplay:
                             frame_debug.stage("loop_body", body)
                     except NameError:
                         pass
-                # Yield less while the sweep is animating so frames aren't padded to 10ms+.
+                # Yield less while on radar so frames aren't padded to 10ms+.
                 _sleep_t = time.perf_counter()
-                if self.screen == SCREEN_RADAR and settings.show_sweep_line():
+                if self.screen == SCREEN_RADAR:
                     time.sleep(0.001)
                 else:
                     time.sleep(0.01)
@@ -2642,7 +2693,7 @@ class RoundTouchDisplay:
                     # Overrun beyond the requested sleep = GIL / OS preemption.
                     requested = (
                         0.001
-                        if self.screen == SCREEN_RADAR and settings.show_sweep_line()
+                        if self.screen == SCREEN_RADAR
                         else 0.01
                     )
                     slept = time.perf_counter() - _sleep_t

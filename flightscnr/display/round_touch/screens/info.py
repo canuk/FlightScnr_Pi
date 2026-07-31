@@ -42,7 +42,8 @@ PAGE_DISPLAY = 1
 PAGE_OPTIONS = 2
 PAGE_LAYERS = 3
 PAGE_COLORS = 4
-PAGE_COUNT = 5
+PAGE_SYSTEM = 5
+PAGE_COUNT = 6
 
 FOOTER_BUTTONS = ("prev", "next", "radar")
 
@@ -80,6 +81,34 @@ LAYERS_ACTIONS = (
     "ground_vehicles",
     "idle_clock",
 )
+# Power / service controls (portal System section equivalent).
+SYSTEM_ACTIONS = (
+    "restart",
+    "reboot",
+    "shutdown",
+)
+
+_SYSTEM_BTN_FILL = (8, 36, 16)
+_SYSTEM_BTN_BORDER = (48, 160, 72)
+_SYSTEM_BTN_DANGER_FILL = (48, 18, 14)
+_SYSTEM_BTN_DANGER_BORDER = (180, 64, 48)
+_system_buttons: list[tuple[str, pygame.Rect]] = []
+_system_confirm_buttons: list[tuple[str, pygame.Rect]] = []
+
+_SYSTEM_CONFIRM_COPY = {
+    "reboot": (
+        "Reboot Pi?",
+        "Display and portal go offline briefly.",
+    ),
+    "shutdown": (
+        "Shutdown Pi?",
+        "Display and portal will power off.",
+    ),
+    "restart": (
+        "Restart App?",
+        "Display and portal will reconnect shortly.",
+    ),
+}
 
 
 def _hostname():
@@ -139,6 +168,8 @@ def _breadcrumb(page: int) -> list[str]:
         trail.append("Layers")
     elif page == PAGE_COLORS:
         trail.append("Theme")
+    elif page == PAGE_SYSTEM:
+        trail.append("System")
     return trail
 
 
@@ -149,9 +180,171 @@ def prev_page(page: int) -> int | None:
 
 
 def next_page(page: int) -> int | None:
-    if page < PAGE_COLORS:
+    if page < PAGE_SYSTEM:
         return page + 1
     return None
+
+
+def system_action_at(x: int, y: int) -> str | None:
+    """Hit-test Reboot / Shutdown / Restart buttons on the System page."""
+    for action, rect in _system_buttons:
+        if rect.collidepoint(x, y):
+            return action
+    return None
+
+
+def system_confirm_hit(x: int, y: int) -> str | None:
+    """Hit-test confirm popup buttons: 'confirm', 'cancel', or None."""
+    for action, rect in _system_confirm_buttons:
+        if rect.collidepoint(x, y):
+            return action
+    return None
+
+
+def system_needs_confirm(action: str) -> bool:
+    return action in _SYSTEM_CONFIRM_COPY
+
+
+def _system_button_label(action: str) -> str:
+    if action == "restart":
+        return "Restart App"
+    if action == "reboot":
+        return "Reboot Pi"
+    if action == "shutdown":
+        return "Shutdown Pi"
+    return action
+
+
+def _draw_system_button(surface, y: int, action: str) -> pygame.Rect:
+    label = _system_button_label(action)
+    font = draw.load_font(theme.s(13), bold=True)
+    text_w, text_h = font.size(label)
+    pad_x = theme.s(14)
+    pad_y = theme.s(10)
+    btn_h = text_h + pad_y * 2
+    half = draw.circle_half_width_at_row(y, btn_h)
+    btn_w = min(theme.s(240), max(theme.s(140), half * 2 - theme.s(20)))
+    btn_w = max(btn_w, text_w + pad_x * 2)
+    btn_w = min(btn_w, max(theme.s(120), half * 2 - theme.s(16)))
+    rect = pygame.Rect(theme.CENTER_X - btn_w // 2, y, btn_w, btn_h)
+    danger = action in ("reboot", "shutdown")
+    if danger:
+        fill = _SYSTEM_BTN_DANGER_FILL
+        border = _SYSTEM_BTN_DANGER_BORDER
+    else:
+        fill = _SYSTEM_BTN_FILL
+        border = _SYSTEM_BTN_BORDER
+    radius = max(theme.s(8), btn_h // 3)
+    pygame.draw.rect(surface, fill, rect, border_radius=radius)
+    pygame.draw.rect(
+        surface, border, rect, width=max(1, theme.s(2)), border_radius=radius
+    )
+    rendered = font.render(label, True, theme.LABEL)
+    surface.blit(rendered, rendered.get_rect(center=rect.center))
+    return rect
+
+
+def _draw_system_page(surface, top: int, bottom: int) -> int:
+    """Draw power controls; returns max_scroll (always 0 — fits one viewport)."""
+    global _system_buttons
+    _system_buttons = []
+    y = top + theme.s(14)
+    gap = theme.s(12)
+    for action in SYSTEM_ACTIONS:
+        if y > bottom:
+            break
+        rect = _draw_system_button(surface, int(y), action)
+        _system_buttons.append((action, rect.copy()))
+        y += rect.height + gap
+    return 0
+
+
+def draw_system_confirm_popup(surface, action: str) -> None:
+    """Modal confirm dialog over the System page."""
+    global _system_confirm_buttons
+    _system_confirm_buttons = []
+    copy = _SYSTEM_CONFIRM_COPY.get(action)
+    if copy is None:
+        return
+    title_text, detail_text = copy
+    danger = action in ("reboot", "shutdown")
+
+    # Dim the page behind the dialog.
+    dim = pygame.Surface((theme.SIZE, theme.SIZE), pygame.SRCALPHA)
+    dim.fill((0, 0, 0, 160))
+    surface.blit(dim, (0, 0))
+
+    title_font = draw.load_font(theme.s(16), bold=True)
+    body_font = draw.load_font(theme.s(12))
+    btn_font = draw.load_font(theme.s(13), bold=True)
+    title = title_font.render(title_text, True, theme.LABEL)
+    detail = body_font.render(detail_text, True, theme.HINT)
+
+    pad_x = theme.s(16)
+    pad_y = theme.s(14)
+    gap = theme.s(6)
+    btn_h = theme.s(36)
+    btn_gap = theme.s(10)
+    btn_w = theme.s(110)
+    row_w = btn_w * 2 + btn_gap
+    content_w = max(title.get_width(), detail.get_width(), row_w)
+    panel_w = min(content_w + pad_x * 2, int(theme.VISIBLE_RADIUS * 1.6))
+    panel_h = (
+        pad_y
+        + title.get_height()
+        + gap
+        + detail.get_height()
+        + theme.s(16)
+        + btn_h
+        + pad_y
+    )
+
+    panel_rect = pygame.Rect(0, 0, panel_w, panel_h)
+    panel_rect.center = (theme.CENTER_X, theme.CENTER_Y)
+    border = _SYSTEM_BTN_DANGER_BORDER if danger else _SYSTEM_BTN_BORDER
+    radius = theme.s(10)
+    pygame.draw.rect(surface, (8, 28, 14), panel_rect, border_radius=radius)
+    pygame.draw.rect(
+        surface, border, panel_rect, max(1, theme.s(2)), border_radius=radius
+    )
+
+    y = panel_rect.top + pad_y
+    surface.blit(title, title.get_rect(midtop=(theme.CENTER_X, y)))
+    y += title.get_height() + gap
+    surface.blit(detail, detail.get_rect(midtop=(theme.CENTER_X, y)))
+    y = panel_rect.bottom - pad_y - btn_h
+
+    cancel_rect = pygame.Rect(0, 0, btn_w, btn_h)
+    confirm_rect = pygame.Rect(0, 0, btn_w, btn_h)
+    cancel_rect.top = y
+    confirm_rect.top = y
+    cancel_rect.right = theme.CENTER_X - btn_gap // 2
+    confirm_rect.left = theme.CENTER_X + btn_gap // 2
+
+    pygame.draw.rect(surface, (20, 40, 24), cancel_rect, border_radius=theme.s(8))
+    pygame.draw.rect(
+        surface, theme.GRID, cancel_rect, max(1, theme.s(1)), border_radius=theme.s(8)
+    )
+    cancel_label = btn_font.render("Cancel", True, theme.LABEL)
+    surface.blit(cancel_label, cancel_label.get_rect(center=cancel_rect.center))
+
+    confirm_fill = _SYSTEM_BTN_DANGER_FILL if danger else _SYSTEM_BTN_FILL
+    confirm_border = _SYSTEM_BTN_DANGER_BORDER if danger else _SYSTEM_BTN_BORDER
+    pygame.draw.rect(surface, confirm_fill, confirm_rect, border_radius=theme.s(8))
+    pygame.draw.rect(
+        surface,
+        confirm_border,
+        confirm_rect,
+        max(1, theme.s(2)),
+        border_radius=theme.s(8),
+    )
+    confirm_label = btn_font.render("Confirm", True, theme.LABEL)
+    surface.blit(confirm_label, confirm_label.get_rect(center=confirm_rect.center))
+
+    _system_confirm_buttons = [
+        ("cancel", cancel_rect.copy()),
+        ("confirm", confirm_rect.copy()),
+    ]
 
 
 def tap_footer_action(x: int, y: int) -> str | None:
@@ -630,7 +823,14 @@ def _draw_vfr_opacity_slider_row(surface, ry: int, focused: bool) -> None:
     )
 
 
-def draw_info(surface, page: int, scroll_offset: int = 0, display_focus: int = 0) -> int:
+def draw_info(
+    surface,
+    page: int,
+    scroll_offset: int = 0,
+    display_focus: int = 0,
+    *,
+    system_confirm: str | None = None,
+) -> int:
     draw.fill_background(surface)
     nav.draw_breadcrumb(surface, _breadcrumb(page))
     nav.draw_page_dots(surface, page, len(nav.SETTINGS_PAGES))
@@ -704,6 +904,9 @@ def draw_info(surface, page: int, scroll_offset: int = 0, display_focus: int = 0
             top,
             bottom,
         )
+
+    elif page == PAGE_SYSTEM:
+        max_scroll = _draw_system_page(surface, top, bottom)
 
     else:
         theme_rgb = settings.theme_rgb()
@@ -794,4 +997,6 @@ def draw_info(surface, page: int, scroll_offset: int = 0, display_focus: int = 0
             section_y = slider_y0 + 3 * slider_h + section_gap
 
     nav.draw_footer_buttons(surface, list(FOOTER_BUTTONS))
+    if page == PAGE_SYSTEM and system_confirm:
+        draw_system_confirm_popup(surface, system_confirm)
     return max_scroll

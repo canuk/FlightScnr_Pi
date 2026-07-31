@@ -12,6 +12,7 @@
 Styles (settings map_style, fallback RADAR_MAP_PROVIDER):
   dark — CARTO Dark Matter, no labels (default)
   light — CARTO Positron light, no labels
+  voyager — CARTO Voyager (color street map), no labels
   vfr  — FAA VFR sectional charts (US coverage, public domain)
   osm  — OpenStreetMap tiles remapped to dark radar palette (legacy env)
 """
@@ -57,7 +58,7 @@ TILE_SIZE = 256
 EARTH_RADIUS_M = 6378137.0
 
 # UI-facing styles (Options / portal cycle). Legacy "osm" remains via env.
-MAP_STYLES = ("dark", "light", "vfr")
+MAP_STYLES = ("dark", "light", "voyager", "vfr")
 
 OSM_TILE_URL = "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
 CARTO_SUBDOMAINS = "abcd"
@@ -76,7 +77,7 @@ CARTO_TILE_WORKERS = 4
 OSM_TILE_WORKERS = 2
 VFR_TILE_WORKERS = 4
 CACHE_TTL_S = 7 * 24 * 3600
-CACHE_STYLE_VERSION = 18  # bump when map tint/placement/styles change
+CACHE_STYLE_VERSION = 19  # bump when map tint/placement/styles change
 
 
 _lock = threading.Lock()
@@ -95,6 +96,8 @@ def normalize_map_style(raw: str | None) -> str:
         return "dark"
     if provider in ("light", "carto_light", "positron"):
         return "light"
+    if provider in ("voyager", "carto_voyager", "rastertiles/voyager"):
+        return "voyager"
     if provider in ("vfr", "sectional", "faa", "faa_vfr"):
         return "vfr"
     if provider in ("osm", "openstreetmap"):
@@ -135,6 +138,11 @@ def _tile_url(z: int, x: int, y: int, style: str | None = None) -> str:
     if style == "light":
         sub = CARTO_SUBDOMAINS[(x + y) % len(CARTO_SUBDOMAINS)]
         return CARTO_TILE_URL.format(sub=sub, style="light_nolabels", z=z, x=x, y=y)
+    if style == "voyager":
+        sub = CARTO_SUBDOMAINS[(x + y) % len(CARTO_SUBDOMAINS)]
+        return CARTO_TILE_URL.format(
+            sub=sub, style="rastertiles/voyager_nolabels", z=z, x=x, y=y
+        )
     if style == "vfr":
         # FAA ArcGIS: level / row / col
         return VFR_TILE_URL.format(z=z, y=y, x=x)
@@ -373,6 +381,27 @@ def _style_light(surface: pygame.Surface) -> pygame.Surface:
     return _as_display_surface(surface)
 
 
+def _style_voyager(surface: pygame.Surface) -> pygame.Surface:
+    """Light touch on CARTO Voyager — preserve color, keep radar chrome readable."""
+    try:
+        from PIL import Image, ImageEnhance
+    except ImportError:
+        Image = None
+
+    if Image is not None:
+        tobytes = getattr(pygame.image, "tobytes", pygame.image.tostring)
+        img = Image.frombytes("RGB", surface.get_size(), tobytes(surface, "RGB"))
+        img = ImageEnhance.Contrast(img).enhance(1.05)
+        img = ImageEnhance.Brightness(img).enhance(0.96)
+        img = ImageEnhance.Color(img).enhance(0.95)
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        buf.seek(0)
+        return _as_display_surface(pygame.image.load(buf))
+
+    return _as_display_surface(surface)
+
+
 def _style_vfr(surface: pygame.Surface) -> pygame.Surface:
     """Light readability pass on FAA sectionals (opacity is applied at draw time)."""
     try:
@@ -481,6 +510,8 @@ def _style_for_radar(surface: pygame.Surface, style: str | None = None) -> pygam
         return _style_carto(surface)
     if style == "light":
         return _style_light(surface)
+    if style == "voyager":
+        return _style_voyager(surface)
     if style == "vfr":
         return _style_vfr(surface)
     return _style_osm(surface)
@@ -1010,4 +1041,6 @@ def attribution_text() -> str | None:
         return "© FAA"
     if style == "osm":
         return "© OpenStreetMap"
+    if style == "voyager":
+        return "© OSM © CARTO Voyager"
     return "© OSM © CARTO"

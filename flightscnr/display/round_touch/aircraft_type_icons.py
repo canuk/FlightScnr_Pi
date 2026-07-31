@@ -126,7 +126,8 @@ def _category_for_type(plane_type: str) -> str | None:
     _load_mapping()
     if not _type_to_category:
         return None
-    code = "".join((plane_type or "").upper().split())
+    # ICAO designators are alphanumeric (PA27); some sources send "PA-27".
+    code = "".join(ch for ch in (plane_type or "").upper() if ch.isalnum())
     if not code:
         return None
     if code in _category_cache:
@@ -151,7 +152,7 @@ def _category_for_type(plane_type: str) -> str | None:
 
 def _is_helicopter_type(plane_type: str) -> bool:
     _load_mapping()
-    code = "".join((plane_type or "").upper().split())
+    code = "".join(ch for ch in (plane_type or "").upper() if ch.isalnum())
     if not code:
         return False
     if code in _type_to_category and _type_to_category[code] in (
@@ -174,7 +175,7 @@ def _military_category(plane_type: str, mapped: str | None) -> str:
         return mapped
     if _is_helicopter_type(plane_type):
         return "military-helicopter"
-    code = "".join((plane_type or "").upper().split())
+    code = "".join(ch for ch in (plane_type or "").upper() if ch.isalnum())
     if any(code.startswith(prefix) for prefix in _FIGHTER_PREFIXES):
         return "military-fighter"
     return "military-transport"

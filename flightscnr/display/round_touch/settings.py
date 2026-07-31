@@ -63,7 +63,7 @@ UNIT_PRESET_LABELS = {
 }
 _LEGACY_DISTANCE_TO_PRESET = {"km": "km_kph", "mi": "mi_mph", "nm": "nm_kts"}
 # Stored ids for basemap (labels live in map_style_label()).
-MAP_STYLES = ("dark", "light", "vfr")
+MAP_STYLES = ("dark", "light", "voyager", "vfr")
 
 # Waveshare DSI panels stay lit near ~3% (raw ~8/255); 10% was needlessly bright at night.
 BRIGHTNESS_MIN_PERCENT = 3
@@ -122,7 +122,7 @@ _defaults = {
     "traffic_mode": "aircraft",
     # Kept in sync with traffic_mode for older readers / portal payloads
     "ais_enabled": False,
-    # dark | light | vfr — radar basemap (see map_bg)
+    # dark | light | voyager | vfr — radar basemap (see map_bg)
     "map_style": "dark",
     "vfr_map_opacity": 45,
     # Clockwise UI + touch mapping: 0, 90, 180, 270 (physical panel mount).
@@ -272,7 +272,7 @@ def _seed_from_env(state: dict) -> None:
         state["max_height_ft"] = _snap_max_height(MAX_HEIGHT)
         _ensure_height_band(state)
         env_style = map_bg.normalize_map_style(os.environ.get("RADAR_MAP_PROVIDER", "dark"))
-        # UI only cycles dark/light/vfr; map legacy osm to dark for first-run seed.
+        # UI cycles dark/light/voyager/vfr; map legacy osm to dark for first-run seed.
         state["map_style"] = env_style if env_style in MAP_STYLES else "dark"
         state["display_rotation"] = _env_display_rotation()
         state["show_wildfires"] = _default_show_wildfires()
@@ -875,7 +875,12 @@ def map_style() -> str:
 
 
 def map_style_label() -> str:
-    labels = {"dark": "Dark", "light": "Light", "vfr": "VFR Sectional"}
+    labels = {
+        "dark": "Dark",
+        "light": "Light",
+        "voyager": "Voyager",
+        "vfr": "VFR Sectional",
+    }
     return labels.get(map_style(), "Dark")
 
 

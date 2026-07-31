@@ -124,8 +124,10 @@ def present_radar_sweep(
     layer_gen: int,
     sweep_angle_logical: float,
     sweep_color,
+    *,
+    draw_sweep: bool = True,
 ) -> None:
-    """Blit a cached rotated radar base, then draw the sweep in display space.
+    """Blit a cached rotated radar base, then optionally draw the sweep.
 
     Avoids re-rotating the full 720×720 frame every sweep tick (was ~4.5ms on
     Pi with DISPLAY_ROTATION=90). The static layer is rotated only when it
@@ -214,19 +216,21 @@ def present_radar_sweep(
             display.blit(_rot_base, r.topleft, src)
 
     old_rect = _prev_sweep_rect
-    # present() rotates the frame by -rotation; a logical tip at angle θ lands
-    # on the display at θ - rotation (0=up on both surfaces).
-    angle_disp = (sweep_angle_logical - rotation) % 360.0
-    cx = origin_off[0] + _rot_base.get_width() / 2.0
-    cy = origin_off[1] + _rot_base.get_height() / 2.0
-    new_rect = draw.draw_sweep_line(
-        display,
-        angle_disp,
-        sweep_color,
-        width=max(2, theme.s(2)),
-        origin=(cx, cy),
-        radius=float(theme.SWEEP_RADIUS),
-    )
+    new_rect = None
+    if draw_sweep:
+        # present() rotates the frame by -rotation; a logical tip at angle θ lands
+        # on the display at θ - rotation (0=up on both surfaces).
+        angle_disp = (sweep_angle_logical - rotation) % 360.0
+        cx = origin_off[0] + _rot_base.get_width() / 2.0
+        cy = origin_off[1] + _rot_base.get_height() / 2.0
+        new_rect = draw.draw_sweep_line(
+            display,
+            angle_disp,
+            sweep_color,
+            width=max(2, theme.s(2)),
+            origin=(cx, cy),
+            radius=float(theme.SWEEP_RADIUS),
+        )
     _prev_sweep_rect = new_rect
 
     _t = time.perf_counter()

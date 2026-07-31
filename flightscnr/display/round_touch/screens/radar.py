@@ -426,14 +426,8 @@ def draw_radar(
         layer = _ensure_frame_layer(backdrop, flights, offset)
         if layer is not None:
             # Fast present composites from this layer directly; skip the unused
-            # logical-buffer blit (~3–4ms) while the sweep is animating.
-            if not settings.show_sweep_line():
-                try:
-                    surface.blit(layer, (0, 0))
-                except pygame.error as exc:
-                    # Transient race with layer rebuild; skip this composite.
-                    if "locked" not in str(exc).lower():
-                        raise
+            # logical-buffer blit (~3–4ms). Sweep visibility is applied in
+            # present_radar_sweep(draw_sweep=...), not here.
             bezel_applied = True
         else:
             airport_overlay.draw_airports(surface, pan_offset=offset)
@@ -709,12 +703,12 @@ def _is_tracked(flight) -> bool:
 def _light_basemap() -> bool:
     """Pale street / VFR charts need a dedicated high-contrast overlay palette."""
     try:
-        return settings.map_style() in ("light", "vfr")
+        return settings.map_style() in ("light", "voyager", "vfr")
     except Exception:
         return False
 
 
-# High-contrast overlay for busy pale charts (VFR / light CARTO).
+# High-contrast overlay for busy pale charts (VFR / light / Voyager CARTO).
 # Near-black silhouettes drown in sectional ink (airspace, labels); amber
 # matches dark-radar traffic and stays off the chart's blue/green palette.
 _LIGHT_MAP_ICON = (234, 88, 12)         # vivid amber-orange
@@ -727,7 +721,6 @@ _LIGHT_MAP_ALT_DOWN = (126, 34, 206)    # deep purple
 _LIGHT_MAP_VESSEL_PARKED = (100, 116, 139)
 _LIGHT_MAP_ALERT_MIL = (220, 38, 38)    # keep alerts punchy
 _LIGHT_MAP_ALERT_OTHER = (37, 99, 235)
-_LIGHT_MAP_HALO = (255, 255, 255)
 
 
 def _overlay_color_for_basemap(color: tuple) -> tuple:
@@ -760,26 +753,6 @@ def _overlay_color_for_basemap(color: tuple) -> tuple:
         max(12, int(g * 0.28)),
         max(12, int(b * 0.28)),
     )
-
-
-_halo_cache: dict[int, pygame.Surface] = {}
-
-
-def _draw_light_map_icon_halo(surface, x: int, y: int, *, compact: bool) -> None:
-    """White soft disc behind icons so amber traffic reads on busy charts."""
-    if not _light_basemap():
-        return
-    r = theme.s(12) if compact else theme.s(16)
-    halo = _halo_cache.get(r)
-    if halo is None:
-        side = r * 2 + 4
-        halo = pygame.Surface((side, side), pygame.SRCALPHA)
-        c = side // 2
-        pygame.draw.circle(halo, (*_LIGHT_MAP_HALO, 230), (c, c), r)
-        pygame.draw.circle(halo, (*_LIGHT_MAP_HALO, 100), (c, c), r + 1)
-        _halo_cache[r] = halo
-    c = halo.get_width() // 2
-    surface.blit(halo, (int(x) - c, int(y) - c))
 
 
 def _flight_icon_color(flight, *, compact: bool):
@@ -855,7 +828,6 @@ def _draw_flights(surface, flights):
         _t = frame_debug.end("2r_f_sort", _t)
 
         for _, flight, (x, y) in rim_items:
-            _draw_light_map_icon_halo(surface, x, y, compact=True)
             aircraft.draw_plane_icon(
                 surface,
                 x,
@@ -869,7 +841,6 @@ def _draw_flights(surface, flights):
         for _, flight, (x, y) in inner_items:
             heading = geo.screen_heading(flight.get("heading") or 0)
             color = _flight_icon_color(flight, compact=False)
-            _draw_light_map_icon_halo(surface, x, y, compact=False)
             aircraft.draw_plane_icon(surface, x, y, heading, color, flight=flight)
         _t = frame_debug.end("2r_f_icons", _t)
 

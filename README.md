@@ -63,7 +63,7 @@ The UI is designed for a **4in round LCD with touch** (default layout: **720x720
 - Animated radar sweep with configurable accent **color themes** (Red, Yellow, Green, White)
 - Optional **compass rose** and **sweep line** (toggle in portal)
 - **Facing direction** — rotate the radar so “up” on the screen matches how the Pi is physically mounted (see below)
-- **Map tile background** — dark/light CARTO street maps, or free FAA VFR sectionals (US); cached under `/var/lib/flightscnr/maps/`
+- **Map tile background** — dark / light / Voyager CARTO street maps, or free FAA VFR sectionals (US); cached under `/var/lib/flightscnr/maps/`
 - **Aircraft-type icons** (jet, turboprop, helicopter, military, etc.) with altitude/speed tags
 - **Minimum altitude floor** to hide low aircraft (e.g. pattern traffic)
 - **Alert mode**: highlight military aircraft, emergency squawks (7700/7600/7500), or a custom watch list; optionally hide non-alerted traffic
