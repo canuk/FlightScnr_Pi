@@ -120,6 +120,11 @@ FLIGHTAWARE_API_KEY = os.environ.get("FLIGHTAWARE_API_KEY", "")
 FLIGHTAWARE_MONTHLY_LIMIT = float(os.environ.get("FLIGHTAWARE_MONTHLY_LIMIT", "4.50"))
 # Conservative per-call cost estimate for /flights/{ident} enrichment.
 FLIGHTAWARE_COST_PER_CALL = float(os.environ.get("FLIGHTAWARE_COST_PER_CALL", "0.02"))
+# OpenSky Network REST API — separate from OPENSKY_USERNAME/OPENSKY_SERIAL
+# (which are for the ADS-B *feeder*, not the route-lookup API). Create an
+# API client under Account → API Client on opensky-network.org.
+OPENSKY_API_CLIENT_ID = os.environ.get("OPENSKY_API_CLIENT_ID", "")
+OPENSKY_API_CLIENT_SECRET = os.environ.get("OPENSKY_API_CLIENT_SECRET", "")
 # NASA FIRMS free MAP_KEY for wildfire detections on the radar.
 # https://firms.modaps.eosdis.nasa.gov/api/map_key/
 FIRMS_MAP_KEY = os.environ.get("FIRMS_MAP_KEY", "")

@@ -22,7 +22,7 @@ Join the [FlightScnrPi community on **Discord**](https://discord.gg/wjqgUjv8Re) 
 
 ## What it does
 
-FlightScnr Pi shows live aircraft around your pre set location on a circular radar, with rich flight details when you tap a plane. It combines **FlightRadar24 (FR24)**, live positions from **[adsb.fi](https://adsb.fi)** (free cloud feed — no local ADS-B dongle), optional **local dump1090/readsb**, **Tomorrow.io weather**, and optional **AirLabs** / **FlightAware AeroAPI** route enrichment. Settings, API keys, tracking, and updates are managed through a local web portal. No SSH required for day-to-day use.
+FlightScnr Pi shows live aircraft around your pre set location on a circular radar, with rich flight details when you tap a plane. It combines **FlightRadar24 (FR24)**, live positions from **[adsb.fi](https://adsb.fi)** (free cloud feed — no local ADS-B dongle), optional **local dump1090/readsb**, **Tomorrow.io weather**, and optional **AirLabs** / **FlightAware AeroAPI** / **OpenSky Network** route enrichment. Settings, API keys, tracking, and updates are managed through a local web portal. No SSH required for day-to-day use.
 
 ### Round touch display
 
@@ -126,7 +126,7 @@ Open from any device on your LAN:
 | **Weather**           | °C / °F for clock and forecast                                                                           |
 | **Alerts**            | Military, emergency squawk, watch list, hide non-alerted aircraft                                        |
 | **Tracking**          | Track a callsign; **route search** (origin + destination) for live flights                               |
-| **API keys**          | FR24, Tomorrow.io, AirLabs, FlightAware (route fallback), aisstream.io, NASA FIRMS (wildfires outside USA/Canada) - save or save & restart |
+| **API keys**          | FR24, Tomorrow.io, AirLabs, FlightAware / OpenSky (route fallback), aisstream.io, NASA FIRMS (wildfires outside USA/Canada) - save or save & restart |
 | **Updates**           | Check GitHub for new releases; **Update Now** runs `git pull` and re-syncs (git checkout required)       |
 | **System**            | **Reboot** or **Shutdown** the Pi remotely                                                               |
 
@@ -166,6 +166,7 @@ Portal preferences are stored on the Pi in `/var/lib/flightscnr/` and apply with
 | **[NASA FIRMS](https://firms.modaps.eosdis.nasa.gov/api/map_key/)**     | Optional (rest of world) | Satellite wildfire hotspots when the radar is outside the USA and Canada (free MAP_KEY)                                                             |
 | **[AirLabs](https://airlabs.co/signup)**                               | Optional                 | Scheduled departure info when a tracked flight is not yet airborne                                                                                |
 | **[FlightAware AeroAPI](https://www.flightaware.com/commercial/aeroapi/)** | Optional             | Route fallback when FR24/AirLabs lack origin/destination (capped monthly spend — **not** a live radar feed)                                         |
+| **[OpenSky Network](https://opensky-network.org/)**                    | Optional                 | Further route fallback when FR24/AirLabs/FlightAware lack origin/destination; derived from position history (destination often empty while airborne) |
 
 
 API responses are **cached** (e.g. FR24 feed ~90s, flight details ~30 min, weather ~1 hr) to reduce quota use during 24/7 operation. Offline databases (`airports.json`, `airlines.json`, `icao_types.json`) download on first run.

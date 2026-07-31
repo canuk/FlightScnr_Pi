@@ -21,6 +21,8 @@ try:
         FIRMS_MAP_KEY,
         FR24_API_KEY,
         LOCATION_HOME,
+        OPENSKY_API_CLIENT_ID,
+        OPENSKY_API_CLIENT_SECRET,
         web_portal_url,
     )
 except ImportError:
@@ -29,6 +31,8 @@ except ImportError:
     AISSTREAM_API_KEY = ""
     FLIGHTAWARE_API_KEY = ""
     FIRMS_MAP_KEY = ""
+    OPENSKY_API_CLIENT_ID = ""
+    OPENSKY_API_CLIENT_SECRET = ""
     LOCATION_HOME = [0.0, 0.0]
 
     def web_portal_url(hostname: str) -> str:
@@ -130,6 +134,21 @@ def _route_api_line(name: str, key: str) -> str:
     if not key:
         return f"{name}: no key"
     return f"{name}: active"
+
+
+def _opensky_api_line() -> str:
+    if not (OPENSKY_API_CLIENT_ID or "").strip() or not (
+        OPENSKY_API_CLIENT_SECRET or ""
+    ).strip():
+        return "OpenSky: no key"
+    try:
+        from secrets_store import api_enabled
+
+        if not api_enabled("OPENSKY_API_CLIENT_ID"):
+            return "OpenSky: disabled"
+    except Exception:
+        pass
+    return "OpenSky: active"
 
 
 def _firms_api_line() -> str:
@@ -855,6 +874,7 @@ def draw_info(
             _route_api_line("FR24", FR24_API_KEY),
             _route_api_line("AirLabs", AIRLABS_API_KEY),
             _route_api_line("FlightAware", FLIGHTAWARE_API_KEY),
+            _opensky_api_line(),
             _route_api_line("AIS", AISSTREAM_API_KEY),
             _firms_api_line(),
         ]

@@ -11,7 +11,8 @@
 
 Also used indirectly via overhead.py for pinned pre-departure tracked flights.
 One AirLabs lookup per uncached callsign when flight detail is opened and
-origin/destination are missing; FlightAware AeroAPI is a capped fallback.
+origin/destination are missing; FlightAware AeroAPI then OpenSky Network are
+optional capped / free fallbacks.
 """
 
 from __future__ import annotations
@@ -81,10 +82,43 @@ def _from_flightaware(flight: dict, callsign: str) -> dict | None:
     return None
 
 
+def _from_opensky(flight: dict) -> dict | None:
+    import logging
+
+    log = logging.getLogger(__name__)
+    icao24 = (flight.get("icao_hex") or flight.get("hex") or "").strip()
+    if not icao24:
+        log.info(
+            "OpenSky: skip — no icao_hex on flight (%s)",
+            (flight.get("callsign") or flight.get("flight_number") or "?"),
+        )
+        return None
+    try:
+        from utilities.opensky_client import lookup_route
+    except Exception:
+        log.warning("OpenSky: opensky_client import failed", exc_info=True)
+        return None
+    result = lookup_route(icao24)
+    if not result:
+        return None
+    return {
+        "origin": result.get("origin") or "",
+        "destination": result.get("destination") or "",
+        "dep_time": "",
+        "arr_time": "",
+        "schedule_status": "",
+        "route_source": "opensky",
+    }
+
+
 def fetch_route_enrichment(flight: dict) -> dict | None:
-    """AirLabs first, then FlightAware AeroAPI when still missing a route."""
+    """AirLabs first, then FlightAware AeroAPI, then OpenSky when still missing."""
     callsign = lookup_callsign(flight)
-    if not callsign and not (flight.get("registration") or "").strip():
+    if (
+        not callsign
+        and not (flight.get("registration") or "").strip()
+        and not (flight.get("icao_hex") or flight.get("hex") or "").strip()
+    ):
         return None
 
     airlabs = _from_airlabs(callsign) if callsign else None
@@ -95,28 +129,37 @@ def fetch_route_enrichment(flight: dict) -> dict | None:
         if not _missing_route(airlabs.get("origin")) or not _missing_route(
             airlabs.get("destination")
         ):
-            # If both ends present, done. If only one, still try FA to fill gaps.
+            # If both ends present, done. If only one, still try FA/OpenSky to fill gaps.
             if not _missing_route(airlabs.get("origin")) and not _missing_route(
                 airlabs.get("destination")
             ):
                 return airlabs
 
     fa = _from_flightaware(flight, callsign)
-    if not airlabs:
-        return fa
-    if not fa:
-        return airlabs
 
-    # Merge: fill missing ends from FA, keep AirLabs times when present.
-    merged = dict(airlabs)
-    for key in ("origin", "destination"):
-        if _missing_route(merged.get(key)) and not _missing_route(fa.get(key)):
-            merged[key] = fa[key]
-            merged["route_source"] = "airlabs+flightaware"
-    for key in ("dep_time", "arr_time", "schedule_status"):
-        if not merged.get(key) and fa.get(key):
-            merged[key] = fa[key]
-    return merged
+    merged = dict(airlabs) if airlabs else (dict(fa) if fa else {})
+    if airlabs and fa:
+        for key in ("origin", "destination"):
+            if _missing_route(merged.get(key)) and not _missing_route(fa.get(key)):
+                merged[key] = fa[key]
+                merged["route_source"] = "airlabs+flightaware"
+        for key in ("dep_time", "arr_time", "schedule_status"):
+            if not merged.get(key) and fa.get(key):
+                merged[key] = fa[key]
+
+    if _missing_route(merged.get("origin")) or _missing_route(merged.get("destination")):
+        osky = _from_opensky(flight)
+        if osky:
+            if not merged:
+                merged = osky
+            else:
+                for key in ("origin", "destination"):
+                    if _missing_route(merged.get(key)) and not _missing_route(osky.get(key)):
+                        merged[key] = osky[key]
+                prev_source = merged.get("route_source") or ""
+                merged["route_source"] = (prev_source + "+opensky").lstrip("+")
+
+    return merged or None
 
 
 def merge_route_enrichment(flight: dict, cache: dict[str, dict]) -> dict:

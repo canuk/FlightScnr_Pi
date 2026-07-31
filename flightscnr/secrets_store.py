@@ -39,6 +39,8 @@ MANAGED_KEYS = (
     "AIRLABS_API_KEY",
     "AISSTREAM_API_KEY",
     "FLIGHTAWARE_API_KEY",
+    "OPENSKY_API_CLIENT_ID",
+    "OPENSKY_API_CLIENT_SECRET",
     "FIRMS_MAP_KEY",
     "HOME_LAT",
     "HOME_LON",
@@ -61,6 +63,7 @@ TOGGLE_KEYS = (
     "USE_AIRLABS_API",
     "USE_AISSTREAM_API",
     "USE_FLIGHTAWARE_API",
+    "USE_OPENSKY_API",
 )
 
 # Non-secret data-source settings stored alongside secrets.json.
@@ -161,6 +164,8 @@ def load_toggles() -> dict[str, bool]:
         "USE_AIRLABS_API": True,
         "USE_AISSTREAM_API": True,
         "USE_FLIGHTAWARE_API": False,
+        # Free route fallback — on by default when credentials exist.
+        "USE_OPENSKY_API": True,
     }
     try:
         with open(SECRETS_JSON_PATH, encoding="utf-8") as fh:
@@ -183,6 +188,8 @@ def api_enabled(key_name: str) -> bool:
         "AIRLABS_API_KEY": "USE_AIRLABS_API",
         "AISSTREAM_API_KEY": "USE_AISSTREAM_API",
         "FLIGHTAWARE_API_KEY": "USE_FLIGHTAWARE_API",
+        "OPENSKY_API_CLIENT_ID": "USE_OPENSKY_API",
+        "OPENSKY_API_CLIENT_SECRET": "USE_OPENSKY_API",
     }
     toggle_key = mapping.get(key_name)
     if not toggle_key:
@@ -325,6 +332,8 @@ def save_secrets_from_portal(payload: dict) -> dict[str, str]:
         "airlabs_api_key": "AIRLABS_API_KEY",
         "aisstream_api_key": "AISSTREAM_API_KEY",
         "flightaware_api_key": "FLIGHTAWARE_API_KEY",
+        "opensky_api_client_id": "OPENSKY_API_CLIENT_ID",
+        "opensky_api_client_secret": "OPENSKY_API_CLIENT_SECRET",
         "firms_map_key": "FIRMS_MAP_KEY",
     }
     for form_key, env_key in field_map.items():
@@ -344,6 +353,7 @@ def save_secrets_from_portal(payload: dict) -> dict[str, str]:
         "use_airlabs_api": "USE_AIRLABS_API",
         "use_aisstream_api": "USE_AISSTREAM_API",
         "use_flightaware_api": "USE_FLIGHTAWARE_API",
+        "use_opensky_api": "USE_OPENSKY_API",
     }
     for form_key, key in toggle_map.items():
         if form_key in payload:
@@ -394,6 +404,16 @@ def save_secrets_from_portal(payload: dict) -> dict[str, str]:
             import config as cfg
 
             cfg.FLIGHTAWARE_API_KEY = updated["FLIGHTAWARE_API_KEY"]
+        except Exception:
+            pass
+    if "OPENSKY_API_CLIENT_ID" in updated or "OPENSKY_API_CLIENT_SECRET" in updated:
+        try:
+            import config as cfg
+
+            if "OPENSKY_API_CLIENT_ID" in updated:
+                cfg.OPENSKY_API_CLIENT_ID = updated["OPENSKY_API_CLIENT_ID"]
+            if "OPENSKY_API_CLIENT_SECRET" in updated:
+                cfg.OPENSKY_API_CLIENT_SECRET = updated["OPENSKY_API_CLIENT_SECRET"]
         except Exception:
             pass
     return updated
