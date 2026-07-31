@@ -327,6 +327,29 @@ def _save(data):
         logger.warning("Could not save display settings to %s: %s", SETTINGS_PATH, exc)
 
 
+def _rmw_save(updates: dict) -> None:
+    """Read-modify-write selected keys so another process can't be clobbered.
+
+    Display and web each keep an in-memory copy of settings. A full ``_save(_state)``
+    from a stale process was wiping ``atc_want_playing`` / airport / mount and made
+    playback look like it "reverted to Stop" after a short delay.
+    """
+    global _state
+    if not updates:
+        return
+    try:
+        with open(SETTINGS_PATH, encoding="utf-8") as fh:
+            disk = json.load(fh)
+        if not isinstance(disk, dict):
+            disk = {}
+    except (OSError, json.JSONDecodeError, TypeError):
+        disk = dict(_state)
+    disk.update(updates)
+    for key, value in updates.items():
+        _state[key] = value
+    _save(disk)
+
+
 def _load():
     fresh = not os.path.exists(SETTINGS_PATH)
     if fresh:
@@ -536,6 +559,17 @@ def _settings_snapshot(state: dict) -> tuple:
         state.get("map_style"),
         state.get("vfr_map_opacity"),
         _normalize_display_rotation(state.get("display_rotation", 90)),
+        # ATC is edited from the web portal in a separate process — include it
+        # so disk changes retune the device UI without an explicit reload flag.
+        bool(state.get("atc_enabled", False)),
+        str(state.get("atc_airport") or "").strip().upper(),
+        str(state.get("atc_mount") or "").strip(),
+        clamp_atc_volume(state.get("atc_volume", 100)),
+        bool(state.get("atc_quiet_hours_enabled", True)),
+        str(state.get("atc_quiet_start") or "").strip(),
+        str(state.get("atc_quiet_end") or "").strip(),
+        bool(state.get("atc_want_playing", False)),
+        bool(state.get("atc_quiet_override", False)),
     )
 
 
@@ -1376,8 +1410,7 @@ def atc_enabled() -> bool:
 
 
 def set_atc_enabled(enabled: bool) -> None:
-    _state["atc_enabled"] = bool(enabled)
-    _save(_state)
+    _rmw_save({"atc_enabled": bool(enabled)})
 
 
 def atc_airport() -> str:
@@ -1386,8 +1419,7 @@ def atc_airport() -> str:
 
 def set_atc_airport(icao: str) -> str:
     value = str(icao or "").strip().upper()
-    _state["atc_airport"] = value
-    _save(_state)
+    _rmw_save({"atc_airport": value})
     return value
 
 
@@ -1397,8 +1429,7 @@ def atc_mount() -> str:
 
 def set_atc_mount(mount: str) -> str:
     value = str(mount or "").strip()
-    _state["atc_mount"] = value
-    _save(_state)
+    _rmw_save({"atc_mount": value})
     return value
 
 
@@ -1411,7 +1442,7 @@ def set_atc_volume(value: int, *, persist: bool = True) -> int:
     vol = clamp_atc_volume(value)
     _state["atc_volume"] = vol
     if persist:
-        _save(_state)
+        _rmw_save({"atc_volume": vol})
     else:
         _disk_synced = False
     return vol
@@ -1422,8 +1453,7 @@ def atc_quiet_hours_enabled() -> bool:
 
 
 def set_atc_quiet_hours_enabled(enabled: bool) -> None:
-    _state["atc_quiet_hours_enabled"] = bool(enabled)
-    _save(_state)
+    _rmw_save({"atc_quiet_hours_enabled": bool(enabled)})
 
 
 def atc_quiet_start() -> str:
@@ -1448,8 +1478,7 @@ def set_atc_quiet_start(value: str) -> str:
     from utilities.atc_audio import normalize_hhmm
 
     normalized = normalize_hhmm(value, "22:00")
-    _state["atc_quiet_start"] = normalized
-    _save(_state)
+    _rmw_save({"atc_quiet_start": normalized})
     return normalized
 
 
@@ -1457,8 +1486,7 @@ def set_atc_quiet_end(value: str) -> str:
     from utilities.atc_audio import normalize_hhmm
 
     normalized = normalize_hhmm(value, "06:00")
-    _state["atc_quiet_end"] = normalized
-    _save(_state)
+    _rmw_save({"atc_quiet_end": normalized})
     return normalized
 
 
@@ -1468,9 +1496,10 @@ def atc_want_playing() -> bool:
 
 def set_atc_want_playing(enabled: bool, *, persist: bool = True) -> None:
     global _disk_synced
-    _state["atc_want_playing"] = bool(enabled)
+    value = bool(enabled)
+    _state["atc_want_playing"] = value
     if persist:
-        _save(_state)
+        _rmw_save({"atc_want_playing": value})
     else:
         _disk_synced = False
 
@@ -1481,9 +1510,10 @@ def atc_quiet_override() -> bool:
 
 def set_atc_quiet_override(enabled: bool, *, persist: bool = True) -> None:
     global _disk_synced
-    _state["atc_quiet_override"] = bool(enabled)
+    value = bool(enabled)
+    _state["atc_quiet_override"] = value
     if persist:
-        _save(_state)
+        _rmw_save({"atc_quiet_override": value})
     else:
         _disk_synced = False
 

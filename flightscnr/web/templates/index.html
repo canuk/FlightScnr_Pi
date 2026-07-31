@@ -531,7 +531,7 @@
     <details class="card atc-card">
         <summary><span class="ico">&#9835;</span>ATC Audio<span class="sum">LiveATC USB</span><span class="chev">&#9656;</span></summary>
         <div class="body">
-            <p class="hint">Manual LiveATC stream to the Pi’s USB / default speaker via <code>mpv</code> (<code>sudo apt install mpv</code>). Airport lists every large/medium field in radar range; Channel lists that airport’s known streams (Tower is selected by default when the map moves to a new area). Playback resumes after app restart/reboot if it was playing. Quiet hours block auto-start and resume; Play still overrides until you Stop.</p>
+            <p class="hint">Manual LiveATC stream to the Pi’s USB / default speaker via <code>mpv</code> (<code>sudo apt install mpv</code>). Airport lists every large/medium field in radar range. Channel loads known streams immediately from the local seed/index, then auto-discovers more mounts in the background (same idea as plane-tracker ATC: probe <code>d.liveatc.net</code>, never wait on LiveATC HTML). If audio is already playing, changing airport (or moving the map) retunes to that airport’s Tower and keeps playing; if it was stopped, only the selection changes. Playback resumes after reboot/app restart when it was playing (Stop clears that). Quiet hours block auto-start and resume; Play still overrides until you Stop.</p>
             <div class="chk">
                 <label for="atc_enabled">Enable ATC audio</label>
                 <span class="switch"><input id="atc_enabled" type="checkbox"><span class="track"></span></span>
@@ -1606,21 +1606,8 @@ function renderAtcStatus(st) {
     $("atc_status_line").textContent = line;
 }
 
-async function populateAtcChannels(airport, selectedMount) {
-    const sel = $("atc_channel");
-    if (!sel) return;
+function _fillAtcChannelOptions(sel, channels, selectedMount) {
     sel.innerHTML = "";
-    if (!airport) {
-        const opt = document.createElement("option");
-        opt.value = "";
-        opt.textContent = "Select an airport";
-        sel.appendChild(opt);
-        return;
-    }
-    const data = await jsonFetch(
-        `/atc/channels?airport=${encodeURIComponent(airport)}&refresh=1`
-    );
-    const channels = data.channels || [];
     if (!channels.length) {
         const opt = document.createElement("option");
         opt.value = "";
@@ -1641,6 +1628,55 @@ async function populateAtcChannels(airport, selectedMount) {
         if (pick && pick === ch.mount) opt.selected = true;
         sel.appendChild(opt);
     }
+}
+
+function _sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+let _atcChannelPollToken = 0;
+
+async function populateAtcChannels(airport, selectedMount) {
+    const sel = $("atc_channel");
+    if (!sel) return;
+    const token = ++_atcChannelPollToken;
+    sel.innerHTML = "";
+    if (!airport) {
+        const opt = document.createElement("option");
+        opt.value = "";
+        opt.textContent = "Select an airport";
+        sel.appendChild(opt);
+        return;
+    }
+    const loading = document.createElement("option");
+    loading.value = "";
+    loading.textContent = "Loading channels…";
+    sel.appendChild(loading);
+
+    // Fast local list first. Discovery polling continues in the background so
+    // Save/retune is not blocked for up to ~30s.
+    let data = await jsonFetch(
+        `/atc/channels?airport=${encodeURIComponent(airport)}`
+    );
+    if (token !== _atcChannelPollToken || $("atc_airport").value !== airport) return;
+    _fillAtcChannelOptions(sel, data.channels || [], selectedMount);
+
+    if (!data.discovering) return;
+    (async () => {
+        let attempts = 0;
+        while (attempts < 20) {
+            await _sleep(1500);
+            if (token !== _atcChannelPollToken || $("atc_airport").value !== airport) return;
+            data = await jsonFetch(
+                `/atc/channels?airport=${encodeURIComponent(airport)}`
+            );
+            if (token !== _atcChannelPollToken || $("atc_airport").value !== airport) return;
+            const keep = $("atc_channel").value || selectedMount || "";
+            _fillAtcChannelOptions(sel, data.channels || [], keep);
+            attempts += 1;
+            if (!data.discovering) return;
+        }
+    })();
 }
 
 async function loadAtc() {
@@ -1674,7 +1710,11 @@ async function loadAtc() {
     }
     const airport = sel.value || st.airport || "";
     if (airport && !sel.value) sel.value = airport;
-    await populateAtcChannels(sel.value || st.airport || "", st.mount || "");
+    // Prefer the mount actually playing so the dropdown matches the stream.
+    await populateAtcChannels(
+        sel.value || st.airport || "",
+        st.playing_mount || st.mount || ""
+    );
 }
 
 function atcPrefsPayload(extra) {
@@ -1699,6 +1739,12 @@ async function saveAtc(extra) {
             body: JSON.stringify(atcPrefsPayload(extra)),
         });
         renderAtcStatus(data);
+        // Keep the channel select aligned with what is actually playing / saved.
+        const liveMount = data.playing_mount || data.mount || "";
+        if (liveMount && $("atc_channel") && $("atc_channel").value !== liveMount) {
+            const opt = Array.from($("atc_channel").options).find((o) => o.value === liveMount);
+            if (opt) $("atc_channel").value = liveMount;
+        }
         showStatus("atc-status", data.error || data.state || "Saved.");
         if (data.error && data.state === "Error") {
             showStatus("atc-status", data.error, true);
@@ -1771,10 +1817,28 @@ if ($("atc_volume")) {
 }
 if ($("atc_airport")) {
     $("atc_airport").addEventListener("change", async () => {
+        const airport = $("atc_airport").value;
+        const ch = $("atc_channel");
+        if (ch) {
+            ch.innerHTML = "";
+            const opt = document.createElement("option");
+            opt.value = "";
+            opt.textContent = airport ? "Loading channels…" : "Select an airport";
+            ch.appendChild(opt);
+        }
         try {
-            await populateAtcChannels($("atc_airport").value, "");
+            await populateAtcChannels(airport, "");
             await saveAtc();
-        } catch (_) {}
+        } catch (e) {
+            if (ch) {
+                ch.innerHTML = "";
+                const opt = document.createElement("option");
+                opt.value = "";
+                opt.textContent = "Could not load channels";
+                ch.appendChild(opt);
+            }
+            showStatus("atc-status", e.message || "Channel list failed", true);
+        }
     });
 }
 if ($("atc_channel")) {

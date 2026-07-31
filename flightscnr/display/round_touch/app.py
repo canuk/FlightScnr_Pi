@@ -235,7 +235,9 @@ class RoundTouchDisplay:
 
     def _resume_atc_after_boot(self) -> None:
         try:
-            time.sleep(2.0)
+            # Give PipeWire / network a moment after graphical boot before the
+            # first attempt; maybe_resume_after_boot retries further on failure.
+            time.sleep(5.0)
             from utilities import atc_audio
 
             atc_audio.maybe_resume_after_boot()
@@ -1051,10 +1053,27 @@ class RoundTouchDisplay:
             nxt = idents[(idx + 1) % len(idents)]
         except ValueError:
             nxt = idents[0]
+        prev_airport = current
+        prev_mount = settings.atc_mount()
+        was_playing = atc_audio.is_playing()
         settings.set_atc_airport(nxt)
         feeds = atc_audio.feeds_for_airport(nxt)
         settings.set_atc_mount(atc_audio.default_tower_mount(feeds))
-        atc_audio.retune_if_playing()
+        if not was_playing:
+            return
+        # Keep audio on across airport changes. Prefer in-place retune so we
+        # don't go silent if the new stream fails to start.
+        if settings.atc_mount():
+            atc_audio.retune_if_playing(airport=nxt, mount=settings.atc_mount())
+            if atc_audio.is_playing():
+                return
+            # New feed failed — restore previous airport/stream.
+            if prev_airport and prev_mount:
+                settings.set_atc_airport(prev_airport)
+                settings.set_atc_mount(prev_mount)
+                atc_audio.start(override=True)
+        else:
+            atc_audio.stop()
 
     def _cycle_atc_channel(self) -> None:
         from utilities import atc_audio
@@ -1073,8 +1092,15 @@ class RoundTouchDisplay:
             nxt = mounts[(idx + 1) % len(mounts)]
         except ValueError:
             nxt = mounts[0]
+        prev_mount = current
+        was_playing = atc_audio.is_playing()
         settings.set_atc_mount(nxt)
-        atc_audio.retune_if_playing()
+        if not was_playing:
+            return
+        atc_audio.retune_if_playing(mount=nxt)
+        if not atc_audio.is_playing() and prev_mount:
+            settings.set_atc_mount(prev_mount)
+            atc_audio.start(override=True)
 
     def _apply_atc_volume_slider(self, x: int, *, persist: bool = True) -> bool:
         from utilities import atc_audio

@@ -746,9 +746,99 @@
     ],
     "KPHL": [
       {
-        "mount": "kphl_twr1",
+        "mount": "kphl_twr_east",
         "label": "KPHL Tower (East)",
         "kind": "twr"
+      },
+      {
+        "mount": "kphl_twr_west",
+        "label": "KPHL Tower (West)",
+        "kind": "twr"
+      },
+      {
+        "mount": "kphl_twr_both",
+        "label": "KPHL Tower (East/West)",
+        "kind": "twr"
+      },
+      {
+        "mount": "kphl_gnd",
+        "label": "KPHL Ground (Both)",
+        "kind": "gnd"
+      },
+      {
+        "mount": "kphl_ramp",
+        "label": "KPHL Ramp Control",
+        "kind": "ramp"
+      },
+      {
+        "mount": "kphl_del2",
+        "label": "KPHL Clearance Delivery",
+        "kind": "del"
+      },
+      {
+        "mount": "kphl_final",
+        "label": "KPHL App (Final)",
+        "kind": "app"
+      },
+      {
+        "mount": "kphl_app_128400",
+        "label": "KPHL App (N. Arrival) #1",
+        "kind": "app"
+      },
+      {
+        "mount": "kphl_n_arr",
+        "label": "KPHL App (N. Arrival) #2",
+        "kind": "app"
+      },
+      {
+        "mount": "kphl_s_arr",
+        "label": "KPHL App (S. Arrival) #1",
+        "kind": "app"
+      },
+      {
+        "mount": "kphl_app_133875",
+        "label": "KPHL App (S. Arrival) #2",
+        "kind": "app"
+      },
+      {
+        "mount": "kphl_app_119750",
+        "label": "KPHL App/Dep (South)",
+        "kind": "app"
+      },
+      {
+        "mount": "kphl_app",
+        "label": "KPHL Approach (North High)",
+        "kind": "app"
+      },
+      {
+        "mount": "kabe1_kphlapp_126850",
+        "label": "KPHL App (NW Pottstown Area)",
+        "kind": "app"
+      },
+      {
+        "mount": "kphl_dep",
+        "label": "KPHL Dep (N/S Dep)",
+        "kind": "dep"
+      },
+      {
+        "mount": "kphl_n_dep",
+        "label": "KPHL Departure (North)",
+        "kind": "dep"
+      },
+      {
+        "mount": "kphl_s_dep",
+        "label": "KPHL Departure (South)",
+        "kind": "dep"
+      },
+      {
+        "mount": "kphl_atis_arr",
+        "label": "KPHL ATIS (Arrival)",
+        "kind": "atis"
+      },
+      {
+        "mount": "kphl_atis_dep",
+        "label": "KPHL ATIS (Departure)",
+        "kind": "atis"
       }
     ],
     "KPHX": [
@@ -1133,6 +1223,83 @@
       {
         "mount": "yssy1_twr",
         "label": "YSSY Tower (Both)",
+        "kind": "twr"
+      },
+      {
+        "mount": "yssy1_twr1",
+        "label": "YSSY Tower (Rwys 16R/34L,7/25)",
+        "kind": "twr"
+      },
+      {
+        "mount": "yssy1_twr2",
+        "label": "YSSY Tower (Rwy 16L/34R)",
+        "kind": "twr"
+      },
+      {
+        "mount": "yssy1_del_gnd",
+        "label": "YSSY Del/Gnd",
+        "kind": "gnd"
+      },
+      {
+        "mount": "yssy1_app_n",
+        "label": "YSSY Approach (North/East)",
+        "kind": "app"
+      },
+      {
+        "mount": "yssy1_app_s",
+        "label": "YSSY Approach (South)",
+        "kind": "app"
+      },
+      {
+        "mount": "yssy1_dir_e",
+        "label": "YSSY Director (East)",
+        "kind": "app"
+      },
+      {
+        "mount": "yssy1_dep_ne",
+        "label": "YSSY Departure (North/East)",
+        "kind": "dep"
+      },
+      {
+        "mount": "yssy1_dep_s",
+        "label": "YSSY Departure (South/West)",
+        "kind": "dep"
+      },
+      {
+        "mount": "yssy1_ctr_s",
+        "label": "YSSY Center (South/West)",
+        "kind": "ctr"
+      },
+      {
+        "mount": "yssy1_ctr_124625",
+        "label": "Brisbane Center (124.625/YSSY)",
+        "kind": "ctr"
+      },
+      {
+        "mount": "yssy1_ctr_124950",
+        "label": "Brisbane Center (124.95/YSSY)",
+        "kind": "ctr"
+      },
+      {
+        "mount": "yssy1_ctr_125000",
+        "label": "Brisbane Center (125.0/YSSY)",
+        "kind": "ctr"
+      },
+      {
+        "mount": "yssy1_ctr_128600",
+        "label": "Brisbane Center (128.6/YSSY)",
+        "kind": "ctr"
+      },
+      {
+        "mount": "yssy1_atis1",
+        "label": "YSSY ATIS",
+        "kind": "atis"
+      }
+    ],
+    "ESSB": [
+      {
+        "mount": "essb2",
+        "label": "ESSB Tower",
         "kind": "twr"
       }
     ]

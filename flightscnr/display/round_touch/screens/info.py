@@ -772,6 +772,15 @@ def _atc_channel_label() -> str:
 
     icao = settings.atc_airport()
     mount = settings.atc_mount()
+    # Prefer the mount actually playing (IPC) so the device matches the portal
+    # even before a settings reload lands.
+    try:
+        st = atc_audio.status()
+        if st.get("playing") and st.get("playing_mount"):
+            mount = str(st.get("playing_mount") or mount)
+            icao = str(st.get("playing_airport") or icao).strip().upper() or icao
+    except Exception:
+        pass
     feeds = atc_audio.feeds_for_airport(icao) if icao else []
     if not feeds:
         return "No known feeds"

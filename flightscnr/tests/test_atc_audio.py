@@ -76,7 +76,10 @@ class SeedFeedTests(unittest.TestCase):
         }
         path = Path(self._tmpdir.name) / "seed.json"
         path.write_text(json.dumps(seed), encoding="utf-8")
+        index_path = Path(self._tmpdir.name) / "index.json"
+        index_path.write_text(json.dumps({"airports": {}}), encoding="utf-8")
         self._seed_patch = mock.patch.object(atc_audio, "SEED_PATH", path)
+        self._index_patch = mock.patch.object(atc_audio, "INDEX_PATH", index_path)
         self._cache_patch = mock.patch.object(
             atc_audio, "FEED_CACHE_DIR", Path(self._tmpdir.name) / "cache"
         )
@@ -84,6 +87,7 @@ class SeedFeedTests(unittest.TestCase):
             atc_audio, "fetch_liveatc_feeds", return_value=[]
         )
         self._seed_patch.start()
+        self._index_patch.start()
         self._cache_patch.start()
         self._fetch_patch.start()
         atc_audio.reset_runtime_for_tests()
@@ -91,6 +95,7 @@ class SeedFeedTests(unittest.TestCase):
     def tearDown(self):
         self._fetch_patch.stop()
         self._cache_patch.stop()
+        self._index_patch.stop()
         self._seed_patch.stop()
         self._tmpdir.cleanup()
         from utilities import atc_audio
@@ -133,14 +138,193 @@ class SeedFeedTests(unittest.TestCase):
             {"mount": "ksfo_gnd", "label": "KSFO Ground", "kind": "gnd"},
             {"mount": "ksfo_twr", "label": "KSFO Tower (Live)", "kind": "twr"},
         ]
-        with mock.patch.object(atc_audio, "fetch_liveatc_feeds", return_value=live):
-            feeds = atc_audio.feeds_for_airport("KSFO")
+        with mock.patch.object(atc_audio, "fetch_liveatc_feeds", return_value=live) as fetch:
+            # Without refresh, local seed/index is enough — skip LiveATC.
+            feeds_fast = atc_audio.feeds_for_airport("KSFO")
+            fetch.assert_not_called()
+            self.assertEqual([f["mount"] for f in feeds_fast], ["ksfo_twr", "ksfo_dep2"])
+
+            feeds = atc_audio.feeds_for_airport("KSFO", refresh=True)
+            fetch.assert_called_once()
         mounts = [f["mount"] for f in feeds]
         self.assertIn("ksfo_gnd", mounts)
         self.assertIn("ksfo_twr", mounts)
         self.assertIn("ksfo_dep2", mounts)
         twr = next(f for f in feeds if f["mount"] == "ksfo_twr")
         self.assertIn("Live", twr["label"])
+
+
+class MountDiscoveryTests(unittest.TestCase):
+    """Background mount probing must never block feeds_for_airport (PR #48)."""
+
+    def setUp(self):
+        from utilities import atc_audio
+
+        atc_audio.reset_runtime_for_tests()
+        self._tmpdir = tempfile.TemporaryDirectory()
+        seed = {"airports": {"KJFK": {"name": "JFK", "feeds": [
+            {"mount": "kjfk_twr", "label": "Tower", "kind": "twr"},
+        ]}}}
+        seed_path = Path(self._tmpdir.name) / "seed.json"
+        seed_path.write_text(json.dumps(seed), encoding="utf-8")
+        index_path = Path(self._tmpdir.name) / "index.json"
+        index_path.write_text(json.dumps({"airports": {}}), encoding="utf-8")
+        discovered = Path(self._tmpdir.name) / "discovered.json"
+        self._patches = [
+            mock.patch.object(atc_audio, "SEED_PATH", seed_path),
+            mock.patch.object(atc_audio, "INDEX_PATH", index_path),
+            mock.patch.object(atc_audio, "DISCOVERED_CACHE_PATH", discovered),
+            mock.patch.object(atc_audio, "FEED_CACHE_DIR", Path(self._tmpdir.name) / "cache"),
+        ]
+        for p in self._patches:
+            p.start()
+        atc_audio.reset_runtime_for_tests()
+
+    def tearDown(self):
+        for p in reversed(self._patches):
+            p.stop()
+        self._tmpdir.cleanup()
+        from utilities import atc_audio
+
+        atc_audio.reset_runtime_for_tests()
+
+    def test_numbered_bare_mounts_are_candidates(self):
+        from utilities import atc_audio
+
+        mounts = atc_audio._probe_mount_candidates("ESSB")
+        self.assertIn("essb2", mounts)
+        self.assertIn("essb_twr", mounts)
+
+    def test_stale_empty_discovery_retries_after_probe_ver_bump(self):
+        import time
+
+        from utilities import atc_audio
+
+        cache = {
+            "ESSB": {
+                "icao": "ESSB",
+                "ts": time.time(),
+                "feeds": [],
+                "probe_ver": 1,
+            }
+        }
+        atc_audio.DISCOVERED_CACHE_PATH.write_text(json.dumps(cache), encoding="utf-8")
+        atc_audio._discovered = None
+        self.assertTrue(atc_audio.needs_discovery("ESSB"))
+
+    def test_all_indeterminate_probes_are_incomplete(self):
+        from utilities import atc_audio
+
+        with mock.patch.object(atc_audio, "probe_feed_mount", return_value=None):
+            feeds, complete = atc_audio._probe_airport_feeds("KXYZ")
+        self.assertEqual(feeds, [])
+        self.assertFalse(complete)
+
+    def test_rich_seed_skips_discovery(self):
+        from utilities import atc_audio
+
+        # Temporarily give KJFK a second feed so needs_discovery is false.
+        seed = json.loads(atc_audio.SEED_PATH.read_text(encoding="utf-8"))
+        seed["airports"]["KJFK"]["feeds"].append(
+            {"mount": "kjfk_app", "label": "Approach", "kind": "app"}
+        )
+        atc_audio.SEED_PATH.write_text(json.dumps(seed), encoding="utf-8")
+        atc_audio.reset_runtime_for_tests()
+        with mock.patch.object(atc_audio, "probe_feed_mount", side_effect=AssertionError("probed")):
+            feeds = atc_audio.feeds_for_airport("KJFK")
+        self.assertEqual(len(feeds), 2)
+        self.assertFalse(atc_audio.needs_discovery("KJFK"))
+
+    def test_cache_miss_returns_immediately_and_worker_discovers(self):
+        import time
+
+        from utilities import atc_audio
+
+        calls: list[str] = []
+
+        def fake_probe(mount, timeout=2.0):
+            calls.append(mount)
+            return mount == "kxyz_twr"
+
+        with mock.patch.object(atc_audio, "probe_feed_mount", side_effect=fake_probe):
+            feeds = atc_audio.feeds_for_airport("KXYZ")
+            self.assertEqual(feeds, [])
+            self.assertEqual(calls, [])  # no synchronous probe
+            payload = atc_audio.channels_payload("KXYZ")
+            self.assertTrue(payload["discovering"])
+
+            for _ in range(50):
+                entry = atc_audio._discovery_entry("KXYZ")
+                if entry is not None:
+                    break
+                time.sleep(0.1)
+            self.assertIsNotNone(atc_audio._discovery_entry("KXYZ"))
+            mounts = {f["mount"] for f in atc_audio.feeds_for_airport("KXYZ")}
+            self.assertIn("kxyz_twr", mounts)
+            self.assertTrue(calls)
+
+
+class PackagedSeedTests(unittest.TestCase):
+    def setUp(self):
+        from utilities import atc_audio
+
+        atc_audio.reset_runtime_for_tests()
+        self._fetch_patch = mock.patch.object(
+            atc_audio, "fetch_liveatc_feeds", return_value=[]
+        )
+        self._fetch_patch.start()
+
+    def tearDown(self):
+        self._fetch_patch.stop()
+        from utilities import atc_audio
+
+        atc_audio.reset_runtime_for_tests()
+
+    def test_yssy_has_multi_channel_list(self):
+        from utilities import atc_audio
+
+        feeds = atc_audio.feeds_for_airport("YSSY")
+        mounts = {f["mount"] for f in feeds}
+        self.assertGreaterEqual(len(feeds), 10)
+        self.assertIn("yssy1_twr", mounts)
+        self.assertIn("yssy1_app_n", mounts)
+        self.assertIn("yssy1_del_gnd", mounts)
+        self.assertIn("yssy1_atis1", mounts)
+        self.assertEqual(atc_audio.default_tower_mount(feeds), "yssy1_twr")
+
+    def test_essb_seed_has_tower(self):
+        from utilities import atc_audio
+
+        feeds = atc_audio.feeds_for_airport("ESSB")
+        mounts = {f["mount"] for f in feeds}
+        self.assertIn("essb2", mounts)
+        self.assertEqual(atc_audio.default_tower_mount(feeds), "essb2")
+
+    def test_kphl_seed_has_full_channel_list(self):
+        from utilities import atc_audio
+
+        feeds = atc_audio.feeds_for_airport("KPHL")
+        mounts = {f["mount"] for f in feeds}
+        self.assertGreaterEqual(len(feeds), 18)
+        for mount in (
+            "kphl_twr_east",
+            "kphl_twr_west",
+            "kphl_twr_both",
+            "kphl_gnd",
+            "kphl_del2",
+            "kphl_final",
+            "kphl_app_128400",
+            "kphl_n_arr",
+            "kphl_s_arr",
+            "kphl_dep",
+            "kphl_n_dep",
+            "kphl_s_dep",
+            "kphl_atis_arr",
+            "kphl_atis_dep",
+            "kphl_ramp",
+        ):
+            self.assertIn(mount, mounts, mount)
+        self.assertEqual(atc_audio.default_tower_mount(feeds), "kphl_twr_east")
 
 
 class PlayerTests(unittest.TestCase):
@@ -299,7 +483,9 @@ class PlayerTests(unittest.TestCase):
             "utilities.atc_audio.subprocess.Popen", return_value=proc
         ) as popen, mock.patch("utilities.atc_audio.time.sleep"), mock.patch.object(
             atc_audio, "_ensure_system_output_volume"
-        ), mock.patch("utilities.atc_audio.os.killpg"):
+        ), mock.patch("utilities.atc_audio.os.killpg"), mock.patch.object(
+            atc_audio, "_send_ipc", return_value=False
+        ):
             atc_audio.start(override=True)
             self.assertEqual(popen.call_count, 1)
             self.settings.atc_mount.return_value = "ksfo_dep2"
@@ -307,6 +493,28 @@ class PlayerTests(unittest.TestCase):
         self.assertTrue(st["playing"])
         self.assertEqual(st.get("playing_mount"), "ksfo_dep2")
         self.assertGreaterEqual(popen.call_count, 2)
+
+    def test_retune_via_ipc_loadfile_without_local_proc(self):
+        """Portal retunes display-owned mpv with loadfile (no second Popen)."""
+        from utilities import atc_audio
+
+        ipc_calls = []
+
+        def fake_send(command):
+            ipc_calls.append(list(command))
+            return True
+
+        with mock.patch.object(atc_audio, "_mpv_alive", return_value=True), mock.patch.object(
+            atc_audio, "_send_ipc", side_effect=fake_send
+        ), mock.patch(
+            "utilities.atc_audio.subprocess.Popen"
+        ) as popen, mock.patch("utilities.atc_audio.time.sleep"):
+            self.settings.atc_mount.return_value = "ksfo_twr"
+            st = atc_audio.retune_if_playing(mount="ksfo_twr")
+        popen.assert_not_called()
+        self.assertTrue(any(c and c[0] == "loadfile" for c in ipc_calls))
+        self.assertIn("ksfo_twr", ipc_calls[0][1])
+        self.assertEqual(st.get("playing_mount"), "ksfo_twr")
 
     def test_retune_noop_when_stopped(self):
         from utilities import atc_audio
@@ -318,7 +526,8 @@ class PlayerTests(unittest.TestCase):
         self.assertFalse(st["playing"])
         popen.assert_not_called()
 
-    def test_on_radar_center_changed_stops_out_of_range(self):
+    def test_on_radar_center_changed_retunes_out_of_range(self):
+        """Location move to a new area should retune, not stop, while playing."""
         from utilities import atc_audio
 
         proc = self._fake_proc()
@@ -334,9 +543,9 @@ class PlayerTests(unittest.TestCase):
 
         with mock.patch.object(atc_audio, "in_quiet_hours", return_value=False), mock.patch(
             "utilities.atc_audio.subprocess.Popen", return_value=proc
-        ), mock.patch("utilities.atc_audio.time.sleep"), mock.patch(
+        ) as popen, mock.patch("utilities.atc_audio.time.sleep"), mock.patch(
             "utilities.atc_audio.os.killpg"
-        ) as killpg, mock.patch.object(
+        ), mock.patch.object(
             atc_audio,
             "visible_airports",
             return_value=[
@@ -350,15 +559,17 @@ class PlayerTests(unittest.TestCase):
             ],
         ), mock.patch.object(atc_audio, "feeds_for_airport", side_effect=_feeds), mock.patch.object(
             atc_audio, "schedule_prefetch_visible_feeds"
-        ):
+        ), mock.patch.object(atc_audio, "_send_ipc", return_value=False):
             atc_audio.start(override=True)
             self.assertTrue(atc_audio.is_playing())
             self.settings.atc_airport.return_value = "KSFO"
+            self.settings.atc_mount.return_value = "kord_twr"
             st = atc_audio.on_radar_center_changed()
-        self.assertFalse(st["playing"])
-        killpg.assert_called()
+        self.assertTrue(st["playing"])
+        self.assertEqual(st.get("playing_mount"), "kord_twr")
         self.settings.set_atc_airport.assert_called_with("KORD")
         self.settings.set_atc_mount.assert_called_with("kord_twr")
+        self.assertGreaterEqual(popen.call_count, 2)
 
     def test_on_radar_center_changed_keeps_in_range(self):
         from utilities import atc_audio
@@ -400,7 +611,7 @@ class PlayerTests(unittest.TestCase):
         with mock.patch.object(atc_audio, "in_quiet_hours", return_value=True), mock.patch(
             "utilities.atc_audio.subprocess.Popen"
         ) as popen:
-            st = atc_audio.maybe_resume_after_boot()
+            st = atc_audio.maybe_resume_after_boot(max_attempts=3, delay_s=0.01)
         self.assertFalse(st["playing"])
         popen.assert_not_called()
 
@@ -413,9 +624,33 @@ class PlayerTests(unittest.TestCase):
         with mock.patch.object(atc_audio, "in_quiet_hours", return_value=True), mock.patch(
             "utilities.atc_audio.subprocess.Popen", return_value=proc
         ), mock.patch("utilities.atc_audio.time.sleep"):
-            st = atc_audio.maybe_resume_after_boot()
+            st = atc_audio.maybe_resume_after_boot(max_attempts=3, delay_s=0.01)
         self.assertTrue(st["playing"])
         self.assertTrue(st["quiet_override"])
+
+    def test_maybe_resume_retries_until_playing(self):
+        from utilities import atc_audio
+
+        self.settings.atc_want_playing.return_value = True
+        self.settings.atc_quiet_override.return_value = False
+        dead = self._fake_proc()
+        dead.poll.return_value = 1  # first start looks like immediate exit
+        live = self._fake_proc()
+        pops = [dead, live]
+
+        def _popen(*a, **k):
+            return pops.pop(0)
+
+        with mock.patch.object(atc_audio, "in_quiet_hours", return_value=False), mock.patch(
+            "utilities.atc_audio.subprocess.Popen", side_effect=_popen
+        ) as popen, mock.patch("utilities.atc_audio.time.sleep"), mock.patch.object(
+            atc_audio, "_ensure_system_output_volume"
+        ), mock.patch.object(atc_audio, "_send_ipc", return_value=False), mock.patch(
+            "utilities.atc_audio.os.killpg"
+        ):
+            st = atc_audio.maybe_resume_after_boot(max_attempts=3, delay_s=0.01)
+        self.assertTrue(st["playing"])
+        self.assertEqual(popen.call_count, 2)
 
 if __name__ == "__main__":
     unittest.main()

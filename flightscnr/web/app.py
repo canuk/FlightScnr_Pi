@@ -1084,14 +1084,7 @@ def atc_channels():
         "true",
         "yes",
     )
-    feeds = atc_audio.feeds_for_airport(airport, refresh=refresh)
-    return jsonify(
-        {
-            "airport": airport,
-            "channels": feeds,
-            "has_feeds": bool(feeds),
-        }
-    )
+    return jsonify(atc_audio.channels_payload(airport, refresh=refresh))
 
 
 @app.get("/atc/status")
@@ -1107,9 +1100,10 @@ def atc_save():
     from utilities import atc_audio
 
     data = request.get_json(silent=True) or {}
-    prev_airport = settings.atc_airport()
-    prev_mount = settings.atc_mount()
-    was_playing = atc_audio.is_playing()
+    before = atc_audio.status()
+    was_playing = bool(before.get("playing"))
+    playing_airport = str(before.get("playing_airport") or "").strip().upper()
+    playing_mount = str(before.get("playing_mount") or "").strip()
 
     if "enabled" in data:
         atc_audio.apply_enabled(bool(data.get("enabled")))
@@ -1133,17 +1127,36 @@ def atc_save():
     if action == "play":
         if not settings.atc_enabled():
             atc_audio.apply_enabled(True)
-        return jsonify(atc_audio.start(override=True))
+        result = atc_audio.start(override=True)
+        settings.request_reload()
+        return jsonify(result)
     if action == "stop":
-        return jsonify(atc_audio.stop())
+        result = atc_audio.stop()
+        settings.request_reload()
+        return jsonify(result)
 
-    # Switching airport/channel while playing retunes without a second Play click.
-    selection_changed = (
-        ("airport" in data and settings.atc_airport() != prev_airport)
-        or ("mount" in data and settings.atc_mount() != prev_mount)
+    # Retune when the requested selection differs from what is actually playing
+    # (not only when settings changed). The dropdown can already show Tower while
+    # mpv is still on Departure if a prior save updated settings without retuning.
+    need_retune = (
+        was_playing
+        and settings.atc_enabled()
+        and (
+            (
+                bool(settings.atc_mount())
+                and settings.atc_mount() != playing_mount
+            )
+            or (
+                bool(settings.atc_airport())
+                and settings.atc_airport() != playing_airport
+            )
+        )
     )
-    if was_playing and selection_changed and settings.atc_enabled():
-        return jsonify(atc_audio.retune_if_playing())
+    if need_retune:
+        result = atc_audio.retune_if_playing()
+        settings.request_reload()
+        return jsonify(result)
+    settings.request_reload()
     return jsonify(atc_audio.status())
 
 
