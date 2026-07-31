@@ -67,6 +67,27 @@ class TestAircraftTypeIcons(unittest.TestCase):
 
         self.assertEqual(_category_for_type("GLF5"), "business-jet")
 
+    def test_citation_jet_family(self):
+        """C525 / C25A/B/C/M must use business-jet, not military C2/C5 prefixes."""
+        from display.round_touch.aircraft_type_icons import (
+            _category_for_type,
+            icon_category,
+            is_unknown_type,
+        )
+
+        for code in ("C525", "C25A", "C25B", "C25C", "C25M", "C500", "C501", "C550"):
+            self.assertEqual(_category_for_type(code), "business-jet", code)
+            self.assertEqual(icon_category({"plane": code}), "business-jet", code)
+            self.assertFalse(is_unknown_type({"plane": code}), code)
+        # aircraft_type-only flight dicts (no plane key) must still resolve.
+        self.assertEqual(
+            icon_category({"aircraft_type": "C525"}),
+            "business-jet",
+        )
+        # Short military tags still map exactly.
+        self.assertEqual(_category_for_type("C2"), "military-transport")
+        self.assertEqual(_category_for_type("C5"), "military-transport")
+
     def test_cessna_stationair_turbo_codes(self):
         """FR24/ADS-B often send T206/T210 for turbo Stationair/Centurion."""
         from display.round_touch.aircraft_type_icons import _category_for_type, is_unknown_type

@@ -41,7 +41,7 @@ FOOTER_BUTTONS = ("pin", "radar")
 
 # Extra nudge below the shared (already lowered) footer baseline.
 _TRACKED_FOOTER_Y_OFFSET = theme.s(8)
-_TRACKED_FOOTER_BUTTON_SIZE = theme.s(46)
+_TRACKED_FOOTER_BUTTON_SIZE = theme.s(28)
 _TRACKED_FOOTER_BUTTON_GAP = theme.s(25)
 # Visual plane size vs layout row height are separate so the icon can be large
 # without pushing LIVE / ETA / ticker rows off the 720×720 panel.

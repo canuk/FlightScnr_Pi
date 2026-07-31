@@ -96,7 +96,8 @@ install_apt_packages() {
         libjpeg-dev zlib1g-dev \
         fonts-dejavu-core \
         plymouth plymouth-themes \
-        unzip git curl
+        unzip git curl \
+        mpv
     log_ok "System packages ready"
 }
 

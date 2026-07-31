@@ -204,6 +204,7 @@ class RoundTouchDisplay:
         self._rgb_slider_group: str | None = None
         self._brightness_slider_active = False
         self._vfr_opacity_slider_active = False
+        self._atc_volume_slider_active = False
 
         radar._init_sweep()
         try:
@@ -228,7 +229,20 @@ class RoundTouchDisplay:
                     maybe_apply_auto_timezone(LOCATION_HOME[0], LOCATION_HOME[1])
             except ImportError:
                 pass
+        # Resume ATC after reboot/restart once networking is up (quiet hours gated).
+        Thread(target=self._resume_atc_after_boot, name="atc-resume", daemon=True).start()
         self._safe_draw()
+
+    def _resume_atc_after_boot(self) -> None:
+        try:
+            # Give PipeWire / network a moment after graphical boot before the
+            # first attempt; maybe_resume_after_boot retries further on failure.
+            time.sleep(5.0)
+            from utilities import atc_audio
+
+            atc_audio.maybe_resume_after_boot()
+        except Exception:
+            logger.debug("ATC resume after boot failed", exc_info=True)
 
     def _enter_wifi_setup(self, *, reason: str = "") -> None:
         """Show the QR screen and start the captive hotspot (idempotent)."""
@@ -882,10 +896,16 @@ class RoundTouchDisplay:
             self._rgb_slider_group = None
         self._brightness_slider_active = False
         self._vfr_opacity_slider_active = False
+        self._atc_volume_slider_active = False
         self._system_confirm = None
         if page != self.settings_page:
             self._scroll.reset()
-            if page not in (info.PAGE_DISPLAY, info.PAGE_OPTIONS, info.PAGE_LAYERS):
+            if page not in (
+                info.PAGE_DISPLAY,
+                info.PAGE_OPTIONS,
+                info.PAGE_LAYERS,
+                info.PAGE_ATC,
+            ):
                 self._display_focus = 0
         self.settings_page = page
 
@@ -1001,6 +1021,134 @@ class RoundTouchDisplay:
             return
         elif action == "idle_clock":
             settings.toggle_auto_idle_clock()
+        elif action == "enabled":
+            from utilities import atc_audio
+
+            atc_audio.apply_enabled(not settings.atc_enabled())
+        elif action == "volume":
+            return
+        elif action == "quiet":
+            settings.set_atc_quiet_hours_enabled(not settings.atc_quiet_hours_enabled())
+        elif action == "quiet_start":
+            settings.cycle_atc_quiet_time("start")
+        elif action == "quiet_end":
+            settings.cycle_atc_quiet_time("end")
+        elif action == "airport":
+            self._cycle_atc_airport()
+        elif action == "channel":
+            self._cycle_atc_channel()
+        elif action == "status":
+            return
+
+    def _cycle_atc_airport(self) -> None:
+        from utilities import atc_audio
+
+        airports = atc_audio.visible_airports()
+        if not airports:
+            return
+        idents = [a["ident"] for a in airports]
+        current = settings.atc_airport()
+        try:
+            idx = idents.index(current)
+            nxt = idents[(idx + 1) % len(idents)]
+        except ValueError:
+            nxt = idents[0]
+        prev_airport = current
+        prev_mount = settings.atc_mount()
+        was_playing = atc_audio.is_playing()
+        settings.set_atc_airport(nxt)
+        feeds = atc_audio.feeds_for_airport(nxt)
+        settings.set_atc_mount(atc_audio.default_tower_mount(feeds))
+        if not was_playing:
+            return
+        # Keep audio on across airport changes. Prefer in-place retune so we
+        # don't go silent if the new stream fails to start.
+        if settings.atc_mount():
+            atc_audio.retune_if_playing(airport=nxt, mount=settings.atc_mount())
+            if atc_audio.is_playing():
+                return
+            # New feed failed — restore previous airport/stream.
+            if prev_airport and prev_mount:
+                settings.set_atc_airport(prev_airport)
+                settings.set_atc_mount(prev_mount)
+                atc_audio.start(override=True)
+        else:
+            atc_audio.stop()
+
+    def _cycle_atc_channel(self) -> None:
+        from utilities import atc_audio
+
+        icao = settings.atc_airport()
+        feeds = atc_audio.feeds_for_airport(icao)
+        if not feeds:
+            settings.set_atc_mount("")
+            if atc_audio.is_playing():
+                atc_audio.stop()
+            return
+        mounts = [f["mount"] for f in feeds]
+        current = settings.atc_mount()
+        try:
+            idx = mounts.index(current)
+            nxt = mounts[(idx + 1) % len(mounts)]
+        except ValueError:
+            nxt = mounts[0]
+        prev_mount = current
+        was_playing = atc_audio.is_playing()
+        settings.set_atc_mount(nxt)
+        if not was_playing:
+            return
+        atc_audio.retune_if_playing(mount=nxt)
+        if not atc_audio.is_playing() and prev_mount:
+            settings.set_atc_mount(prev_mount)
+            atc_audio.start(override=True)
+
+    def _apply_atc_volume_slider(self, x: int, *, persist: bool = True) -> bool:
+        from utilities import atc_audio
+
+        value = info.atc_volume_slider_value_at(x, self._scroll.offset)
+        if value is None:
+            return False
+        if value == settings.atc_volume():
+            self._display_focus = info.atc_volume_row_index()
+            return False
+        atc_audio.set_volume(value, persist=persist)
+        self._display_focus = info.atc_volume_row_index()
+        return True
+
+    def _update_atc_volume_slider_drag(self) -> bool:
+        if self.screen != SCREEN_SETTINGS or self.settings_page != info.PAGE_ATC:
+            self._atc_volume_slider_active = False
+            return False
+        if not self.input.is_dragging():
+            if self._atc_volume_slider_active:
+                self._atc_volume_slider_active = False
+                from utilities import atc_audio
+
+                atc_audio.set_volume(settings.atc_volume(), persist=True)
+                self.input.consume_scroll_drag()
+                return True
+            return False
+        pos = self.input.drag_pos()
+        if pos is None:
+            return False
+        x, y = pos
+        if not self._atc_volume_slider_active:
+            if not info.atc_volume_slider_at(x, y, self._scroll.offset):
+                return False
+            self._atc_volume_slider_active = True
+        changed = self._apply_atc_volume_slider(x, persist=False)
+        self.input.consume_scroll_drag()
+        return changed
+
+    def _execute_atc_action(self, action: str) -> None:
+        from utilities import atc_audio
+
+        if action == "play":
+            if not settings.atc_enabled():
+                atc_audio.apply_enabled(True)
+            atc_audio.start(override=True)
+        elif action == "stop":
+            atc_audio.stop()
 
     def _begin_facing_calibrate(self):
         """Enter radar facing-calibrate mode (circular drag = dial analogue)."""
@@ -1709,7 +1857,8 @@ class RoundTouchDisplay:
 
     def _handle_settings_tap(self, x: int | None = None, y: int | None = None):
         if (
-            self.settings_page in (info.PAGE_DISPLAY, info.PAGE_OPTIONS, info.PAGE_LAYERS)
+            self.settings_page
+            in (info.PAGE_DISPLAY, info.PAGE_OPTIONS, info.PAGE_LAYERS, info.PAGE_ATC)
             and x is not None
             and y is not None
         ):
@@ -1723,6 +1872,16 @@ class RoundTouchDisplay:
             ):
                 self._apply_vfr_opacity_slider(x, persist=True)
                 return
+            if self.settings_page == info.PAGE_ATC and info.atc_volume_slider_at(
+                x, y, self._scroll.offset
+            ):
+                self._apply_atc_volume_slider(x, persist=True)
+                return
+            if self.settings_page == info.PAGE_ATC:
+                btn = info.atc_action_at(x, y)
+                if btn is not None:
+                    self._execute_atc_action(btn)
+                    return
             row = info.display_row_at(x, y, self.settings_page, self._scroll.offset)
             if row is not None:
                 self._apply_display_row(self.settings_page, row)
@@ -1915,6 +2074,8 @@ class RoundTouchDisplay:
             elif self.screen == SCREEN_CLOCK_SETTINGS:
                 self._open_screen(SCREEN_CLOCK)
             elif self.screen == SCREEN_SETTINGS and self.settings_page == info.PAGE_SYSTEM:
+                self._set_settings_page(info.PAGE_ATC)
+            elif self.screen == SCREEN_SETTINGS and self.settings_page == info.PAGE_ATC:
                 self._set_settings_page(info.PAGE_COLORS)
             elif self.screen == SCREEN_SETTINGS and self.settings_page == info.PAGE_COLORS:
                 self._set_settings_page(info.PAGE_LAYERS)
@@ -2029,7 +2190,7 @@ class RoundTouchDisplay:
                 self._note_activity()
                 self._safe_draw()
             else:
-                action = info.tap_footer_action(tap[0], tap[1])
+                action = info.tap_footer_action(tap[0], tap[1], self.settings_page)
                 if action == "prev":
                     prev = info.prev_page(self.settings_page)
                     if prev is not None:
@@ -2488,6 +2649,7 @@ class RoundTouchDisplay:
                     or self._update_theme_rgb_drag()
                     or self._update_brightness_slider_drag()
                     or self._update_vfr_opacity_slider_drag()
+                    or self._update_atc_volume_slider_drag()
                 ):
                     self._safe_draw()
                     self._last_radar_draw = time.time()

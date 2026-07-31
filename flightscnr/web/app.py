@@ -372,10 +372,17 @@ def location_set():
             wildfire_overlay.request_refresh(force=True)
         except Exception:
             print("Map/precip refresh after location save failed")
-        return jsonify({
+        payload = {
             "message": f"Radar center saved: {favourite_locations.format_home_location()}",
             "location": favourite_locations.format_home_location(),
-        })
+        }
+        try:
+            from utilities import atc_audio
+
+            payload["atc"] = atc_audio.status()
+        except Exception:
+            pass
+        return jsonify(payload)
     except Exception as e:
         return jsonify({"message": f"Error saving location: {e}"}), 500
 
@@ -474,6 +481,63 @@ def favourites_delete():
         "message": "Favourite deleted.",
         "locations": favourite_locations.locations(),
     })
+
+
+@app.post("/favourites/select")
+def favourites_select():
+    """Set the live radar center to a saved favourite."""
+    from utilities import favourite_locations
+
+    data = request.get_json(force=True) or {}
+    entry_id = (data.get("id") or "").strip()
+    if not entry_id:
+        return jsonify({"message": "Missing favourite id"}), 400
+    try:
+        entry = favourite_locations.select_location(entry_id)
+    except Exception as exc:
+        return jsonify({"message": f"Error selecting favourite: {exc}"}), 500
+    if not entry:
+        return jsonify({"message": "Favourite not found"}), 404
+
+    lat = float(entry["lat"])
+    lon = float(entry["lon"])
+    try:
+        set_location_home(lat, lon)
+        try:
+            from display.round_touch import weather_data
+
+            weather_data.after_radar_center_changed(lat, lon)
+        except Exception:
+            print("Weather/timezone refresh after favourite select failed")
+        try:
+            from display.round_touch import wildfire_overlay, map_bg, rainviewer_overlay
+
+            map_bg.invalidate()
+            map_bg.request_background()
+            rainviewer_overlay.invalidate()
+            rainviewer_overlay.request_overlay()
+            wildfire_overlay.invalidate()
+            wildfire_overlay.request_refresh(force=True)
+        except Exception:
+            print("Map/precip refresh after favourite select failed")
+        label = entry.get("name") or entry.get("icao") or "favourite"
+        location = f"{lat:.6f}, {lon:.6f}"
+        payload = {
+            "message": f"Radar center set to {label}.",
+            "location": location,
+            "favourite": entry,
+            "active_index": favourite_locations.active_index(),
+            "locations": favourite_locations.locations(),
+        }
+        try:
+            from utilities import atc_audio
+
+            payload["atc"] = atc_audio.status()
+        except Exception:
+            pass
+        return jsonify(payload)
+    except Exception as exc:
+        return jsonify({"message": f"Error applying favourite: {exc}"}), 500
 
 
 @app.post("/tracked/set")
@@ -1001,6 +1065,99 @@ def updates_apply():
     from utilities import updater
 
     return jsonify(updater.start_update())
+
+
+@app.get("/atc/airports")
+def atc_airports():
+    from utilities import atc_audio
+
+    return jsonify({"airports": atc_audio.visible_airports()})
+
+
+@app.get("/atc/channels")
+def atc_channels():
+    from utilities import atc_audio
+
+    airport = str(request.args.get("airport") or "").strip().upper()
+    refresh = str(request.args.get("refresh") or "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+    return jsonify(atc_audio.channels_payload(airport, refresh=refresh))
+
+
+@app.get("/atc/status")
+def atc_status():
+    from utilities import atc_audio
+
+    return jsonify(atc_audio.status())
+
+
+@app.post("/atc")
+def atc_save():
+    from display.round_touch import settings
+    from utilities import atc_audio
+
+    data = request.get_json(silent=True) or {}
+    before = atc_audio.status()
+    was_playing = bool(before.get("playing"))
+    playing_airport = str(before.get("playing_airport") or "").strip().upper()
+    playing_mount = str(before.get("playing_mount") or "").strip()
+
+    if "enabled" in data:
+        atc_audio.apply_enabled(bool(data.get("enabled")))
+    if "airport" in data:
+        settings.set_atc_airport(str(data.get("airport") or ""))
+    if "mount" in data:
+        settings.set_atc_mount(str(data.get("mount") or ""))
+    if "volume" in data:
+        persist = data.get("persist", True)
+        if isinstance(persist, str):
+            persist = persist.strip().lower() not in ("0", "false", "no")
+        atc_audio.set_volume(data.get("volume"), persist=bool(persist))
+    if "quiet_hours_enabled" in data:
+        settings.set_atc_quiet_hours_enabled(bool(data.get("quiet_hours_enabled")))
+    if "quiet_start" in data:
+        settings.set_atc_quiet_start(str(data.get("quiet_start") or ""))
+    if "quiet_end" in data:
+        settings.set_atc_quiet_end(str(data.get("quiet_end") or ""))
+
+    action = str(data.get("action") or "").strip().lower()
+    if action == "play":
+        if not settings.atc_enabled():
+            atc_audio.apply_enabled(True)
+        result = atc_audio.start(override=True)
+        settings.request_reload()
+        return jsonify(result)
+    if action == "stop":
+        result = atc_audio.stop()
+        settings.request_reload()
+        return jsonify(result)
+
+    # Retune when the requested selection differs from what is actually playing
+    # (not only when settings changed). The dropdown can already show Tower while
+    # mpv is still on Departure if a prior save updated settings without retuning.
+    need_retune = (
+        was_playing
+        and settings.atc_enabled()
+        and (
+            (
+                bool(settings.atc_mount())
+                and settings.atc_mount() != playing_mount
+            )
+            or (
+                bool(settings.atc_airport())
+                and settings.atc_airport() != playing_airport
+            )
+        )
+    )
+    if need_retune:
+        result = atc_audio.retune_if_playing()
+        settings.request_reload()
+        return jsonify(result)
+    settings.request_reload()
+    return jsonify(atc_audio.status())
 
 
 @app.post("/system/reboot")

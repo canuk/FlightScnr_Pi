@@ -26,7 +26,7 @@ _BTN_ICON = theme.LABEL
 _BTN_ICON_ACCENT = theme.SWEEP
 
 # Settings sub-page labels (must match info.py page constants)
-SETTINGS_PAGES = ("Main", "Display", "Options", "Layers", "Theme", "System")
+SETTINGS_PAGES = ("Main", "Display", "Options", "Layers", "Theme", "ATC", "System")
 
 
 class ScrollState:
@@ -57,7 +57,8 @@ def _footer_top_y() -> int:
 
 
 def _footer_button_height() -> int:
-    return theme.s(40)
+    # Match About-screen control height so radar stays compact in every footer.
+    return theme.s(28)
 
 
 def _footer_band(y_offset: int = 0, button_height: int | None = None) -> tuple[int, int]:

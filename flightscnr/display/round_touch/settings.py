@@ -71,6 +71,9 @@ BRIGHTNESS_MAX_PERCENT = 100
 # VFR chart opacity on the radar (lower = more washed / pale).
 VFR_OPACITY_MIN_PERCENT = 15
 VFR_OPACITY_MAX_PERCENT = 100
+# Softvol boost for quiet LiveATC streams (mpv --volume-max).
+# ATC softvol UI max (system sink is boosted separately on play).
+ATC_VOLUME_MAX = 100
 
 
 def clamp_brightness_percent(value: int) -> int:
@@ -127,6 +130,18 @@ _defaults = {
     "vfr_map_opacity": 45,
     # Clockwise UI + touch mapping: 0, 90, 180, 270 (physical panel mount).
     "display_rotation": 90,
+    # ATC audio (LiveATC via mpv) — non-secret prefs.
+    "atc_enabled": False,
+    "atc_airport": "",
+    "atc_mount": "",
+    "atc_volume": 100,
+    "atc_quiet_hours_enabled": True,
+    "atc_quiet_start": "",
+    "atc_quiet_end": "",
+    # Resume after app restart / reboot if True when Stop was not pressed.
+    "atc_want_playing": False,
+    # User pressed Play during quiet hours — resume may keep overriding.
+    "atc_quiet_override": False,
 }
 
 # Live preview while calibrating facing (not persisted until save).
@@ -310,6 +325,29 @@ def _save(data):
         _disk_synced = True
     except OSError as exc:
         logger.warning("Could not save display settings to %s: %s", SETTINGS_PATH, exc)
+
+
+def _rmw_save(updates: dict) -> None:
+    """Read-modify-write selected keys so another process can't be clobbered.
+
+    Display and web each keep an in-memory copy of settings. A full ``_save(_state)``
+    from a stale process was wiping ``atc_want_playing`` / airport / mount and made
+    playback look like it "reverted to Stop" after a short delay.
+    """
+    global _state
+    if not updates:
+        return
+    try:
+        with open(SETTINGS_PATH, encoding="utf-8") as fh:
+            disk = json.load(fh)
+        if not isinstance(disk, dict):
+            disk = {}
+    except (OSError, json.JSONDecodeError, TypeError):
+        disk = dict(_state)
+    disk.update(updates)
+    for key, value in updates.items():
+        _state[key] = value
+    _save(disk)
 
 
 def _load():
@@ -521,6 +559,17 @@ def _settings_snapshot(state: dict) -> tuple:
         state.get("map_style"),
         state.get("vfr_map_opacity"),
         _normalize_display_rotation(state.get("display_rotation", 90)),
+        # ATC is edited from the web portal in a separate process — include it
+        # so disk changes retune the device UI without an explicit reload flag.
+        bool(state.get("atc_enabled", False)),
+        str(state.get("atc_airport") or "").strip().upper(),
+        str(state.get("atc_mount") or "").strip(),
+        clamp_atc_volume(state.get("atc_volume", 100)),
+        bool(state.get("atc_quiet_hours_enabled", True)),
+        str(state.get("atc_quiet_start") or "").strip(),
+        str(state.get("atc_quiet_end") or "").strip(),
+        bool(state.get("atc_want_playing", False)),
+        bool(state.get("atc_quiet_override", False)),
     )
 
 
@@ -1324,6 +1373,179 @@ def apply_theme_colors():
     theme.TAG_ALT_ASCEND = (0, 255, 255)
     theme.TAG_ALT_DESCEND = (255, 0, 255)
     theme.RUNWAY_DARKMAP = runway_darkmap_rgb()
+
+
+def _night_quiet_defaults() -> tuple[str, str]:
+    """Fallback quiet-hours window from display night / off-hours prefs."""
+    try:
+        from display.round_touch import off_hours
+
+        prefs = off_hours.prefs()
+        start = str(prefs.get("start") or "22:00")
+        end = str(prefs.get("end") or "06:00")
+    except Exception:
+        try:
+            from config import NIGHT_END, NIGHT_START
+
+            start = str(NIGHT_START)
+            end = str(NIGHT_END)
+        except ImportError:
+            start, end = "22:00", "06:00"
+    from utilities.atc_audio import normalize_hhmm
+
+    return normalize_hhmm(start, "22:00"), normalize_hhmm(end, "06:00")
+
+
+def clamp_atc_volume(value) -> int:
+    """ATC volume percent; 100 = unity, up to ATC_VOLUME_MAX for softvol boost."""
+    try:
+        v = int(round(float(value)))
+    except (TypeError, ValueError):
+        v = 100
+    return max(0, min(ATC_VOLUME_MAX, v))
+
+
+def atc_enabled() -> bool:
+    return bool(_state.get("atc_enabled", False))
+
+
+def set_atc_enabled(enabled: bool) -> None:
+    _rmw_save({"atc_enabled": bool(enabled)})
+
+
+def atc_airport() -> str:
+    return str(_state.get("atc_airport") or "").strip().upper()
+
+
+def set_atc_airport(icao: str) -> str:
+    value = str(icao or "").strip().upper()
+    _rmw_save({"atc_airport": value})
+    return value
+
+
+def atc_mount() -> str:
+    return str(_state.get("atc_mount") or "").strip()
+
+
+def set_atc_mount(mount: str) -> str:
+    value = str(mount or "").strip()
+    _rmw_save({"atc_mount": value})
+    return value
+
+
+def atc_volume() -> int:
+    return clamp_atc_volume(_state.get("atc_volume", 100))
+
+
+def set_atc_volume(value: int, *, persist: bool = True) -> int:
+    global _disk_synced
+    vol = clamp_atc_volume(value)
+    _state["atc_volume"] = vol
+    if persist:
+        _rmw_save({"atc_volume": vol})
+    else:
+        _disk_synced = False
+    return vol
+
+
+def atc_quiet_hours_enabled() -> bool:
+    return bool(_state.get("atc_quiet_hours_enabled", True))
+
+
+def set_atc_quiet_hours_enabled(enabled: bool) -> None:
+    _rmw_save({"atc_quiet_hours_enabled": bool(enabled)})
+
+
+def atc_quiet_start() -> str:
+    raw = str(_state.get("atc_quiet_start") or "").strip()
+    if raw:
+        from utilities.atc_audio import normalize_hhmm
+
+        return normalize_hhmm(raw, "22:00")
+    return _night_quiet_defaults()[0]
+
+
+def atc_quiet_end() -> str:
+    raw = str(_state.get("atc_quiet_end") or "").strip()
+    if raw:
+        from utilities.atc_audio import normalize_hhmm
+
+        return normalize_hhmm(raw, "06:00")
+    return _night_quiet_defaults()[1]
+
+
+def set_atc_quiet_start(value: str) -> str:
+    from utilities.atc_audio import normalize_hhmm
+
+    normalized = normalize_hhmm(value, "22:00")
+    _rmw_save({"atc_quiet_start": normalized})
+    return normalized
+
+
+def set_atc_quiet_end(value: str) -> str:
+    from utilities.atc_audio import normalize_hhmm
+
+    normalized = normalize_hhmm(value, "06:00")
+    _rmw_save({"atc_quiet_end": normalized})
+    return normalized
+
+
+def atc_want_playing() -> bool:
+    return bool(_state.get("atc_want_playing", False))
+
+
+def set_atc_want_playing(enabled: bool, *, persist: bool = True) -> None:
+    global _disk_synced
+    value = bool(enabled)
+    _state["atc_want_playing"] = value
+    if persist:
+        _rmw_save({"atc_want_playing": value})
+    else:
+        _disk_synced = False
+
+
+def atc_quiet_override() -> bool:
+    return bool(_state.get("atc_quiet_override", False))
+
+
+def set_atc_quiet_override(enabled: bool, *, persist: bool = True) -> None:
+    global _disk_synced
+    value = bool(enabled)
+    _state["atc_quiet_override"] = value
+    if persist:
+        _rmw_save({"atc_quiet_override": value})
+    else:
+        _disk_synced = False
+
+
+def atc_quiet_start_label() -> str:
+    from utilities.atc_audio import format_hhmm_12h
+
+    return format_hhmm_12h(atc_quiet_start())
+
+
+def atc_quiet_end_label() -> str:
+    from utilities.atc_audio import format_hhmm_12h
+
+    return format_hhmm_12h(atc_quiet_end())
+
+
+def cycle_atc_quiet_time(which: str, *, step_minutes: int = 30) -> str:
+    """Advance quiet start or end by ``step_minutes`` (wraps 24h)."""
+    from utilities.atc_audio import format_hhmm, normalize_hhmm
+
+    current = atc_quiet_start() if which == "start" else atc_quiet_end()
+    mins = 0
+    try:
+        h, m = normalize_hhmm(current).split(":")
+        mins = int(h) * 60 + int(m)
+    except ValueError:
+        mins = 22 * 60 if which == "start" else 6 * 60
+    mins = (mins + int(step_minutes)) % (24 * 60)
+    text = format_hhmm(mins)
+    if which == "start":
+        return set_atc_quiet_start(text)
+    return set_atc_quiet_end(text)
 
 
 apply_theme_colors()

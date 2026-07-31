@@ -46,10 +46,22 @@ PAGE_DISPLAY = 1
 PAGE_OPTIONS = 2
 PAGE_LAYERS = 3
 PAGE_COLORS = 4
-PAGE_SYSTEM = 5
-PAGE_COUNT = 6
+PAGE_ATC = 5
+PAGE_SYSTEM = 6
+PAGE_COUNT = 7
 
 FOOTER_BUTTONS = ("prev", "next", "radar")
+
+
+def footer_kinds_for_page(page: int) -> tuple[str, ...]:
+    """Settings footer: omit Prev on first page and Next on last."""
+    kinds: list[str] = []
+    if page > PAGE_MAIN:
+        kinds.append("prev")
+    if page < PAGE_SYSTEM:
+        kinds.append("next")
+    kinds.append("radar")
+    return tuple(kinds)
 
 # Display + Options were one tall page; split so both fit the round viewport.
 # Brightness is last and drawn as a drag slider (not a tap-cycle row).
@@ -85,12 +97,29 @@ LAYERS_ACTIONS = (
     "ground_vehicles",
     "idle_clock",
 )
+# LiveATC USB playback (portal ATC Audio section equivalent).
+ATC_ACTIONS = (
+    "enabled",
+    "volume",
+    "quiet",
+    "quiet_start",
+    "quiet_end",
+    "airport",
+    "channel",
+    "status",
+)
+ATC_BUTTON_ACTIONS = (
+    "play",
+    "stop",
+)
 # Power / service controls (portal System section equivalent).
 SYSTEM_ACTIONS = (
     "restart",
     "reboot",
     "shutdown",
 )
+
+_atc_buttons: list[tuple[str, pygame.Rect]] = []
 
 _SYSTEM_BTN_FILL = (8, 36, 16)
 _SYSTEM_BTN_BORDER = (48, 160, 72)
@@ -187,6 +216,8 @@ def _breadcrumb(page: int) -> list[str]:
         trail.append("Layers")
     elif page == PAGE_COLORS:
         trail.append("Theme")
+    elif page == PAGE_ATC:
+        trail.append("ATC")
     elif page == PAGE_SYSTEM:
         trail.append("System")
     return trail
@@ -201,6 +232,14 @@ def prev_page(page: int) -> int | None:
 def next_page(page: int) -> int | None:
     if page < PAGE_SYSTEM:
         return page + 1
+    return None
+
+
+def atc_action_at(x: int, y: int) -> str | None:
+    """Hit-test Play / Stop buttons on the ATC page."""
+    for action, rect in _atc_buttons:
+        if rect.collidepoint(x, y):
+            return action
     return None
 
 
@@ -366,11 +405,12 @@ def draw_system_confirm_popup(surface, action: str) -> None:
     ]
 
 
-def tap_footer_action(x: int, y: int) -> str | None:
-    idx = nav.tap_footer_button(x, y, len(FOOTER_BUTTONS))
+def tap_footer_action(x: int, y: int, page: int = PAGE_MAIN) -> str | None:
+    kinds = footer_kinds_for_page(page)
+    idx = nav.tap_footer_button(x, y, len(kinds))
     if idx is None:
         return None
-    return FOOTER_BUTTONS[idx]
+    return kinds[idx]
 
 
 def _theme_slider_metrics() -> tuple[int, int, int, int]:
@@ -478,7 +518,7 @@ def _display_font():
 
 
 def _settings_row_page(page: int) -> bool:
-    return page in (PAGE_DISPLAY, PAGE_OPTIONS, PAGE_LAYERS)
+    return page in (PAGE_DISPLAY, PAGE_OPTIONS, PAGE_LAYERS, PAGE_ATC)
 
 
 def _row_actions(page: int) -> tuple[str, ...]:
@@ -488,6 +528,8 @@ def _row_actions(page: int) -> tuple[str, ...]:
         return OPTIONS_ACTIONS
     if page == PAGE_LAYERS:
         return LAYERS_ACTIONS
+    if page == PAGE_ATC:
+        return ATC_ACTIONS
     return ()
 
 
@@ -508,7 +550,7 @@ def display_row_at(x: int, y: int, page: int, scroll_offset: int = 0) -> int | N
     bottom = nav.content_bottom_y()
     actions = _row_actions(page)
     for i in range(count):
-        if actions[i] in ("brightness", "vfr_opacity"):
+        if actions[i] in ("brightness", "vfr_opacity", "volume", "status"):
             continue
         ry = row_y + i * row_h
         if ry + body_font.get_height() < top or ry > bottom:
@@ -648,11 +690,241 @@ def vfr_opacity_slider_value_at(x: int, scroll_offset: int = 0) -> int | None:
     return max(lo, min(hi, int(round(lo + t * span))))
 
 
+def _atc_volume_slider_metrics() -> tuple[int, int, int, int]:
+    body_font = _display_font()
+    label_w = body_font.size("Volume")[0]
+    value_w = body_font.size(f"{settings.ATC_VOLUME_MAX}%")[0]
+    track_w = theme.s(100)
+    row_h = body_font.get_height() + theme.s(8)
+    return track_w, row_h, label_w, value_w
+
+
+def atc_volume_row_index() -> int:
+    try:
+        return ATC_ACTIONS.index("volume")
+    except ValueError:
+        return -1
+
+
+def _atc_volume_slider_geometry(scroll_offset: int = 0) -> tuple[pygame.Rect, int, int] | None:
+    if "volume" not in ATC_ACTIONS:
+        return None
+    row_y, row_h, _ = _display_layout(PAGE_ATC, scroll_offset)
+    track_w, slider_h, label_w, value_w = _atc_volume_slider_metrics()
+    gap = theme.s(8)
+    idx = atc_volume_row_index()
+    if idx < 0:
+        return None
+    ry = row_y + idx * row_h
+    block_w = label_w + gap + track_w + gap + value_w
+    left_x = theme.CENTER_X - block_w // 2
+    track_x = left_x + label_w + gap
+    hit_pad = theme.s(8)
+    hit = pygame.Rect(
+        track_x - hit_pad,
+        int(ry - theme.s(2)),
+        track_w + 2 * hit_pad,
+        max(row_h, slider_h) + theme.s(4),
+    )
+    return hit, track_x, track_w
+
+
+def atc_volume_slider_at(x: int, y: int, scroll_offset: int = 0) -> bool:
+    geom = _atc_volume_slider_geometry(scroll_offset)
+    if geom is None:
+        return False
+    hit, _, _ = geom
+    return hit.collidepoint(x, y)
+
+
+def atc_volume_slider_value_at(x: int, scroll_offset: int = 0) -> int | None:
+    geom = _atc_volume_slider_geometry(scroll_offset)
+    if geom is None:
+        return None
+    _, track_x, track_w = geom
+    t = (x - track_x) / max(1, track_w)
+    hi = settings.ATC_VOLUME_MAX
+    return max(0, min(hi, int(round(t * hi))))
+
+
 def display_action_at(page: int, row: int) -> str | None:
     actions = _row_actions(page)
     if 0 <= row < len(actions):
         return actions[row]
     return None
+
+
+def _atc_airport_label() -> str:
+    from utilities import atc_audio
+
+    icao = settings.atc_airport()
+    if not icao:
+        return "—"
+    name = atc_audio.seed_airport_name(icao) or ""
+    if name and name != icao:
+        short = name if len(name) <= 18 else name[:16] + "…"
+        return f"{icao} {short}"
+    return icao
+
+
+def _atc_channel_label() -> str:
+    from utilities import atc_audio
+
+    icao = settings.atc_airport()
+    mount = settings.atc_mount()
+    # Prefer the mount actually playing (IPC) so the device matches the portal
+    # even before a settings reload lands.
+    try:
+        st = atc_audio.status()
+        if st.get("playing") and st.get("playing_mount"):
+            mount = str(st.get("playing_mount") or mount)
+            icao = str(st.get("playing_airport") or icao).strip().upper() or icao
+    except Exception:
+        pass
+    feeds = atc_audio.feeds_for_airport(icao) if icao else []
+    if not feeds:
+        return "No known feeds"
+    for feed in feeds:
+        if feed["mount"] == mount:
+            return str(feed["label"])
+    return str(feeds[0]["label"])
+
+
+def _atc_status_label() -> str:
+    try:
+        from utilities import atc_audio
+
+        st = atc_audio.status()
+        err = st.get("error")
+        if err and st.get("state") == "Error":
+            return f"Status: {err}"[:42]
+        return f"Status: {st.get('state') or 'Stopped'}"
+    except Exception:
+        return "Status: —"
+
+
+def _atc_row_labels() -> list[str]:
+    enabled = "on" if settings.atc_enabled() else "off"
+    quiet = "on" if settings.atc_quiet_hours_enabled() else "off"
+    return [
+        f"ATC Audio: {enabled}",
+        "",  # volume slider
+        f"Quiet hours: {quiet}",
+        f"Quiet start: {settings.atc_quiet_start_label()}",
+        f"Quiet end: {settings.atc_quiet_end_label()}",
+        f"Airport: {_atc_airport_label()}",
+        f"Channel: {_atc_channel_label()}",
+        _atc_status_label(),
+    ]
+
+
+def _draw_atc_volume_slider_row(surface, ry: int, focused: bool) -> None:
+    body_font = _display_font()
+    track_w, slider_h, label_w, value_w = _atc_volume_slider_metrics()
+    gap = theme.s(8)
+    pct = settings.atc_volume()
+    hi = float(settings.ATC_VOLUME_MAX)
+    block_w = label_w + gap + track_w + gap + value_w
+    left_x = theme.CENTER_X - block_w // 2
+    track_x = left_x + label_w + gap
+    text_h = body_font.get_height()
+    row_h = max(slider_h, text_h + theme.s(6))
+    if focused:
+        pad = theme.s(4)
+        focus = pygame.Rect(
+            left_x - pad,
+            ry - pad,
+            block_w + pad * 2,
+            row_h + pad,
+        )
+        pygame.draw.rect(surface, theme.GRID, focus, max(1, theme.s(1)))
+    label = body_font.render("Volume", True, theme.MUTED)
+    surface.blit(label, (left_x, int(ry + (row_h - text_h) // 2)))
+    track_cy = int(ry + row_h // 2)
+    track_rect = pygame.Rect(track_x, track_cy - max(2, theme.s(2)), track_w, max(4, theme.s(4)))
+    pygame.draw.rect(surface, theme.HINT, track_rect, border_radius=theme.s(2))
+    fill_w = int(round((pct / hi) * track_w))
+    if fill_w > 0:
+        fill_rect = pygame.Rect(track_x, track_rect.y, fill_w, track_rect.height)
+        pygame.draw.rect(surface, theme.SWEEP, fill_rect, border_radius=theme.s(2))
+    knob_x = track_x + fill_w
+    knob_r = max(5, theme.s(6))
+    pygame.draw.circle(surface, theme.SWEEP, (knob_x, track_cy), knob_r)
+    pygame.draw.circle(surface, theme.LABEL, (knob_x, track_cy), knob_r, max(1, theme.s(1)))
+    value = body_font.render(f"{pct}%", True, theme.MUTED)
+    surface.blit(
+        value,
+        (
+            track_x + track_w + gap,
+            int(ry + (row_h - text_h) // 2),
+        ),
+    )
+
+
+def _draw_atc_button(surface, x: int, y: int, action: str, btn_w: int, btn_h: int) -> pygame.Rect:
+    label = "Play" if action == "play" else "Stop"
+    font = draw.load_font(theme.s(11), bold=True)
+    rect = pygame.Rect(x, y, btn_w, btn_h)
+    pygame.draw.rect(surface, _SYSTEM_BTN_FILL, rect, border_radius=max(theme.s(6), btn_h // 3))
+    pygame.draw.rect(
+        surface,
+        _SYSTEM_BTN_BORDER,
+        rect,
+        width=max(1, theme.s(2)),
+        border_radius=max(theme.s(6), btn_h // 3),
+    )
+    rendered = font.render(label, True, theme.LABEL)
+    surface.blit(rendered, rendered.get_rect(center=rect.center))
+    return rect
+
+
+def _atc_action_button_metrics() -> tuple[int, int, int]:
+    """Return (btn_w, btn_h, gap) for side-by-side Play/Stop."""
+    font = draw.load_font(theme.s(11), bold=True)
+    pad_x = theme.s(10)
+    pad_y = theme.s(5)
+    btn_h = font.get_height() + pad_y * 2
+    gap = theme.s(8)
+    # Fit both buttons inside the circle at their row.
+    half = draw.circle_half_width_at_row(theme.CENTER_Y, btn_h)
+    available = max(theme.s(120), half * 2 - theme.s(24))
+    btn_w = max(theme.s(64), min(theme.s(96), (available - gap) // 2))
+    # Ensure label fits.
+    for label in ("Play", "Stop"):
+        btn_w = max(btn_w, font.size(label)[0] + pad_x * 2)
+    btn_w = min(btn_w, (available - gap) // 2)
+    return btn_w, btn_h, gap
+
+
+def _draw_atc_page(surface, scroll_offset: int, display_focus: int, top: int, bottom: int) -> int:
+    """Draw ATC settings rows + Play/Stop side-by-side; returns max_scroll."""
+    global _atc_buttons
+    _atc_buttons = []
+    body_font = _display_font()
+    row_h = body_font.get_height() + theme.s(6)
+    rows = _atc_row_labels()
+    max_scroll_rows = _draw_settings_rows(
+        surface,
+        rows,
+        scroll_offset,
+        display_focus,
+        top,
+        bottom,
+        draw_atc_volume_slider=True,
+    )
+    btn_w, btn_h, gap = _atc_action_button_metrics()
+    y = top + theme.s(4) - scroll_offset + len(rows) * row_h + theme.s(6)
+    total_w = btn_w * 2 + gap
+    x0 = theme.CENTER_X - total_w // 2
+    for i, action in enumerate(ATC_BUTTON_ACTIONS):
+        x = x0 + i * (btn_w + gap)
+        if y + btn_h >= top and y <= bottom:
+            rect = _draw_atc_button(surface, int(x), int(y), action, btn_w, btn_h)
+        else:
+            rect = pygame.Rect(int(x), int(y), btn_w, btn_h)
+        _atc_buttons.append((action, rect.copy()))
+    total_h = theme.s(4) + len(rows) * row_h + theme.s(6) + btn_h + theme.s(4)
+    return max(max_scroll_rows, max(0, total_h - (bottom - top)))
 
 
 def _display_row_labels() -> list[str]:
@@ -718,6 +990,7 @@ def _draw_settings_rows(
     *,
     draw_brightness_slider: bool = False,
     draw_vfr_opacity_slider: bool = False,
+    draw_atc_volume_slider: bool = False,
 ) -> int:
     body_font = _display_font()
     row_y = top + theme.s(4) - scroll_offset
@@ -726,6 +999,7 @@ def _draw_settings_rows(
     max_scroll = max(0, total_h - (bottom - top))
     brightness_idx = brightness_row_index() if draw_brightness_slider else -1
     vfr_idx = vfr_opacity_row_index() if draw_vfr_opacity_slider else -1
+    volume_idx = atc_volume_row_index() if draw_atc_volume_slider else -1
     for i, line in enumerate(rows):
         ry = row_y + i * row_h
         if ry + body_font.get_height() < top or ry > bottom:
@@ -735,6 +1009,9 @@ def _draw_settings_rows(
             continue
         if draw_vfr_opacity_slider and i == vfr_idx:
             _draw_vfr_opacity_slider_row(surface, int(ry), display_focus == i)
+            continue
+        if draw_atc_volume_slider and i == volume_idx:
+            _draw_atc_volume_slider_row(surface, int(ry), display_focus == i)
             continue
         text_w, text_h = body_font.size(line)
         pad_x = theme.s(10)
@@ -866,11 +1143,7 @@ def draw_info(
             sys_lines = _system_stat_lines()
         except Exception:
             sys_lines = ["CPU: —", "RAM: —", "Temp: —"]
-        lines = [
-            f"IP: {_local_ip()}",
-            f"Web: {web_portal_url(_hostname())}",
-            *sys_lines,
-            f"Lat/Lon: {LOCATION_HOME[0]:.5f}, {LOCATION_HOME[1]:.5f}",
+        api_lines = [
             _route_api_line("FR24", FR24_API_KEY),
             _route_api_line("AirLabs", AIRLABS_API_KEY),
             _route_api_line("FlightAware", FLIGHTAWARE_API_KEY),
@@ -881,6 +1154,28 @@ def draw_info(
         detail_font = draw.load_font(theme.s(13))
         gap = theme.s(2)
         body_top = top + theme.s(4)
+        line_pitch = detail_font.get_height() + gap
+        avail = max(0, bottom - body_top)
+
+        def _main_lines(stats: list[str]) -> list[str]:
+            return [
+                f"IP: {_local_ip()}",
+                f"Web: {web_portal_url(_hostname())}",
+                *stats,
+                f"Lat/Lon: {LOCATION_HOME[0]:.5f}, {LOCATION_HOME[1]:.5f}",
+                *api_lines,
+            ]
+
+        lines = _main_lines(sys_lines)
+        # Compact CPU+Temp onto one line only when the full list won't fit.
+        if len(lines) * line_pitch > avail:
+            try:
+                from utilities.system_stats import format_lines as _system_stat_lines
+
+                sys_lines = _system_stat_lines(compact=True)
+            except Exception:
+                sys_lines = ["CPU: —   Temp: —", "RAM: —"]
+            lines = _main_lines(sys_lines)
         max_scroll = nav.draw_lines_scrolled(
             surface,
             lines,
@@ -924,6 +1219,9 @@ def draw_info(
             top,
             bottom,
         )
+
+    elif page == PAGE_ATC:
+        max_scroll = _draw_atc_page(surface, scroll_offset, display_focus, top, bottom)
 
     elif page == PAGE_SYSTEM:
         max_scroll = _draw_system_page(surface, top, bottom)
@@ -1016,7 +1314,7 @@ def draw_info(
 
             section_y = slider_y0 + 3 * slider_h + section_gap
 
-    nav.draw_footer_buttons(surface, list(FOOTER_BUTTONS))
+    nav.draw_footer_buttons(surface, list(footer_kinds_for_page(page)))
     if page == PAGE_SYSTEM and system_confirm:
         draw_system_confirm_popup(surface, system_confirm)
     return max_scroll
