@@ -243,4 +243,10 @@ def after_radar_center_changed(lat: float, lon: float) -> dict | None:
             maybe_apply_auto_timezone(float(lat), float(lon))
     except Exception:
         logger.exception("Timezone refresh after radar center change failed")
+    try:
+        from utilities import atc_audio
+
+        atc_audio.on_radar_center_changed()
+    except Exception:
+        logger.exception("ATC refresh after radar center change failed")
     return payload

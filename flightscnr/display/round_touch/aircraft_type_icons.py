@@ -84,6 +84,7 @@ def _load_mapping() -> None:
         return
     _type_to_category = {}
     _icon_files = {}
+    _category_cache.clear()
     try:
         with open(_MAPPING_PATH, encoding="utf-8") as fh:
             data = json.load(fh)
@@ -136,16 +137,25 @@ def _category_for_type(plane_type: str) -> str | None:
     if code in _type_to_category:
         result = _type_to_category[code]
     else:
+        # Longest exact prefix first (C25A must not match military C2).
+        best = ""
         for length in range(len(code), 2, -1):
             prefix = code[:length]
-            if prefix in _type_to_category:
+            if prefix in _type_to_category and len(prefix) > len(best):
+                best = prefix
                 result = _type_to_category[prefix]
                 break
-        else:
+        if result is None:
+            # Fallback: longest mapped code that is a prefix of ``code``.
+            # Require len >= 3 so short military tags (C2, C5, E3) cannot steal
+            # Citation/CJ codes like C25A / C525 family leftovers.
+            best_len = 0
             for mapped, category in _type_to_category.items():
-                if code.startswith(mapped) or mapped.startswith(code):
+                if len(mapped) < 3:
+                    continue
+                if code.startswith(mapped) and len(mapped) > best_len:
+                    best_len = len(mapped)
                     result = category
-                    break
     _category_cache[code] = result
     return result
 
@@ -207,7 +217,12 @@ def _looks_like_ops_vehicle(flight: dict) -> bool:
 def icon_category(flight: dict | None) -> str:
     """Resolve adsb-tracker icon category for a flight dict."""
     flight = flight or {}
-    plane_type = flight.get("plane") or ""
+    plane_type = (
+        flight.get("plane")
+        or flight.get("aircraft_type")
+        or flight.get("aircraft_code")
+        or ""
+    )
 
     mapped = _category_for_type(plane_type)
     # Explicit ICAO mapping wins (e.g. BALL → balloon, TEX2 → small-prop-single)
@@ -249,7 +264,12 @@ def is_unknown_type(flight: dict | None) -> bool:
         return False
     if is_ground_vehicle(flight):
         return False
-    plane_type = flight.get("plane") or ""
+    plane_type = (
+        flight.get("plane")
+        or flight.get("aircraft_type")
+        or flight.get("aircraft_code")
+        or ""
+    )
     if _category_for_type(plane_type):
         return False
     if _is_helicopter_type(plane_type):

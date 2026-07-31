@@ -121,8 +121,11 @@ def snapshot(*, max_age_s: float = 1.0) -> dict:
     return dict(_cache)
 
 
-def format_lines() -> list[str]:
-    """Human-readable lines for the Settings main page."""
+def format_lines(*, compact: bool = False) -> list[str]:
+    """Human-readable lines for the Settings main page.
+
+    When ``compact`` is True, CPU and Temp share one line to free vertical space.
+    """
     s = snapshot()
     cpu = s.get("cpu_percent")
     ram_pct = s.get("ram_percent")
@@ -142,4 +145,6 @@ def format_lines() -> list[str]:
     else:
         ram_line = "RAM: —"
     temp_line = f"Temp: {temp:.1f}°C" if temp is not None else "Temp: —"
+    if compact:
+        return [f"{cpu_line}   {temp_line}", ram_line]
     return [cpu_line, ram_line, temp_line]

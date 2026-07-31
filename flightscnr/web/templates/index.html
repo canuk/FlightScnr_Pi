@@ -79,10 +79,13 @@
         .fav-row{display:flex;gap:.55rem;align-items:flex-start;padding:.65rem 0;
         border-bottom:1px solid rgba(120,120,120,.22)}
         .fav-row:last-child{border-bottom:none}
+        .fav-row.active{background:rgba(64,140,255,.08);margin:0 -.35rem;padding-left:.35rem;padding-right:.35rem;
+        border-radius:8px}
         .fav-meta{flex:1;min-width:0}
         .fav-meta strong{display:block;font-size:.92rem}
         .fav-meta span{display:block;font-size:.78rem;color:var(--muted);margin-top:.15rem;
         word-break:break-word}
+        .fav-actions{display:flex;gap:.4rem;flex:none;align-items:center}
         .fav-empty{color:var(--muted);font-size:.88rem;padding:.4rem 0 .2rem}
         .btn-sm{padding:.4rem .65rem;font-size:.8rem}
         .system-card .body{padding-top:.75rem}
@@ -525,6 +528,53 @@
         </div>
     </details>
 
+    <details class="card atc-card">
+        <summary><span class="ico">&#9835;</span>ATC Audio<span class="sum">LiveATC USB</span><span class="chev">&#9656;</span></summary>
+        <div class="body">
+            <p class="hint">Manual LiveATC stream to the Pi’s USB / default speaker via <code>mpv</code> (<code>sudo apt install mpv</code>). Airport lists every large/medium field in radar range; Channel lists that airport’s known streams (Tower is selected by default when the map moves to a new area). Playback resumes after app restart/reboot if it was playing. Quiet hours block auto-start and resume; Play still overrides until you Stop.</p>
+            <div class="chk">
+                <label for="atc_enabled">Enable ATC audio</label>
+                <span class="switch"><input id="atc_enabled" type="checkbox"><span class="track"></span></span>
+            </div>
+            <label>Volume <span id="atc_vol_label">100%</span>
+                <input type="range" id="atc_volume" min="0" max="100" value="100">
+            </label>
+            <div class="chk">
+                <label for="atc_quiet_enabled">Quiet hours</label>
+                <span class="switch"><input id="atc_quiet_enabled" type="checkbox"><span class="track"></span></span>
+            </div>
+            <div class="track-row" style="flex-wrap:wrap;gap:.5rem">
+                <label>Start
+                    <span class="track-row" style="gap:.25rem">
+                        <select id="atc_quiet_start_h"></select>
+                        <select id="atc_quiet_start_m"></select>
+                        <select id="atc_quiet_start_ap"><option>AM</option><option>PM</option></select>
+                    </span>
+                </label>
+                <label>End
+                    <span class="track-row" style="gap:.25rem">
+                        <select id="atc_quiet_end_h"></select>
+                        <select id="atc_quiet_end_m"></select>
+                        <select id="atc_quiet_end_ap"><option>AM</option><option>PM</option></select>
+                    </span>
+                </label>
+            </div>
+            <label>Airport
+                <select id="atc_airport"></select>
+            </label>
+            <label>Channel
+                <select id="atc_channel"></select>
+            </label>
+            <p class="hint" id="atc_status_line">Status: —</p>
+            <div class="track-row" style="margin-top:.55rem">
+                <button class="btn btn-primary" id="btn-atc-save" type="button">Save</button>
+                <button class="btn btn-primary" id="btn-atc-play" type="button">Play</button>
+                <button class="btn" id="btn-atc-stop" type="button">Stop</button>
+            </div>
+            <div id="atc-status" class="status"></div>
+        </div>
+    </details>
+
     <details class="card system-card">
         <summary><span class="ico">&#9881;</span>System<span class="sum">power</span><span class="chev">&#9656;</span></summary>
         <div class="body">
@@ -864,6 +914,10 @@ async function loadAll() {
     } catch (_) {}
 
     try {
+        await loadAtc();
+    } catch (_) {}
+
+    try {
         const t = await jsonFetch("/tracked/json");
         $("current-tracked").textContent = t.callsign ? `Currently tracking: ${t.callsign}` : "Not currently tracking a flight.";
     } catch (_) {}
@@ -999,6 +1053,8 @@ async function saveRadar() {
         });
         showStatus("radar-status", "Radar settings saved.");
         await loadAll();
+        // ATC airports are recomputed for the new center; force a fresh load.
+        try { await loadAtc(); } catch (_) {}
     } catch (e) {
         showStatus("radar-status", e.message, true);
     }
@@ -1177,19 +1233,25 @@ async function loadFavourites() {
     const data = await jsonFetch("/favourites/json");
     const list = $("fav-list");
     const locs = data.locations || [];
+    const activeIdx = Number(data.active_index);
     if (!locs.length) {
         list.innerHTML = '<p class="fav-empty">No locations saved yet.</p>';
         return data;
     }
-    list.innerHTML = locs.map((loc) => {
+    list.innerHTML = locs.map((loc, idx) => {
         const icao = loc.icao ? ` · ${escapeHtml(loc.icao)}` : "";
         const pos = `${Number(loc.lat).toFixed(6)}, ${Number(loc.lon).toFixed(6)}`;
-        return `<div class="fav-row">
+        const active = Number.isFinite(activeIdx) && activeIdx === idx;
+        const rowClass = active ? "fav-row active" : "fav-row";
+        return `<div class="${rowClass}">
             <div class="fav-meta">
-                <strong>${escapeHtml(loc.name)}${icao}</strong>
+                <strong>${escapeHtml(loc.name)}${icao}${active ? " · active" : ""}</strong>
                 <span>${escapeHtml(pos)}</span>
             </div>
-            <button class="btn btn-sm btn-danger" type="button" data-fav-delete="${escapeHtml(loc.id)}">Delete</button>
+            <div class="fav-actions">
+                <button class="btn btn-sm btn-primary" type="button" data-fav-select="${escapeHtml(loc.id)}">Select</button>
+                <button class="btn btn-sm btn-danger" type="button" data-fav-delete="${escapeHtml(loc.id)}">Delete</button>
+            </div>
         </div>`;
     }).join("");
     return data;
@@ -1247,6 +1309,28 @@ async function deleteFavourite(id) {
         });
         showStatus("fav-list-status", data.message || "Deleted.");
         await loadFavourites();
+    } catch (e) {
+        showStatus("fav-list-status", e.message, true);
+    }
+}
+
+async function selectFavourite(id) {
+    clearStatus("fav-list-status");
+    if (!id) return;
+    try {
+        const data = await jsonFetch("/favourites/select", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ id }),
+        });
+        if (data.location && $("radar_center")) {
+            $("radar_center").value = data.location;
+        }
+        showStatus("fav-list-status", data.message || "Selected.");
+        await loadFavourites();
+        try {
+            await loadAtc();
+        } catch (_) {}
     } catch (e) {
         showStatus("fav-list-status", e.message, true);
     }
@@ -1406,6 +1490,224 @@ async function requestSystemAction(action) {
     }
 }
 
+function syncAtcVolLabel() {
+    if (!$("atc_volume") || !$("atc_vol_label")) return;
+    $("atc_vol_label").textContent = `${$("atc_volume").value}%`;
+}
+
+let _atcVolTimer = null;
+let _atcVolInFlight = false;
+let _atcVolPending = null;
+
+async function pushAtcVolume(persist) {
+    if (!$("atc_volume")) return;
+    const volume = Number($("atc_volume").value || 100);
+    _atcVolPending = null;
+    _atcVolInFlight = true;
+    try {
+        await jsonFetch("/atc", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ volume, persist: !!persist }),
+        });
+    } catch (_) {
+        /* live volume is best-effort while dragging */
+    } finally {
+        _atcVolInFlight = false;
+        if (_atcVolPending != null) {
+            const next = _atcVolPending;
+            _atcVolPending = null;
+            pushAtcVolume(next);
+        }
+    }
+}
+
+function onAtcVolumeInput() {
+    syncAtcVolLabel();
+    if (_atcVolTimer) clearTimeout(_atcVolTimer);
+    _atcVolTimer = setTimeout(() => {
+        _atcVolTimer = null;
+        if (_atcVolInFlight) {
+            _atcVolPending = false; // apply live, persist on change/release
+            return;
+        }
+        pushAtcVolume(false);
+    }, 40);
+}
+
+function onAtcVolumeChange() {
+    syncAtcVolLabel();
+    if (_atcVolTimer) {
+        clearTimeout(_atcVolTimer);
+        _atcVolTimer = null;
+    }
+    if (_atcVolInFlight) {
+        _atcVolPending = true;
+        return;
+    }
+    pushAtcVolume(true);
+}
+
+function fillAtcQuietSelects() {
+    for (const prefix of ["atc_quiet_start", "atc_quiet_end"]) {
+        const h = $(prefix + "_h");
+        const m = $(prefix + "_m");
+        if (!h || h.options.length) continue;
+        for (let i = 1; i <= 12; i++) {
+            const opt = document.createElement("option");
+            opt.value = String(i);
+            opt.textContent = String(i);
+            h.appendChild(opt);
+        }
+        if (m && !m.options.length) {
+            for (const mm of ["00", "30"]) {
+                const opt = document.createElement("option");
+                opt.value = mm;
+                opt.textContent = mm;
+                m.appendChild(opt);
+            }
+        }
+    }
+}
+
+function hhmmTo12(hhmm) {
+    const parts = String(hhmm || "22:00").split(":");
+    let h = Number(parts[0]);
+    let m = Number(parts[1] || 0);
+    if (!Number.isFinite(h) || !Number.isFinite(m)) { h = 22; m = 0; }
+    const ap = h >= 12 ? "PM" : "AM";
+    let h12 = h % 12;
+    if (h12 === 0) h12 = 12;
+    const mm = m >= 30 ? "30" : "00";
+    return { h: String(h12), m: mm, ap };
+}
+
+function quiet12ToHhmm(prefix) {
+    let h = Number($(prefix + "_h").value || 12);
+    const m = Number($(prefix + "_m").value || 0);
+    const ap = ($(prefix + "_ap").value || "AM").toUpperCase();
+    if (ap === "AM") h = h === 12 ? 0 : h;
+    else h = h === 12 ? 12 : h + 12;
+    return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+}
+
+function setQuiet12(prefix, hhmm) {
+    const t = hhmmTo12(hhmm);
+    if ($(prefix + "_h")) $(prefix + "_h").value = t.h;
+    if ($(prefix + "_m")) $(prefix + "_m").value = t.m;
+    if ($(prefix + "_ap")) $(prefix + "_ap").value = t.ap;
+}
+
+function renderAtcStatus(st) {
+    if (!$("atc_status_line")) return;
+    let line = `Status: ${st.state || "—"}`;
+    if (st.error) line += ` — ${st.error}`;
+    if (st.playing_mount) line += ` (${st.playing_airport || ""} ${st.playing_mount})`;
+    $("atc_status_line").textContent = line;
+}
+
+async function populateAtcChannels(airport, selectedMount) {
+    const sel = $("atc_channel");
+    if (!sel) return;
+    sel.innerHTML = "";
+    if (!airport) {
+        const opt = document.createElement("option");
+        opt.value = "";
+        opt.textContent = "Select an airport";
+        sel.appendChild(opt);
+        return;
+    }
+    const data = await jsonFetch(
+        `/atc/channels?airport=${encodeURIComponent(airport)}&refresh=1`
+    );
+    const channels = data.channels || [];
+    if (!channels.length) {
+        const opt = document.createElement("option");
+        opt.value = "";
+        opt.textContent = "No known LiveATC feeds";
+        sel.appendChild(opt);
+        return;
+    }
+    let pick = selectedMount || "";
+    if (!pick) {
+        const twr = channels.find((ch) => ch.kind === "twr")
+            || channels.find((ch) => /tower|_twr/i.test(`${ch.label || ""} ${ch.mount || ""}`));
+        pick = (twr || channels[0]).mount;
+    }
+    for (const ch of channels) {
+        const opt = document.createElement("option");
+        opt.value = ch.mount;
+        opt.textContent = `${ch.label}${ch.kind ? ` (${ch.kind})` : ""}`;
+        if (pick && pick === ch.mount) opt.selected = true;
+        sel.appendChild(opt);
+    }
+}
+
+async function loadAtc() {
+    if (!$("atc_enabled")) return;
+    fillAtcQuietSelects();
+    const st = await jsonFetch("/atc/status");
+    $("atc_enabled").checked = !!st.enabled;
+    $("atc_volume").max = String(st.volume_max || 100);
+    $("atc_volume").value = String(st.volume ?? 100);
+    syncAtcVolLabel();
+    $("atc_quiet_enabled").checked = st.quiet_hours_enabled !== false;
+    setQuiet12("atc_quiet_start", st.quiet_start || "22:00");
+    setQuiet12("atc_quiet_end", st.quiet_end || "06:00");
+    renderAtcStatus(st);
+
+    const airportsPayload = await jsonFetch("/atc/airports");
+    const airports = airportsPayload.airports || [];
+    const sel = $("atc_airport");
+    sel.innerHTML = "";
+    const blank = document.createElement("option");
+    blank.value = "";
+    blank.textContent = airports.length ? "Select airport" : "No airports in radar range";
+    sel.appendChild(blank);
+    for (const ap of airports) {
+        const opt = document.createElement("option");
+        opt.value = ap.ident;
+        const feedMark = ap.has_feeds ? "" : " (no feeds)";
+        opt.textContent = `${ap.ident} — ${ap.name || ap.ident}${feedMark}`;
+        if (st.airport && st.airport === ap.ident) opt.selected = true;
+        sel.appendChild(opt);
+    }
+    const airport = sel.value || st.airport || "";
+    if (airport && !sel.value) sel.value = airport;
+    await populateAtcChannels(sel.value || st.airport || "", st.mount || "");
+}
+
+function atcPrefsPayload(extra) {
+    return {
+        enabled: !!$("atc_enabled").checked,
+        airport: $("atc_airport").value || "",
+        mount: $("atc_channel").value || "",
+        volume: Number($("atc_volume").value || 100),
+        quiet_hours_enabled: !!$("atc_quiet_enabled").checked,
+        quiet_start: quiet12ToHhmm("atc_quiet_start"),
+        quiet_end: quiet12ToHhmm("atc_quiet_end"),
+        ...(extra || {}),
+    };
+}
+
+async function saveAtc(extra) {
+    clearStatus("atc-status");
+    try {
+        const data = await jsonFetch("/atc", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(atcPrefsPayload(extra)),
+        });
+        renderAtcStatus(data);
+        showStatus("atc-status", data.error || data.state || "Saved.");
+        if (data.error && data.state === "Error") {
+            showStatus("atc-status", data.error, true);
+        }
+    } catch (e) {
+        showStatus("atc-status", e.message, true);
+    }
+}
+
 function setSystemButtonsDisabled(disabled) {
     $("btn-restart-app").disabled = disabled;
     $("btn-reboot").disabled = disabled;
@@ -1449,6 +1751,11 @@ $("btn-keys-restart").addEventListener("click", () => saveApiKeys(true));
 $("btn-fav-search").addEventListener("click", searchFavouriteIcao);
 $("btn-fav-add").addEventListener("click", addFavourite);
 $("fav-list").addEventListener("click", (ev) => {
+    const selectBtn = ev.target.closest("[data-fav-select]");
+    if (selectBtn) {
+        selectFavourite(selectBtn.getAttribute("data-fav-select"));
+        return;
+    }
     const btn = ev.target.closest("[data-fav-delete]");
     if (!btn) return;
     deleteFavourite(btn.getAttribute("data-fav-delete"));
@@ -1458,6 +1765,24 @@ $("range_index").addEventListener("change", syncRangeSelect);
 $("bright_pct").addEventListener("input", syncBrightLabel);
 if ($("vfr_opacity")) $("vfr_opacity").addEventListener("input", syncVfrOpacityLabel);
 if ($("dist_units")) $("dist_units").addEventListener("change", syncMinSpeedUnitLabels);
+if ($("atc_volume")) {
+    $("atc_volume").addEventListener("input", onAtcVolumeInput);
+    $("atc_volume").addEventListener("change", onAtcVolumeChange);
+}
+if ($("atc_airport")) {
+    $("atc_airport").addEventListener("change", async () => {
+        try {
+            await populateAtcChannels($("atc_airport").value, "");
+            await saveAtc();
+        } catch (_) {}
+    });
+}
+if ($("atc_channel")) {
+    $("atc_channel").addEventListener("change", () => saveAtc());
+}
+if ($("btn-atc-save")) $("btn-atc-save").addEventListener("click", () => saveAtc());
+if ($("btn-atc-play")) $("btn-atc-play").addEventListener("click", () => saveAtc({ action: "play" }));
+if ($("btn-atc-stop")) $("btn-atc-stop").addEventListener("click", () => saveAtc({ action: "stop" }));
 
 document.addEventListener("DOMContentLoaded", () => {
     wireRgbGroup("theme");

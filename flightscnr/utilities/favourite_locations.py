@@ -348,6 +348,23 @@ def add_location(
     return entry
 
 
+def select_location(entry_id: str) -> dict | None:
+    """Activate a saved favourite by id. Returns the entry, or None if missing.
+
+    Does not rewrite the Home slot — only the active cycle selection. Caller
+    should persist coordinates to ``location.json`` for the live radar center.
+    """
+    reload()
+    entry_id = (entry_id or "").strip()
+    if not entry_id:
+        return None
+    for i, loc in enumerate(_state["locations"]):
+        if str(loc.get("id") or "") == entry_id:
+            _set_active_index(i)
+            return dict(loc)
+    return None
+
+
 def delete_location(entry_id: str) -> bool:
     """Remove by id. Returns True if removed."""
     global _state
