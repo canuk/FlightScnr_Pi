@@ -43,12 +43,13 @@ from display.round_touch import draw, nav, settings, theme
 
 PAGE_MAIN = 0
 PAGE_DISPLAY = 1
-PAGE_OPTIONS = 2
-PAGE_LAYERS = 3
-PAGE_COLORS = 4
-PAGE_ATC = 5
-PAGE_SYSTEM = 6
-PAGE_COUNT = 7
+PAGE_HUD = 2
+PAGE_OPTIONS = 3
+PAGE_LAYERS = 4
+PAGE_COLORS = 5
+PAGE_ATC = 6
+PAGE_SYSTEM = 7
+PAGE_COUNT = 8
 
 FOOTER_BUTTONS = ("prev", "next", "radar")
 
@@ -63,23 +64,26 @@ def footer_kinds_for_page(page: int) -> tuple[str, ...]:
     kinds.append("radar")
     return tuple(kinds)
 
-# Display + Options were one tall page; split so both fit the round viewport.
-# Brightness is last and drawn as a drag slider (not a tap-cycle row).
+# Display was overflowing the round viewport after HUD/chime rows were added.
+# Compass / range / screen controls stay here; radar HUD + chime get PAGE_HUD.
 DISPLAY_ACTIONS = (
     "facing",
     "recenter",
     "compass",
     "range_rings",
     "sweep",
+    "units",
+    "range",
+    "rotate",
+    "brightness",
+)
+# Radar clock HUD + hourly chime (fits one viewport without footer overlap).
+HUD_ACTIONS = (
     "radar_hud",
     "hud_position",
     "hud_opacity",
     "hourly_chime",
     "chime_volume",
-    "units",
-    "range",
-    "rotate",
-    "brightness",
 )
 # Filter / map controls — kept short so rows fit the round viewport.
 OPTIONS_ACTIONS = (
@@ -215,6 +219,8 @@ def _breadcrumb(page: int) -> list[str]:
     trail = ["Radar", "Settings"]
     if page == PAGE_DISPLAY:
         trail.append("Display")
+    elif page == PAGE_HUD:
+        trail.append("HUD")
     elif page == PAGE_OPTIONS:
         trail.append("Options")
     elif page == PAGE_LAYERS:
@@ -523,12 +529,14 @@ def _display_font():
 
 
 def _settings_row_page(page: int) -> bool:
-    return page in (PAGE_DISPLAY, PAGE_OPTIONS, PAGE_LAYERS, PAGE_ATC)
+    return page in (PAGE_DISPLAY, PAGE_HUD, PAGE_OPTIONS, PAGE_LAYERS, PAGE_ATC)
 
 
 def _row_actions(page: int) -> tuple[str, ...]:
     if page == PAGE_DISPLAY:
         return DISPLAY_ACTIONS
+    if page == PAGE_HUD:
+        return HUD_ACTIONS
     if page == PAGE_OPTIONS:
         return OPTIONS_ACTIONS
     if page == PAGE_LAYERS:
@@ -644,18 +652,18 @@ def _hud_opacity_slider_metrics() -> tuple[int, int, int, int]:
 
 def hud_opacity_row_index() -> int:
     try:
-        return DISPLAY_ACTIONS.index("hud_opacity")
+        return HUD_ACTIONS.index("hud_opacity")
     except ValueError:
-        return len(DISPLAY_ACTIONS) - 1
+        return len(HUD_ACTIONS) - 1
 
 
 def _hud_opacity_slider_geometry(scroll_offset: int = 0) -> tuple[pygame.Rect, int, int] | None:
-    if "hud_opacity" not in DISPLAY_ACTIONS:
+    if "hud_opacity" not in HUD_ACTIONS:
         return None
     track_w, slider_h, label_w, value_w = _hud_opacity_slider_metrics()
     gap = theme.s(8)
     idx = hud_opacity_row_index()
-    row_y, row_h, _ = _display_layout(PAGE_DISPLAY, scroll_offset)
+    row_y, row_h, _ = _display_layout(PAGE_HUD, scroll_offset)
     ry = row_y + idx * row_h
     block_w = label_w + gap + track_w + gap + value_w
     left_x = theme.CENTER_X - block_w // 2
@@ -694,20 +702,20 @@ def _chime_volume_slider_metrics() -> tuple[int, int, int, int]:
 
 def chime_volume_row_index() -> int:
     try:
-        return DISPLAY_ACTIONS.index("chime_volume")
+        return HUD_ACTIONS.index("chime_volume")
     except ValueError:
         return -1
 
 
 def _chime_volume_slider_geometry(scroll_offset: int = 0) -> tuple[pygame.Rect, int, int] | None:
-    if "chime_volume" not in DISPLAY_ACTIONS:
+    if "chime_volume" not in HUD_ACTIONS:
         return None
     track_w, slider_h, label_w, value_w = _chime_volume_slider_metrics()
     gap = theme.s(8)
     idx = chime_volume_row_index()
     if idx < 0:
         return None
-    row_y, row_h, _ = _display_layout(PAGE_DISPLAY, scroll_offset)
+    row_y, row_h, _ = _display_layout(PAGE_HUD, scroll_offset)
     ry = row_y + idx * row_h
     block_w = label_w + gap + track_w + gap + value_w
     left_x = theme.CENTER_X - block_w // 2
@@ -1039,26 +1047,31 @@ def _display_row_labels() -> list[str]:
     rings = "on" if settings.show_range_rings() else "off"
     facing = settings.facing_label()
     sweep = "on" if settings.show_sweep_line() else "off"
-    hud = "on" if settings.radar_hud_enabled() else "off"
-    hud_pos = settings.radar_hud_position()
-    chime = "on" if settings.hourly_chime_enabled() else "off"
-    # Brightness / HUD opacity / chime volume are drawn as sliders; placeholders
-    # keep row count aligned with DISPLAY_ACTIONS.
+    # Brightness is drawn as a slider; placeholder keeps row count aligned.
     return [
         f"Change Compass Heading: {facing}",
         "Click to Set Radar Center",
         f"Compass Rose: {rose}",
         f"Radar Range Rings: {rings}",
         f"Radar Sweep Line: {sweep}",
+        f"Units: {settings.unit_preset_label()}",
+        f"Radar Range: {settings.scale_label()}",
+        f"Rotate Screen: {settings.display_rotation()}°",
+        "",  # brightness slider
+    ]
+
+
+def _hud_row_labels() -> list[str]:
+    hud = "on" if settings.radar_hud_enabled() else "off"
+    hud_pos = settings.radar_hud_position()
+    chime = "on" if settings.hourly_chime_enabled() else "off"
+    # HUD opacity / chime volume are drawn as sliders; placeholders align rows.
+    return [
         f"Radar Clock: {hud}",
         f"Clock Position: {hud_pos}",
         "",  # HUD opacity slider
         f"Hourly Chime: {chime}",
         "",  # chime volume slider
-        f"Units: {settings.unit_preset_label()}",
-        f"Radar Range: {settings.scale_label()}",
-        f"Rotate Screen: {settings.display_rotation()}°",
-        "",  # brightness slider
     ]
 
 
@@ -1413,6 +1426,16 @@ def draw_info(
             top,
             bottom,
             draw_brightness_slider=True,
+        )
+
+    elif page == PAGE_HUD:
+        max_scroll = _draw_settings_rows(
+            surface,
+            _hud_row_labels(),
+            scroll_offset,
+            display_focus,
+            top,
+            bottom,
             draw_hud_opacity_slider=True,
             draw_chime_volume_slider=True,
         )

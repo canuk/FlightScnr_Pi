@@ -126,7 +126,7 @@ RADAR_HUD_LAYOUT_TOP_DEFAULT = {
     "temp": [42, -29],
     "wind": [14, -6],
     "chime": [10, 4],
-    "atc": [19, 17],
+    "atc": [21, 14],
 }
 
 # Baked bottom-pill offsets (from device arrange pass, 2026-07-31).
@@ -179,11 +179,10 @@ def copy_radar_hud_layout_bottom_default() -> dict:
 
 def radar_hud_arrange_debug_enabled() -> bool:
     """True when FLIGHTSCNR_HUD_ARRANGE enables debug HUD arrange mode."""
-    return os.environ.get("FLIGHTSCNR_HUD_ARRANGE", "").lower() in (
-        "1",
-        "true",
-        "yes",
-    )
+    raw = os.environ.get("FLIGHTSCNR_HUD_ARRANGE", "")
+    # Systemd EnvironmentFile keeps inline "# comments" in the value.
+    token = raw.split("#", 1)[0].strip().lower()
+    return token in ("1", "true", "yes", "on")
 
 _defaults = {
     "brightness_percent": 100,

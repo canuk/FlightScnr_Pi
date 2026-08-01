@@ -480,8 +480,13 @@ def _blit_icon(
 def _wx_snapshot() -> dict | None:
     try:
         from display.round_touch import weather_data
+        from weather_prefs import unit_symbol
 
-        wx = weather_data.snapshot() or weather_data.refresh()
+        want = unit_symbol()
+        wx = weather_data.snapshot()
+        # Portal unit changes land in another process; never trust a stale unit.
+        if wx is None or wx.get("unit") != want:
+            wx = weather_data.refresh()
     except Exception:
         return None
     if not wx:
@@ -497,6 +502,23 @@ def _wx_snapshot() -> dict | None:
                     **wx,
                     "wind_speed": speed,
                     "wind_direction": direction,
+                    "wind_unit": unit,
+                }
+        except Exception:
+            pass
+    else:
+        # Keep wind speed unit in sync with portal prefs even when temp is cached.
+        try:
+            from utilities.temperature import current_wind
+
+            speed, direction, unit = current_wind()
+            if unit and wx.get("wind_unit") != unit:
+                wx = {
+                    **wx,
+                    "wind_speed": speed if speed is not None else wx.get("wind_speed"),
+                    "wind_direction": (
+                        direction if direction is not None else wx.get("wind_direction")
+                    ),
                     "wind_unit": unit,
                 }
         except Exception:

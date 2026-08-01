@@ -374,8 +374,7 @@
             <label for="hourly_chime_volume">Hourly chime volume <span id="hourly_chime_volume_label">80%</span></label>
             <input id="hourly_chime_volume" type="range" min="0" max="100" step="1" value="80">
             <p class="hint">Independent of ATC audio volume.</p>
-            <button class="btn btn-primary" id="btn-display" style="margin-top:.7rem" type="button">Save display settings</button>
-            <button class="btn" id="btn-save-reload" style="margin-top:.55rem" type="button">Save &amp; reload on display</button>
+            <button class="btn btn-primary" id="btn-save-reload" style="margin-top:.7rem" type="button">Save &amp; reload on display</button>
             <div id="display-status" class="status"></div>
         </div>
     </details>
@@ -1130,32 +1129,6 @@ async function saveDump1090() {
     }
 }
 
-async function saveDisplay() {
-    clearStatus("display-status");
-    try {
-        const data = await jsonFetch("/display", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-                brightness_percent: Number($("bright_pct").value),
-                display_rotation: Number($("display_rotation") ? $("display_rotation").value : 90),
-                flight_detail_timeout_s: Number($("detail_timeout").value),
-                clock_timeout_s: Number($("clock_timeout").value),
-                auto_idle_clock: $("idle_clock").checked,
-                clock_12hr: $("clock_12hr") ? $("clock_12hr").checked : true,
-                radar_hud_enabled: $("radar_hud") ? $("radar_hud").checked : true,
-                radar_hud_position: $("radar_hud_position") ? $("radar_hud_position").value : "top",
-                radar_hud_opacity: $("radar_hud_opacity") ? Number($("radar_hud_opacity").value) : 72,
-                hourly_chime_enabled: $("hourly_chime") ? $("hourly_chime").checked : false,
-                hourly_chime_volume: $("hourly_chime_volume") ? Number($("hourly_chime_volume").value) : 80,
-            }),
-        });
-        showStatus("display-status", data.message || "Display settings saved.");
-    } catch (e) {
-        showStatus("display-status", e.message, true);
-    }
-}
-
 async function saveAndReloadSettings() {
     clearStatus("display-status");
     try {
@@ -1839,7 +1812,6 @@ $("btn-reboot").addEventListener("click", () => requestSystemAction("reboot"));
 $("btn-shutdown").addEventListener("click", () => requestSystemAction("shutdown"));
 $("btn-radar").addEventListener("click", saveRadar);
 $("btn-dump1090").addEventListener("click", saveDump1090);
-$("btn-display").addEventListener("click", saveDisplay);
 $("btn-save-reload").addEventListener("click", saveAndReloadSettings);
 $("btn-offhours").addEventListener("click", saveOffHours);
 $("btn-weather").addEventListener("click", saveWeather);

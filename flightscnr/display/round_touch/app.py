@@ -913,6 +913,7 @@ class RoundTouchDisplay:
             self._scroll.reset()
             if page not in (
                 info.PAGE_DISPLAY,
+                info.PAGE_HUD,
                 info.PAGE_OPTIONS,
                 info.PAGE_LAYERS,
                 info.PAGE_ATC,
@@ -1244,7 +1245,7 @@ class RoundTouchDisplay:
         return True
 
     def _update_hud_opacity_slider_drag(self) -> bool:
-        if self.screen != SCREEN_SETTINGS or self.settings_page != info.PAGE_DISPLAY:
+        if self.screen != SCREEN_SETTINGS or self.settings_page != info.PAGE_HUD:
             self._hud_opacity_slider_active = False
             return False
         if not self.input.is_dragging():
@@ -1278,7 +1279,7 @@ class RoundTouchDisplay:
         return True
 
     def _update_chime_volume_slider_drag(self) -> bool:
-        if self.screen != SCREEN_SETTINGS or self.settings_page != info.PAGE_DISPLAY:
+        if self.screen != SCREEN_SETTINGS or self.settings_page != info.PAGE_HUD:
             self._chime_volume_slider_active = False
             return False
         if not self.input.is_dragging():
@@ -2062,7 +2063,13 @@ class RoundTouchDisplay:
     def _handle_settings_tap(self, x: int | None = None, y: int | None = None):
         if (
             self.settings_page
-            in (info.PAGE_DISPLAY, info.PAGE_OPTIONS, info.PAGE_LAYERS, info.PAGE_ATC)
+            in (
+                info.PAGE_DISPLAY,
+                info.PAGE_HUD,
+                info.PAGE_OPTIONS,
+                info.PAGE_LAYERS,
+                info.PAGE_ATC,
+            )
             and x is not None
             and y is not None
         ):
@@ -2071,12 +2078,12 @@ class RoundTouchDisplay:
             ):
                 self._apply_brightness_slider(x, persist=True)
                 return
-            if self.settings_page == info.PAGE_DISPLAY and info.hud_opacity_slider_at(
+            if self.settings_page == info.PAGE_HUD and info.hud_opacity_slider_at(
                 x, y, self._scroll.offset
             ):
                 self._apply_hud_opacity_slider(x, persist=True)
                 return
-            if self.settings_page == info.PAGE_DISPLAY and info.chime_volume_slider_at(
+            if self.settings_page == info.PAGE_HUD and info.chime_volume_slider_at(
                 x, y, self._scroll.offset
             ):
                 self._apply_chime_volume_slider(x, persist=True)
@@ -2308,6 +2315,8 @@ class RoundTouchDisplay:
             elif self.screen == SCREEN_SETTINGS and self.settings_page == info.PAGE_LAYERS:
                 self._set_settings_page(info.PAGE_OPTIONS)
             elif self.screen == SCREEN_SETTINGS and self.settings_page == info.PAGE_OPTIONS:
+                self._set_settings_page(info.PAGE_HUD)
+            elif self.screen == SCREEN_SETTINGS and self.settings_page == info.PAGE_HUD:
                 self._set_settings_page(info.PAGE_DISPLAY)
             elif self.screen == SCREEN_SETTINGS and self.settings_page == info.PAGE_DISPLAY:
                 self._set_settings_page(info.PAGE_MAIN)
@@ -2564,6 +2573,20 @@ class RoundTouchDisplay:
             self._last_firms_poll = 0.0
         except Exception:
             logger.debug("AIS sync after settings reload failed", exc_info=True)
+        # Weather units live in weather_prefs.json (portal Weather card) — refresh
+        # so the radar HUD / clock pick up °F↔°C without a service restart.
+        try:
+            import weather_prefs
+            from display.round_touch import weather_data
+
+            weather_prefs.reload()
+            # Keep Tomorrow.io cache; temperatures convert on read. Rebuild payload.
+            weather_data.invalidate_cache()
+            weather_data.refresh(force=True)
+            radar_hud.rebuild_overlay()
+            self._weather_redraw_pending = True
+        except Exception:
+            logger.debug("Weather refresh after settings reload failed", exc_info=True)
         radar.invalidate_frame_layer()
         self._safe_draw()
 
@@ -2990,8 +3013,11 @@ class RoundTouchDisplay:
                 if self._weather_redraw_pending and self.screen in (
                     SCREEN_CLOCK,
                     SCREEN_FORECAST,
+                    SCREEN_RADAR,
                 ):
                     self._weather_redraw_pending = False
+                    if self.screen == SCREEN_RADAR:
+                        radar.invalidate_frame_layer()
                     self._safe_draw()
 
                 # Re-open captive setup if known Wi-Fi stays down past the grace window.

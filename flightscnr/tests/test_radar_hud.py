@@ -89,6 +89,11 @@ class RadarHudSettingsTests(unittest.TestCase):
             self.assertFalse(settings.radar_hud_arrange())
         with mock.patch.dict(os.environ, {"FLIGHTSCNR_HUD_ARRANGE": "1"}):
             self.assertTrue(settings.radar_hud_arrange())
+        # Systemd EnvironmentFile leaves inline comments attached to the value.
+        with mock.patch.dict(
+            os.environ, {"FLIGHTSCNR_HUD_ARRANGE": "1 # bake after arrange"}
+        ):
+            self.assertTrue(settings.radar_hud_arrange())
 
     def test_bottom_layout_offset_independent(self):
         from display.round_touch import settings

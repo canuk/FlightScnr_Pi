@@ -122,3 +122,10 @@ def update(*, temperature_units_value: str | None = None) -> None:
         _state["temperature_units"] = normalize_units(temperature_units_value)
     _save(_state)
     invalidate_weather_caches()
+    # Nudge the display process (separate from the portal) to refresh HUD/clock.
+    try:
+        from display.round_touch import settings
+
+        settings.request_reload()
+    except Exception:
+        logger.debug("Could not request display reload after weather prefs", exc_info=True)
