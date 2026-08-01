@@ -349,6 +349,31 @@
                 <label for="idle_clock">Return to clock when no aircraft visible</label>
                 <span class="switch"><input id="idle_clock" type="checkbox"><span class="track"></span></span>
             </div>
+            <div class="chk">
+                <label for="clock_12hr">12-hour clock (AM/PM)</label>
+                <span class="switch"><input id="clock_12hr" type="checkbox" checked><span class="track"></span></span>
+            </div>
+            <p class="hint">Applies everywhere: radar HUD, clock screen, and settings. Off = 24-hour.</p>
+            <div class="chk">
+                <label for="radar_hud">Show radar clock HUD</label>
+                <span class="switch"><input id="radar_hud" type="checkbox" checked><span class="track"></span></span>
+            </div>
+            <label for="radar_hud_position">Radar clock position</label>
+            <select id="radar_hud_position">
+                <option value="top">Top</option>
+                <option value="bottom">Bottom</option>
+            </select>
+            <label for="radar_hud_opacity">Radar clock opacity <span id="radar_hud_opacity_label">72%</span></label>
+            <input id="radar_hud_opacity" type="range" min="0" max="100" step="1" value="72">
+            <p class="hint">Frosted glass pill behind the radar clock and icons (0% = invisible fill, 100% = solid).</p>
+            <div class="chk">
+                <label for="hourly_chime">Hourly chime</label>
+                <button class="btn btn-sm" id="btn-chime-preview" type="button">Preview</button>
+                <span class="switch"><input id="hourly_chime" type="checkbox"><span class="track"></span></span>
+            </div>
+            <label for="hourly_chime_volume">Hourly chime volume <span id="hourly_chime_volume_label">80%</span></label>
+            <input id="hourly_chime_volume" type="range" min="0" max="100" step="1" value="80">
+            <p class="hint">Independent of ATC audio volume.</p>
             <button class="btn btn-primary" id="btn-display" style="margin-top:.7rem" type="button">Save display settings</button>
             <button class="btn" id="btn-save-reload" style="margin-top:.55rem" type="button">Save &amp; reload on display</button>
             <div id="display-status" class="status"></div>
@@ -880,6 +905,18 @@ async function loadAll() {
         $("detail_timeout").value = String(d.flight_detail_timeout_s ?? 20);
         $("clock_timeout").value = String(d.clock_timeout_s ?? 10);
         $("idle_clock").checked = !!d.auto_idle_clock;
+        if ($("clock_12hr")) $("clock_12hr").checked = d.clock_12hr !== false;
+        if ($("radar_hud")) $("radar_hud").checked = d.radar_hud_enabled !== false;
+        if ($("radar_hud_position")) $("radar_hud_position").value = d.radar_hud_position === "bottom" ? "bottom" : "top";
+        if ($("radar_hud_opacity")) {
+            $("radar_hud_opacity").value = String(d.radar_hud_opacity ?? 72);
+            syncHudOpacityLabel();
+        }
+        if ($("hourly_chime")) $("hourly_chime").checked = !!d.hourly_chime_enabled;
+        if ($("hourly_chime_volume")) {
+            $("hourly_chime_volume").value = String(d.hourly_chime_volume ?? 80);
+            syncChimeVolumeLabel();
+        }
     } catch (_) {}
 
     try {
@@ -957,6 +994,14 @@ function toggleDimRow() {
 function syncBrightLabel() {
     const el = $("bright_pct_label");
     if (el) el.textContent = `${$("bright_pct").value}%`;
+}
+function syncHudOpacityLabel() {
+    const el = $("radar_hud_opacity_label");
+    if (el && $("radar_hud_opacity")) el.textContent = `${$("radar_hud_opacity").value}%`;
+}
+function syncChimeVolumeLabel() {
+    const el = $("hourly_chime_volume_label");
+    if (el && $("hourly_chime_volume")) el.textContent = `${$("hourly_chime_volume").value}%`;
 }
 
 function syncVfrOpacityLabel() {
@@ -1097,6 +1142,12 @@ async function saveDisplay() {
                 flight_detail_timeout_s: Number($("detail_timeout").value),
                 clock_timeout_s: Number($("clock_timeout").value),
                 auto_idle_clock: $("idle_clock").checked,
+                clock_12hr: $("clock_12hr") ? $("clock_12hr").checked : true,
+                radar_hud_enabled: $("radar_hud") ? $("radar_hud").checked : true,
+                radar_hud_position: $("radar_hud_position") ? $("radar_hud_position").value : "top",
+                radar_hud_opacity: $("radar_hud_opacity") ? Number($("radar_hud_opacity").value) : 72,
+                hourly_chime_enabled: $("hourly_chime") ? $("hourly_chime").checked : false,
+                hourly_chime_volume: $("hourly_chime_volume") ? Number($("hourly_chime_volume").value) : 80,
             }),
         });
         showStatus("display-status", data.message || "Display settings saved.");
@@ -1145,6 +1196,12 @@ async function saveAndReloadSettings() {
                 flight_detail_timeout_s: Number($("detail_timeout").value),
                 clock_timeout_s: Number($("clock_timeout").value),
                 auto_idle_clock: $("idle_clock").checked,
+                clock_12hr: $("clock_12hr") ? $("clock_12hr").checked : true,
+                radar_hud_enabled: $("radar_hud") ? $("radar_hud").checked : true,
+                radar_hud_position: $("radar_hud_position") ? $("radar_hud_position").value : "top",
+                radar_hud_opacity: $("radar_hud_opacity") ? Number($("radar_hud_opacity").value) : 72,
+                hourly_chime_enabled: $("hourly_chime") ? $("hourly_chime").checked : false,
+                hourly_chime_volume: $("hourly_chime_volume") ? Number($("hourly_chime_volume").value) : 80,
             }),
         });
         const loc = ($("radar_center").value || "").trim();
@@ -1809,6 +1866,26 @@ $("fav-list").addEventListener("click", (ev) => {
 $("night_mode").addEventListener("change", toggleDimRow);
 $("range_index").addEventListener("change", syncRangeSelect);
 $("bright_pct").addEventListener("input", syncBrightLabel);
+if ($("radar_hud_opacity")) $("radar_hud_opacity").addEventListener("input", syncHudOpacityLabel);
+if ($("hourly_chime_volume")) $("hourly_chime_volume").addEventListener("input", syncChimeVolumeLabel);
+if ($("btn-chime-preview")) {
+    $("btn-chime-preview").addEventListener("click", async () => {
+        clearStatus("display-status");
+        try {
+            const volume = $("hourly_chime_volume")
+                ? Number($("hourly_chime_volume").value)
+                : 80;
+            const data = await jsonFetch("/display/chime-preview", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ hourly_chime_volume: volume }),
+            });
+            showStatus("display-status", data.message || "Playing chime preview.");
+        } catch (err) {
+            showStatus("display-status", err.message || String(err), true);
+        }
+    });
+}
 if ($("vfr_opacity")) $("vfr_opacity").addEventListener("input", syncVfrOpacityLabel);
 if ($("dist_units")) $("dist_units").addEventListener("change", syncMinSpeedUnitLabels);
 if ($("atc_volume")) {

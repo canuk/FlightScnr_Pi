@@ -74,6 +74,12 @@ VFR_OPACITY_MAX_PERCENT = 100
 # Softvol boost for quiet LiveATC streams (mpv --volume-max).
 # ATC softvol UI max (system sink is boosted separately on play).
 ATC_VOLUME_MAX = 100
+# Radar clock HUD frosted-pill fill opacity (percent → blit alpha).
+RADAR_HUD_OPACITY_MIN = 0
+RADAR_HUD_OPACITY_MAX = 100
+RADAR_HUD_POSITIONS = ("top", "bottom")
+HOURLY_CHIME_VOLUME_MIN = 0
+HOURLY_CHIME_VOLUME_MAX = 100
 
 
 def clamp_brightness_percent(value: int) -> int:
@@ -82,6 +88,23 @@ def clamp_brightness_percent(value: int) -> int:
 
 def clamp_vfr_opacity_percent(value: int) -> int:
     return max(VFR_OPACITY_MIN_PERCENT, min(VFR_OPACITY_MAX_PERCENT, int(value)))
+
+
+def clamp_radar_hud_opacity(value: int) -> int:
+    try:
+        return max(RADAR_HUD_OPACITY_MIN, min(RADAR_HUD_OPACITY_MAX, int(value)))
+    except (TypeError, ValueError):
+        return 72
+
+
+def clamp_hourly_chime_volume(value) -> int:
+    try:
+        return max(
+            HOURLY_CHIME_VOLUME_MIN,
+            min(HOURLY_CHIME_VOLUME_MAX, int(round(float(value)))),
+        )
+    except (TypeError, ValueError):
+        return 80
 
 _defaults = {
     "brightness_percent": 100,
@@ -142,6 +165,12 @@ _defaults = {
     "atc_want_playing": False,
     # User pressed Play during quiet hours — resume may keep overriding.
     "atc_quiet_override": False,
+    # Radar clock HUD (Option A glass pill).
+    "radar_hud_enabled": True,
+    "radar_hud_position": "top",
+    "radar_hud_opacity": 72,
+    "hourly_chime_enabled": False,
+    "hourly_chime_volume": 80,
 }
 
 # Live preview while calibrating facing (not persisted until save).
@@ -509,6 +538,44 @@ def _load():
         state["aircraft_min_speed_kt"] = _snap_aircraft_min_speed(
             state.get("aircraft_min_speed_kt", 0)
         )
+    if "radar_hud_enabled" not in data:
+        state["radar_hud_enabled"] = True
+        migrated = True
+    else:
+        state["radar_hud_enabled"] = bool(state.get("radar_hud_enabled"))
+    pos = str(state.get("radar_hud_position") or "top").strip().lower()
+    if pos not in RADAR_HUD_POSITIONS:
+        state["radar_hud_position"] = "top"
+        migrated = True
+    else:
+        state["radar_hud_position"] = pos
+    try:
+        if "radar_hud_opacity" not in data:
+            state["radar_hud_opacity"] = 72
+            migrated = True
+        else:
+            state["radar_hud_opacity"] = clamp_radar_hud_opacity(
+                int(state.get("radar_hud_opacity", 72))
+            )
+    except (TypeError, ValueError):
+        state["radar_hud_opacity"] = 72
+        migrated = True
+    if "hourly_chime_enabled" not in data:
+        state["hourly_chime_enabled"] = False
+        migrated = True
+    else:
+        state["hourly_chime_enabled"] = bool(state.get("hourly_chime_enabled"))
+    try:
+        if "hourly_chime_volume" not in data:
+            state["hourly_chime_volume"] = 80
+            migrated = True
+        else:
+            state["hourly_chime_volume"] = clamp_hourly_chime_volume(
+                state.get("hourly_chime_volume", 80)
+            )
+    except (TypeError, ValueError):
+        state["hourly_chime_volume"] = 80
+        migrated = True
     if color_presets.migrate_theme_index(state):
         migrated = True
     if migrated:
@@ -570,6 +637,11 @@ def _settings_snapshot(state: dict) -> tuple:
         str(state.get("atc_quiet_end") or "").strip(),
         bool(state.get("atc_want_playing", False)),
         bool(state.get("atc_quiet_override", False)),
+        bool(state.get("radar_hud_enabled", True)),
+        str(state.get("radar_hud_position") or "top"),
+        clamp_radar_hud_opacity(state.get("radar_hud_opacity", 72)),
+        bool(state.get("hourly_chime_enabled", False)),
+        clamp_hourly_chime_volume(state.get("hourly_chime_volume", 80)),
     )
 
 
@@ -1297,9 +1369,15 @@ def use_12hr_clock() -> bool:
     return bool(_state.get("clock_12hr", True))
 
 
-def toggle_clock_format():
-    _state["clock_12hr"] = not use_12hr_clock()
+def set_use_12hr_clock(enabled: bool) -> bool:
+    value = bool(enabled)
+    _state["clock_12hr"] = value
     _save(_state)
+    return value
+
+
+def toggle_clock_format():
+    return set_use_12hr_clock(not use_12hr_clock())
 
 
 def auto_idle_clock_enabled() -> bool:
@@ -1546,6 +1624,86 @@ def cycle_atc_quiet_time(which: str, *, step_minutes: int = 30) -> str:
     if which == "start":
         return set_atc_quiet_start(text)
     return set_atc_quiet_end(text)
+
+
+def radar_hud_enabled() -> bool:
+    return bool(_state.get("radar_hud_enabled", True))
+
+
+def set_radar_hud_enabled(enabled: bool) -> None:
+    _state["radar_hud_enabled"] = bool(enabled)
+    _save(_state)
+
+
+def toggle_radar_hud_enabled() -> bool:
+    set_radar_hud_enabled(not radar_hud_enabled())
+    return radar_hud_enabled()
+
+
+def radar_hud_position() -> str:
+    pos = str(_state.get("radar_hud_position") or "top").strip().lower()
+    return pos if pos in RADAR_HUD_POSITIONS else "top"
+
+
+def set_radar_hud_position(position: str) -> str:
+    pos = str(position or "top").strip().lower()
+    if pos not in RADAR_HUD_POSITIONS:
+        pos = "top"
+    _state["radar_hud_position"] = pos
+    _save(_state)
+    return pos
+
+
+def toggle_radar_hud_position() -> str:
+    nxt = "bottom" if radar_hud_position() == "top" else "top"
+    return set_radar_hud_position(nxt)
+
+
+def radar_hud_opacity() -> int:
+    try:
+        return clamp_radar_hud_opacity(int(_state.get("radar_hud_opacity", 72)))
+    except (TypeError, ValueError):
+        return 72
+
+
+def set_radar_hud_opacity(value: int, *, persist: bool = True) -> int:
+    global _disk_synced
+    pct = clamp_radar_hud_opacity(value)
+    _state["radar_hud_opacity"] = pct
+    if persist:
+        _save(_state)
+    else:
+        _disk_synced = False
+    return pct
+
+
+def hourly_chime_enabled() -> bool:
+    return bool(_state.get("hourly_chime_enabled", False))
+
+
+def set_hourly_chime_enabled(enabled: bool) -> None:
+    _state["hourly_chime_enabled"] = bool(enabled)
+    _save(_state)
+
+
+def toggle_hourly_chime_enabled() -> bool:
+    set_hourly_chime_enabled(not hourly_chime_enabled())
+    return hourly_chime_enabled()
+
+
+def hourly_chime_volume() -> int:
+    return clamp_hourly_chime_volume(_state.get("hourly_chime_volume", 80))
+
+
+def set_hourly_chime_volume(value: int, *, persist: bool = True) -> int:
+    global _disk_synced
+    vol = clamp_hourly_chime_volume(value)
+    _state["hourly_chime_volume"] = vol
+    if persist:
+        _rmw_save({"hourly_chime_volume": vol})
+    else:
+        _disk_synced = False
+    return vol
 
 
 apply_theme_colors()
