@@ -192,6 +192,14 @@ def _build_frame_layer(build: pygame.Surface, backdrop, flights, offset) -> bool
     _draw_status(build, flights)
     _draw_map_attribution(build)
     _t = _rebuild_stage("2r_status", _t)
+    # HUD lives on a transparent overlay (rebuilt here) so the sweep can pass
+    # under the curved frost without a rectangular clip from the bake layer.
+    try:
+        from display.round_touch import radar_hud
+
+        radar_hud.rebuild_overlay()
+    except Exception:
+        pass
     # Bake the round mask here: aircraft and tags are the only things that reach
     # past the rim; sweep drawn on top stays inside the circle. Alert rim is
     # baked into the static layer so the fast dirty-rect present path can stay
@@ -423,8 +431,22 @@ def draw_radar(
             bezel_applied = True
         _draw_pan_commit_overlay(surface)
     else:
+        from display.round_touch import radar_hud
+
+        if radar_hud.needs_minute_invalidate():
+            invalidate_frame_layer()
         layer = _ensure_frame_layer(backdrop, flights, offset)
-        if layer is not None:
+        # Volume popover needs a live overlay — leave the fast path.
+        if layer is not None and radar_hud.volume_popover_open():
+            try:
+                surface.blit(layer, (0, 0))
+            except pygame.error as exc:
+                if "locked" not in str(exc).lower():
+                    raise
+            # Pill is no longer baked into the layer — draw full HUD + popover.
+            radar_hud.draw_hud(surface, include_popover=True, draw_pill=True)
+            bezel_applied = True
+        elif layer is not None:
             # Fast present composites from this layer directly; skip the unused
             # logical-buffer blit (~3–4ms). Sweep visibility is applied in
             # present_radar_sweep(draw_sweep=...), not here.
@@ -435,18 +457,20 @@ def draw_radar(
             _draw_flights(surface, flights)
             _draw_status(surface, flights)
             _draw_map_attribution(surface)
+            # Sweep under the HUD pill.
+            if settings.show_sweep_line() and layer is None:
+                draw.draw_sweep_line(
+                    surface,
+                    current_sweep_angle(),
+                    theme.SWEEP,
+                    width=max(2, theme.s(2)),
+                )
+            radar_hud.draw_hud(surface, include_popover=True)
             if aircraft_alert.rim_flash_active():
                 _draw_alert_rim_flash(surface)
         # Sweep is composited in present() on the fast path so we can skip a
-        # full-frame rotate every tick. Fall back to in-buffer draw when the
-        # layer isn't available.
-        if settings.show_sweep_line() and layer is None:
-            draw.draw_sweep_line(
-                surface,
-                current_sweep_angle(),
-                theme.SWEEP,
-                width=max(2, theme.s(2)),
-            )
+        # full-frame rotate every tick. Fall back to in-buffer draw above when
+        # the layer isn't available.
 
     return bezel_applied
 

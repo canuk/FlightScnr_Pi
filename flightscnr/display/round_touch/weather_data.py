@@ -151,6 +151,21 @@ def refresh(force: bool = False) -> dict | None:
     if not force and cached and cached.get("unit") == units and _CACHE.get("date") == today:
         ttl = _CACHE_TTL_S if cached.get("ready") else _FAIL_RETRY_S
         if now - _CACHE["ts"] < ttl:
+            # Keep wind fresh even when the rest of the payload is TTL-cached.
+            try:
+                from utilities.temperature import current_wind
+
+                speed, direction, wind_unit = current_wind()
+                if speed is not None or direction is not None:
+                    cached = {
+                        **cached,
+                        "wind_speed": speed,
+                        "wind_direction": direction,
+                        "wind_unit": wind_unit,
+                    }
+                    _CACHE["payload"] = cached
+            except Exception:
+                pass
             return cached
 
     temp_hum = grab_temperature_and_humidity()
@@ -181,6 +196,9 @@ def refresh(force: bool = False) -> dict | None:
             "sunset": "—",
             "weather_label": "—",
             "weather_code": None,
+            "wind_speed": None,
+            "wind_direction": None,
+            "wind_unit": "m/s",
             "ready": False,
         }
         _CACHE["ts"] = now
@@ -191,6 +209,12 @@ def refresh(force: bool = False) -> dict | None:
     temp, humidity = temp_hum if temp_hum else (None, None)
     days = _parse_days(intervals or [])
     current_code = days[0].get("weather_code") if days else realtime_code
+    try:
+        from utilities.temperature import current_wind
+
+        wind_speed, wind_direction, wind_unit = current_wind()
+    except ImportError:
+        wind_speed, wind_direction, wind_unit = None, None, "m/s"
     payload = {
         "temp": temp,
         "humidity": humidity,
@@ -200,6 +224,9 @@ def refresh(force: bool = False) -> dict | None:
         "sunset": days[0].get("sunset") if days else "—",
         "weather_label": _weather_code_label(current_code),
         "weather_code": current_code,
+        "wind_speed": wind_speed,
+        "wind_direction": wind_direction,
+        "wind_unit": wind_unit,
         "ready": temp is not None or bool(days),
     }
     _CACHE["ts"] = now

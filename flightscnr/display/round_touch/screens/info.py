@@ -43,12 +43,13 @@ from display.round_touch import draw, nav, settings, theme
 
 PAGE_MAIN = 0
 PAGE_DISPLAY = 1
-PAGE_OPTIONS = 2
-PAGE_LAYERS = 3
-PAGE_COLORS = 4
-PAGE_ATC = 5
-PAGE_SYSTEM = 6
-PAGE_COUNT = 7
+PAGE_HUD = 2
+PAGE_OPTIONS = 3
+PAGE_LAYERS = 4
+PAGE_COLORS = 5
+PAGE_ATC = 6
+PAGE_SYSTEM = 7
+PAGE_COUNT = 8
 
 FOOTER_BUTTONS = ("prev", "next", "radar")
 
@@ -63,8 +64,8 @@ def footer_kinds_for_page(page: int) -> tuple[str, ...]:
     kinds.append("radar")
     return tuple(kinds)
 
-# Display + Options were one tall page; split so both fit the round viewport.
-# Brightness is last and drawn as a drag slider (not a tap-cycle row).
+# Display was overflowing the round viewport after HUD/chime rows were added.
+# Compass / range / screen controls stay here; radar HUD + chime get PAGE_HUD.
 DISPLAY_ACTIONS = (
     "facing",
     "recenter",
@@ -75,6 +76,14 @@ DISPLAY_ACTIONS = (
     "range",
     "rotate",
     "brightness",
+)
+# Radar clock HUD + hourly chime (fits one viewport without footer overlap).
+HUD_ACTIONS = (
+    "radar_hud",
+    "hud_position",
+    "hud_opacity",
+    "hourly_chime",
+    "chime_volume",
 )
 # Filter / map controls — kept short so rows fit the round viewport.
 OPTIONS_ACTIONS = (
@@ -210,6 +219,8 @@ def _breadcrumb(page: int) -> list[str]:
     trail = ["Radar", "Settings"]
     if page == PAGE_DISPLAY:
         trail.append("Display")
+    elif page == PAGE_HUD:
+        trail.append("HUD")
     elif page == PAGE_OPTIONS:
         trail.append("Options")
     elif page == PAGE_LAYERS:
@@ -518,12 +529,14 @@ def _display_font():
 
 
 def _settings_row_page(page: int) -> bool:
-    return page in (PAGE_DISPLAY, PAGE_OPTIONS, PAGE_LAYERS, PAGE_ATC)
+    return page in (PAGE_DISPLAY, PAGE_HUD, PAGE_OPTIONS, PAGE_LAYERS, PAGE_ATC)
 
 
 def _row_actions(page: int) -> tuple[str, ...]:
     if page == PAGE_DISPLAY:
         return DISPLAY_ACTIONS
+    if page == PAGE_HUD:
+        return HUD_ACTIONS
     if page == PAGE_OPTIONS:
         return OPTIONS_ACTIONS
     if page == PAGE_LAYERS:
@@ -550,7 +563,7 @@ def display_row_at(x: int, y: int, page: int, scroll_offset: int = 0) -> int | N
     bottom = nav.content_bottom_y()
     actions = _row_actions(page)
     for i in range(count):
-        if actions[i] in ("brightness", "vfr_opacity", "volume", "status"):
+        if actions[i] in ("brightness", "vfr_opacity", "volume", "status", "hud_opacity"):
             continue
         ry = row_y + i * row_h
         if ry + body_font.get_height() < top or ry > bottom:
@@ -623,6 +636,108 @@ def brightness_slider_value_at(x: int, scroll_offset: int = 0) -> int | None:
     _, track_x, track_w = geom
     lo = settings.BRIGHTNESS_MIN_PERCENT
     hi = settings.BRIGHTNESS_MAX_PERCENT
+    t = (x - track_x) / max(1, track_w)
+    span = hi - lo
+    return max(lo, min(hi, int(round(lo + t * span))))
+
+
+def _hud_opacity_slider_metrics() -> tuple[int, int, int, int]:
+    body_font = _display_font()
+    label_w = body_font.size("Clock opacity")[0]
+    value_w = body_font.size("100%")[0]
+    track_w = theme.s(120)
+    row_h = body_font.get_height() + theme.s(8)
+    return track_w, row_h, label_w, value_w
+
+
+def hud_opacity_row_index() -> int:
+    try:
+        return HUD_ACTIONS.index("hud_opacity")
+    except ValueError:
+        return len(HUD_ACTIONS) - 1
+
+
+def _hud_opacity_slider_geometry(scroll_offset: int = 0) -> tuple[pygame.Rect, int, int] | None:
+    if "hud_opacity" not in HUD_ACTIONS:
+        return None
+    track_w, slider_h, label_w, value_w = _hud_opacity_slider_metrics()
+    gap = theme.s(8)
+    idx = hud_opacity_row_index()
+    row_y, row_h, _ = _display_layout(PAGE_HUD, scroll_offset)
+    ry = row_y + idx * row_h
+    block_w = label_w + gap + track_w + gap + value_w
+    left_x = theme.CENTER_X - block_w // 2
+    track_x = left_x + label_w + gap
+    hit = pygame.Rect(left_x, ry - theme.s(4), block_w, max(slider_h, row_h) + theme.s(8))
+    return hit, track_x, track_w
+
+
+def hud_opacity_slider_at(x: int, y: int, scroll_offset: int = 0) -> bool:
+    geom = _hud_opacity_slider_geometry(scroll_offset)
+    if geom is None:
+        return False
+    return geom[0].collidepoint(x, y)
+
+
+def hud_opacity_slider_value_at(x: int, scroll_offset: int = 0) -> int | None:
+    geom = _hud_opacity_slider_geometry(scroll_offset)
+    if geom is None:
+        return None
+    _, track_x, track_w = geom
+    lo = settings.RADAR_HUD_OPACITY_MIN
+    hi = settings.RADAR_HUD_OPACITY_MAX
+    t = (x - track_x) / max(1, track_w)
+    span = hi - lo
+    return max(lo, min(hi, int(round(lo + t * span))))
+
+
+def _chime_volume_slider_metrics() -> tuple[int, int, int, int]:
+    body_font = _display_font()
+    label_w = body_font.size("Chime volume")[0]
+    value_w = body_font.size("100%")[0]
+    track_w = theme.s(100)
+    row_h = body_font.get_height() + theme.s(8)
+    return track_w, row_h, label_w, value_w
+
+
+def chime_volume_row_index() -> int:
+    try:
+        return HUD_ACTIONS.index("chime_volume")
+    except ValueError:
+        return -1
+
+
+def _chime_volume_slider_geometry(scroll_offset: int = 0) -> tuple[pygame.Rect, int, int] | None:
+    if "chime_volume" not in HUD_ACTIONS:
+        return None
+    track_w, slider_h, label_w, value_w = _chime_volume_slider_metrics()
+    gap = theme.s(8)
+    idx = chime_volume_row_index()
+    if idx < 0:
+        return None
+    row_y, row_h, _ = _display_layout(PAGE_HUD, scroll_offset)
+    ry = row_y + idx * row_h
+    block_w = label_w + gap + track_w + gap + value_w
+    left_x = theme.CENTER_X - block_w // 2
+    track_x = left_x + label_w + gap
+    hit = pygame.Rect(left_x, ry - theme.s(4), block_w, max(slider_h, row_h) + theme.s(8))
+    return hit, track_x, track_w
+
+
+def chime_volume_slider_at(x: int, y: int, scroll_offset: int = 0) -> bool:
+    geom = _chime_volume_slider_geometry(scroll_offset)
+    if geom is None:
+        return False
+    return geom[0].collidepoint(x, y)
+
+
+def chime_volume_slider_value_at(x: int, scroll_offset: int = 0) -> int | None:
+    geom = _chime_volume_slider_geometry(scroll_offset)
+    if geom is None:
+        return None
+    _, track_x, track_w = geom
+    lo = settings.HOURLY_CHIME_VOLUME_MIN
+    hi = settings.HOURLY_CHIME_VOLUME_MAX
     t = (x - track_x) / max(1, track_w)
     span = hi - lo
     return max(lo, min(hi, int(round(lo + t * span))))
@@ -946,6 +1061,20 @@ def _display_row_labels() -> list[str]:
     ]
 
 
+def _hud_row_labels() -> list[str]:
+    hud = "on" if settings.radar_hud_enabled() else "off"
+    hud_pos = settings.radar_hud_position()
+    chime = "on" if settings.hourly_chime_enabled() else "off"
+    # HUD opacity / chime volume are drawn as sliders; placeholders align rows.
+    return [
+        f"Radar Clock: {hud}",
+        f"Clock Position: {hud_pos}",
+        "",  # HUD opacity slider
+        f"Hourly Chime: {chime}",
+        "",  # chime volume slider
+    ]
+
+
 def _options_row_labels() -> list[str]:
     from utilities import favourite_locations
 
@@ -989,6 +1118,8 @@ def _draw_settings_rows(
     bottom: int,
     *,
     draw_brightness_slider: bool = False,
+    draw_hud_opacity_slider: bool = False,
+    draw_chime_volume_slider: bool = False,
     draw_vfr_opacity_slider: bool = False,
     draw_atc_volume_slider: bool = False,
 ) -> int:
@@ -998,6 +1129,8 @@ def _draw_settings_rows(
     total_h = theme.s(4) + len(rows) * row_h
     max_scroll = max(0, total_h - (bottom - top))
     brightness_idx = brightness_row_index() if draw_brightness_slider else -1
+    hud_opacity_idx = hud_opacity_row_index() if draw_hud_opacity_slider else -1
+    chime_vol_idx = chime_volume_row_index() if draw_chime_volume_slider else -1
     vfr_idx = vfr_opacity_row_index() if draw_vfr_opacity_slider else -1
     volume_idx = atc_volume_row_index() if draw_atc_volume_slider else -1
     for i, line in enumerate(rows):
@@ -1006,6 +1139,12 @@ def _draw_settings_rows(
             continue
         if draw_brightness_slider and i == brightness_idx:
             _draw_brightness_slider_row(surface, int(ry), display_focus == i)
+            continue
+        if draw_hud_opacity_slider and i == hud_opacity_idx:
+            _draw_hud_opacity_slider_row(surface, int(ry), display_focus == i)
+            continue
+        if draw_chime_volume_slider and i == chime_vol_idx:
+            _draw_chime_volume_slider_row(surface, int(ry), display_focus == i)
             continue
         if draw_vfr_opacity_slider and i == vfr_idx:
             _draw_vfr_opacity_slider_row(surface, int(ry), display_focus == i)
@@ -1051,6 +1190,96 @@ def _draw_brightness_slider_row(surface, ry: int, focused: bool) -> None:
         )
         pygame.draw.rect(surface, theme.GRID, focus, max(1, theme.s(1)))
     label = body_font.render("Brightness", True, theme.MUTED)
+    surface.blit(label, (left_x, int(ry + (row_h - text_h) // 2)))
+    track_cy = int(ry + row_h // 2)
+    track_rect = pygame.Rect(track_x, track_cy - max(2, theme.s(2)), track_w, max(4, theme.s(4)))
+    pygame.draw.rect(surface, theme.HINT, track_rect, border_radius=theme.s(2))
+    t = (pct - lo) / max(1, hi - lo)
+    fill_w = int(round(t * track_w))
+    if fill_w > 0:
+        fill_rect = pygame.Rect(track_x, track_rect.y, fill_w, track_rect.height)
+        pygame.draw.rect(surface, theme.SWEEP, fill_rect, border_radius=theme.s(2))
+    knob_x = track_x + fill_w
+    knob_r = max(5, theme.s(6))
+    pygame.draw.circle(surface, theme.SWEEP, (knob_x, track_cy), knob_r)
+    pygame.draw.circle(surface, theme.LABEL, (knob_x, track_cy), knob_r, max(1, theme.s(1)))
+    value = body_font.render(f"{pct}%", True, theme.MUTED)
+    surface.blit(
+        value,
+        (
+            track_x + track_w + gap,
+            int(ry + (row_h - text_h) // 2),
+        ),
+    )
+
+
+def _draw_hud_opacity_slider_row(surface, ry: int, focused: bool) -> None:
+    body_font = _display_font()
+    track_w, slider_h, label_w, value_w = _hud_opacity_slider_metrics()
+    gap = theme.s(8)
+    pct = settings.radar_hud_opacity()
+    lo = settings.RADAR_HUD_OPACITY_MIN
+    hi = settings.RADAR_HUD_OPACITY_MAX
+    block_w = label_w + gap + track_w + gap + value_w
+    left_x = theme.CENTER_X - block_w // 2
+    track_x = left_x + label_w + gap
+    text_h = body_font.get_height()
+    row_h = max(slider_h, text_h + theme.s(6))
+    if focused:
+        pad = theme.s(4)
+        focus = pygame.Rect(
+            left_x - pad,
+            ry - pad,
+            block_w + pad * 2,
+            row_h + pad,
+        )
+        pygame.draw.rect(surface, theme.GRID, focus, max(1, theme.s(1)))
+    label = body_font.render("Clock opacity", True, theme.MUTED)
+    surface.blit(label, (left_x, int(ry + (row_h - text_h) // 2)))
+    track_cy = int(ry + row_h // 2)
+    track_rect = pygame.Rect(track_x, track_cy - max(2, theme.s(2)), track_w, max(4, theme.s(4)))
+    pygame.draw.rect(surface, theme.HINT, track_rect, border_radius=theme.s(2))
+    t = (pct - lo) / max(1, hi - lo)
+    fill_w = int(round(t * track_w))
+    if fill_w > 0:
+        fill_rect = pygame.Rect(track_x, track_rect.y, fill_w, track_rect.height)
+        pygame.draw.rect(surface, theme.SWEEP, fill_rect, border_radius=theme.s(2))
+    knob_x = track_x + fill_w
+    knob_r = max(5, theme.s(6))
+    pygame.draw.circle(surface, theme.SWEEP, (knob_x, track_cy), knob_r)
+    pygame.draw.circle(surface, theme.LABEL, (knob_x, track_cy), knob_r, max(1, theme.s(1)))
+    value = body_font.render(f"{pct}%", True, theme.MUTED)
+    surface.blit(
+        value,
+        (
+            track_x + track_w + gap,
+            int(ry + (row_h - text_h) // 2),
+        ),
+    )
+
+
+def _draw_chime_volume_slider_row(surface, ry: int, focused: bool) -> None:
+    body_font = _display_font()
+    track_w, slider_h, label_w, value_w = _chime_volume_slider_metrics()
+    gap = theme.s(8)
+    pct = settings.hourly_chime_volume()
+    lo = settings.HOURLY_CHIME_VOLUME_MIN
+    hi = settings.HOURLY_CHIME_VOLUME_MAX
+    block_w = label_w + gap + track_w + gap + value_w
+    left_x = theme.CENTER_X - block_w // 2
+    track_x = left_x + label_w + gap
+    text_h = body_font.get_height()
+    row_h = max(slider_h, text_h + theme.s(6))
+    if focused:
+        pad = theme.s(4)
+        focus = pygame.Rect(
+            left_x - pad,
+            ry - pad,
+            block_w + pad * 2,
+            row_h + pad,
+        )
+        pygame.draw.rect(surface, theme.GRID, focus, max(1, theme.s(1)))
+    label = body_font.render("Chime volume", True, theme.MUTED)
     surface.blit(label, (left_x, int(ry + (row_h - text_h) // 2)))
     track_cy = int(ry + row_h // 2)
     track_rect = pygame.Rect(track_x, track_cy - max(2, theme.s(2)), track_w, max(4, theme.s(4)))
@@ -1197,6 +1426,18 @@ def draw_info(
             top,
             bottom,
             draw_brightness_slider=True,
+        )
+
+    elif page == PAGE_HUD:
+        max_scroll = _draw_settings_rows(
+            surface,
+            _hud_row_labels(),
+            scroll_offset,
+            display_focus,
+            top,
+            bottom,
+            draw_hud_opacity_slider=True,
+            draw_chime_volume_slider=True,
         )
 
     elif page == PAGE_OPTIONS:

@@ -82,6 +82,7 @@ def invalidate_caches() -> None:
     """Clear in-memory and file weather caches after portal unit change."""
     global _cached_temp, _cached_temp_ts, _cached_forecast, _cached_forecast_ts
     global _cached_temp_units, _cached_forecast_units, _cached_weather_code
+    global _cached_wind_speed, _cached_wind_direction
     _cached_temp = None
     _cached_temp_ts = 0.0
     _cached_forecast = None
@@ -89,6 +90,8 @@ def invalidate_caches() -> None:
     _cached_temp_units = None
     _cached_forecast_units = None
     _cached_weather_code = None
+    _cached_wind_speed = None
+    _cached_wind_direction = None
     for path in (_TEMP_CACHE_FILE, _FORECAST_CACHE_FILE):
         try:
             _os.remove(path)
@@ -248,7 +251,24 @@ _cached_temp = None
 _cached_temp_ts = 0.0
 _cached_temp_units: str | None = None
 _cached_weather_code = None
+_cached_wind_speed = None
+_cached_wind_direction = None
+_wind_fetch_ts = 0.0
+_WIND_FETCH_COOLDOWN_S = 600
 _TEMP_CACHE_TTL = 3600  # 1 hour
+
+
+def _store_wind(speed, direction) -> None:
+    global _cached_wind_speed, _cached_wind_direction
+    try:
+        _cached_wind_speed = float(speed) if speed is not None else None
+    except (TypeError, ValueError):
+        _cached_wind_speed = None
+    try:
+        _cached_wind_direction = float(direction) if direction is not None else None
+    except (TypeError, ValueError):
+        _cached_wind_direction = None
+
 
 # Load persistent cache on startup
 _startup_temp, _startup_temp_ts, _startup_temp_units = _load_file_cache(_TEMP_CACHE_FILE)
@@ -256,6 +276,7 @@ if _startup_temp and (time.time() - _startup_temp_ts) < _TEMP_CACHE_TTL * 2:
     if isinstance(_startup_temp, dict):
         _cached_temp = (_startup_temp.get("temperature"), _startup_temp.get("humidity"))
         _cached_weather_code = _startup_temp.get("weather_code")
+        _store_wind(_startup_temp.get("wind_speed"), _startup_temp.get("wind_direction"))
     else:
         _cached_temp = tuple(_startup_temp) if isinstance(_startup_temp, list) else _startup_temp
     _cached_temp_ts = _startup_temp_ts
@@ -266,6 +287,90 @@ if _startup_temp and (time.time() - _startup_temp_ts) < _TEMP_CACHE_TTL * 2:
 def current_weather_code():
     """Latest weather code from realtime (may be None)."""
     return _cached_weather_code
+
+
+def current_wind():
+    """Latest wind: ``(speed, direction_deg_from, units)``.
+
+    Speed is converted for display units. Direction is meteorological degrees
+    the wind is coming *from* (0=N, 90=E). Source is Tomorrow.io realtime when
+    available; Open-Meteo fills gaps. FR24 has no weather/wind fields.
+    """
+    if _cached_wind_speed is None and _cached_wind_direction is None:
+        _ensure_wind()
+    speed = _cached_wind_speed
+    direction = _cached_wind_direction
+    try:
+        from weather_prefs import temperature_units
+
+        imperial = temperature_units() == "imperial"
+    except Exception:
+        imperial = False
+    if imperial:
+        if speed is not None:
+            # Cached speeds are m/s (Tomorrow metric + Open-Meteo ms).
+            speed = float(speed) * 2.23693629
+        return speed, direction, "mph"
+    return speed, direction, "m/s"
+
+
+def _parse_lat_lon() -> tuple[float, float] | None:
+    loc = (_temperature_location() or "").strip()
+    if not loc:
+        return None
+    try:
+        parts = [p.strip() for p in loc.split(",")]
+        if len(parts) < 2:
+            return None
+        return float(parts[0]), float(parts[1])
+    except (TypeError, ValueError):
+        return None
+
+
+def _ensure_wind() -> None:
+    """Populate wind from Open-Meteo when Tomorrow cache lacks it."""
+    global _cached_wind_speed, _cached_wind_direction, _wind_fetch_ts
+    if _cached_wind_speed is not None or _cached_wind_direction is not None:
+        return
+    now = time.time()
+    if now - _wind_fetch_ts < _WIND_FETCH_COOLDOWN_S:
+        return
+    _wind_fetch_ts = now
+    coords = _parse_lat_lon()
+    if coords is None:
+        return
+    lat, lon = coords
+    try:
+        s = get_session()
+        resp = s.get(
+            "https://api.open-meteo.com/v1/forecast",
+            params={
+                "latitude": lat,
+                "longitude": lon,
+                "current": "wind_speed_10m,wind_direction_10m",
+                "wind_speed_unit": "ms",
+            },
+            timeout=(3, 10),
+        )
+        if resp.status_code != 200:
+            return
+        cur = (resp.json() or {}).get("current") or {}
+        _store_wind(cur.get("wind_speed_10m"), cur.get("wind_direction_10m"))
+        if _cached_temp and (_cached_wind_speed is not None or _cached_wind_direction is not None):
+            temp, humidity = _cached_temp
+            _save_file_cache(
+                _TEMP_CACHE_FILE,
+                {
+                    "temperature": temp,
+                    "humidity": humidity,
+                    "weather_code": _cached_weather_code,
+                    "wind_speed": _cached_wind_speed,
+                    "wind_direction": _cached_wind_direction,
+                },
+                _cached_temp_units or "metric",
+            )
+    except (RequestException, ValueError, TypeError, OSError) as exc:
+        logger.debug("Open-Meteo wind fallback failed: %s", exc)
 
 
 def _return_temperature():
@@ -284,21 +389,29 @@ def grab_temperature_and_humidity():
 
     if not _weather_enabled():
         logger.info("Tomorrow.io weather disabled in web portal settings")
+        if _cached_temp:
+            _ensure_wind()
+            return _return_temperature()
         return None, None
     if not TOMORROW_API_KEY:
         logger.warning("TOMORROW_API_KEY not set — skipping temperature fetch")
+        if _cached_temp:
+            _ensure_wind()
+            return _return_temperature()
         return None, None
 
     units = _temperature_units()
 
     # Return cache if still fresh (convert if display units changed)
     if _cached_temp and (time.time() - _cached_temp_ts) < _TEMP_CACHE_TTL:
+        _ensure_wind()
         return _return_temperature()
 
     # Rate limit check
     if _rate_limited("temp"):
         logger.debug("Rate limit: skipping temperature API call, using cache")
         if _cached_temp:
+            _ensure_wind()
             return _return_temperature()
         return None, None
 
@@ -318,6 +431,7 @@ def grab_temperature_and_humidity():
             _record_call("temp")
             _enter_backoff()
             if _cached_temp:
+                _ensure_wind()
                 return _return_temperature()
             return None, None
 
@@ -333,6 +447,7 @@ def grab_temperature_and_humidity():
         if temperature is None:
             logger.error("Incomplete data from Tomorrow.io API")
             if _cached_temp:
+                _ensure_wind()
                 return _return_temperature()
             return None, None
 
@@ -340,6 +455,9 @@ def grab_temperature_and_humidity():
             _cached_weather_code = int(code) if code is not None else None
         except (TypeError, ValueError):
             _cached_weather_code = None
+        _store_wind(data.get("windSpeed"), data.get("windDirection"))
+        if _cached_wind_speed is None and _cached_wind_direction is None:
+            _ensure_wind()
         _cached_temp = (temperature, humidity)
         _cached_temp_ts = time.time()
         _cached_temp_units = "metric"
@@ -349,6 +467,8 @@ def grab_temperature_and_humidity():
                 "temperature": temperature,
                 "humidity": humidity,
                 "weather_code": _cached_weather_code,
+                "wind_speed": _cached_wind_speed,
+                "wind_direction": _cached_wind_direction,
             },
             "metric",
         )
@@ -367,6 +487,7 @@ def grab_temperature_and_humidity():
             )
 
         if _cached_temp:
+            _ensure_wind()
             return _return_temperature()
         return None, None
 

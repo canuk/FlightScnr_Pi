@@ -74,6 +74,12 @@ VFR_OPACITY_MAX_PERCENT = 100
 # Softvol boost for quiet LiveATC streams (mpv --volume-max).
 # ATC softvol UI max (system sink is boosted separately on play).
 ATC_VOLUME_MAX = 100
+# Radar clock HUD frosted-pill fill opacity (percent → blit alpha).
+RADAR_HUD_OPACITY_MIN = 0
+RADAR_HUD_OPACITY_MAX = 100
+RADAR_HUD_POSITIONS = ("top", "bottom")
+HOURLY_CHIME_VOLUME_MIN = 0
+HOURLY_CHIME_VOLUME_MAX = 100
 
 
 def clamp_brightness_percent(value: int) -> int:
@@ -82,6 +88,101 @@ def clamp_brightness_percent(value: int) -> int:
 
 def clamp_vfr_opacity_percent(value: int) -> int:
     return max(VFR_OPACITY_MIN_PERCENT, min(VFR_OPACITY_MAX_PERCENT, int(value)))
+
+
+def clamp_radar_hud_opacity(value: int) -> int:
+    try:
+        return max(RADAR_HUD_OPACITY_MIN, min(RADAR_HUD_OPACITY_MAX, int(value)))
+    except (TypeError, ValueError):
+        return 72
+
+
+def clamp_hourly_chime_volume(value) -> int:
+    try:
+        return max(
+            HOURLY_CHIME_VOLUME_MIN,
+            min(HOURLY_CHIME_VOLUME_MAX, int(round(float(value)))),
+        )
+    except (TypeError, ValueError):
+        return 80
+
+
+# Top-pill layout keys (pixel offsets from default centers).
+RADAR_HUD_LAYOUT_KEYS = (
+    "wx_icon",
+    "temp",
+    "wind",
+    "clock",
+    "speaker",
+    "chime",
+    "atc",
+)
+# Absolute px clamp so load works before display theme.s() is ready (~theme.s(48) @720).
+RADAR_HUD_LAYOUT_OFFSET_MAX = 96
+
+# Baked top-pill offsets (from device arrange pass, 2026-07-31).
+RADAR_HUD_LAYOUT_TOP_DEFAULT = {
+    "wx_icon": [-29, 31],
+    "temp": [42, -29],
+    "wind": [14, -6],
+    "chime": [10, 4],
+    "atc": [21, 14],
+}
+
+# Baked bottom-pill offsets (from device arrange pass, 2026-07-31).
+RADAR_HUD_LAYOUT_BOTTOM_DEFAULT = {
+    "wx_icon": [2, -6],
+    "wind": [4, 0],
+    "chime": [11, -5],
+    "atc": [18, -16],
+}
+
+
+def clamp_radar_hud_layout_offset(value) -> int:
+    try:
+        v = int(round(float(value)))
+    except (TypeError, ValueError):
+        return 0
+    return max(-RADAR_HUD_LAYOUT_OFFSET_MAX, min(RADAR_HUD_LAYOUT_OFFSET_MAX, v))
+
+
+def normalize_radar_hud_layout(raw) -> dict:
+    """Return a clean {key: [dx, dy]} map (missing keys omitted)."""
+    out: dict = {}
+    if not isinstance(raw, dict):
+        return out
+    for key in RADAR_HUD_LAYOUT_KEYS:
+        pair = raw.get(key)
+        if not isinstance(pair, (list, tuple)) or len(pair) < 2:
+            continue
+        dx = clamp_radar_hud_layout_offset(pair[0])
+        dy = clamp_radar_hud_layout_offset(pair[1])
+        if dx == 0 and dy == 0:
+            continue
+        out[key] = [dx, dy]
+    return out
+
+
+# Back-compat alias.
+normalize_radar_hud_layout_top = normalize_radar_hud_layout
+
+
+def copy_radar_hud_layout_top_default() -> dict:
+    """Fresh copy of the baked top-layout defaults."""
+    return normalize_radar_hud_layout(RADAR_HUD_LAYOUT_TOP_DEFAULT)
+
+
+def copy_radar_hud_layout_bottom_default() -> dict:
+    """Fresh copy of the baked bottom-layout defaults."""
+    return normalize_radar_hud_layout(RADAR_HUD_LAYOUT_BOTTOM_DEFAULT)
+
+
+def radar_hud_arrange_debug_enabled() -> bool:
+    """True when FLIGHTSCNR_HUD_ARRANGE enables debug HUD arrange mode."""
+    raw = os.environ.get("FLIGHTSCNR_HUD_ARRANGE", "")
+    # Systemd EnvironmentFile keeps inline "# comments" in the value.
+    token = raw.split("#", 1)[0].strip().lower()
+    return token in ("1", "true", "yes", "on")
 
 _defaults = {
     "brightness_percent": 100,
@@ -142,6 +243,15 @@ _defaults = {
     "atc_want_playing": False,
     # User pressed Play during quiet hours — resume may keep overriding.
     "atc_quiet_override": False,
+    # Radar clock HUD (Option A glass pill).
+    "radar_hud_enabled": True,
+    "radar_hud_position": "top",
+    "radar_hud_opacity": 72,
+    "radar_hud_arrange": False,  # legacy; arrange is gated by FLIGHTSCNR_HUD_ARRANGE
+    "radar_hud_layout_top": copy_radar_hud_layout_top_default(),
+    "radar_hud_layout_bottom": copy_radar_hud_layout_bottom_default(),
+    "hourly_chime_enabled": False,
+    "hourly_chime_volume": 80,
 }
 
 # Live preview while calibrating facing (not persisted until save).
@@ -509,6 +619,65 @@ def _load():
         state["aircraft_min_speed_kt"] = _snap_aircraft_min_speed(
             state.get("aircraft_min_speed_kt", 0)
         )
+    if "radar_hud_enabled" not in data:
+        state["radar_hud_enabled"] = True
+        migrated = True
+    else:
+        state["radar_hud_enabled"] = bool(state.get("radar_hud_enabled"))
+    pos = str(state.get("radar_hud_position") or "top").strip().lower()
+    if pos not in RADAR_HUD_POSITIONS:
+        state["radar_hud_position"] = "top"
+        migrated = True
+    else:
+        state["radar_hud_position"] = pos
+    try:
+        if "radar_hud_opacity" not in data:
+            state["radar_hud_opacity"] = 72
+            migrated = True
+        else:
+            state["radar_hud_opacity"] = clamp_radar_hud_opacity(
+                int(state.get("radar_hud_opacity", 72))
+            )
+    except (TypeError, ValueError):
+        state["radar_hud_opacity"] = 72
+        migrated = True
+    if "radar_hud_arrange" not in data:
+        state["radar_hud_arrange"] = False
+        migrated = True
+    else:
+        state["radar_hud_arrange"] = bool(state.get("radar_hud_arrange"))
+    if "radar_hud_layout_top" not in data:
+        state["radar_hud_layout_top"] = copy_radar_hud_layout_top_default()
+        migrated = True
+    else:
+        layout = normalize_radar_hud_layout(state.get("radar_hud_layout_top"))
+        if state.get("radar_hud_layout_top") != layout:
+            state["radar_hud_layout_top"] = layout
+            migrated = True
+    if "radar_hud_layout_bottom" not in data:
+        state["radar_hud_layout_bottom"] = copy_radar_hud_layout_bottom_default()
+        migrated = True
+    else:
+        layout_b = normalize_radar_hud_layout(state.get("radar_hud_layout_bottom"))
+        if state.get("radar_hud_layout_bottom") != layout_b:
+            state["radar_hud_layout_bottom"] = layout_b
+            migrated = True
+    if "hourly_chime_enabled" not in data:
+        state["hourly_chime_enabled"] = False
+        migrated = True
+    else:
+        state["hourly_chime_enabled"] = bool(state.get("hourly_chime_enabled"))
+    try:
+        if "hourly_chime_volume" not in data:
+            state["hourly_chime_volume"] = 80
+            migrated = True
+        else:
+            state["hourly_chime_volume"] = clamp_hourly_chime_volume(
+                state.get("hourly_chime_volume", 80)
+            )
+    except (TypeError, ValueError):
+        state["hourly_chime_volume"] = 80
+        migrated = True
     if color_presets.migrate_theme_index(state):
         migrated = True
     if migrated:
@@ -570,6 +739,28 @@ def _settings_snapshot(state: dict) -> tuple:
         str(state.get("atc_quiet_end") or "").strip(),
         bool(state.get("atc_want_playing", False)),
         bool(state.get("atc_quiet_override", False)),
+        bool(state.get("radar_hud_enabled", True)),
+        str(state.get("radar_hud_position") or "top"),
+        clamp_radar_hud_opacity(state.get("radar_hud_opacity", 72)),
+        bool(radar_hud_arrange_debug_enabled()),
+        tuple(
+            sorted(
+                (k, tuple(v))
+                for k, v in normalize_radar_hud_layout(
+                    state.get("radar_hud_layout_top")
+                ).items()
+            )
+        ),
+        tuple(
+            sorted(
+                (k, tuple(v))
+                for k, v in normalize_radar_hud_layout(
+                    state.get("radar_hud_layout_bottom")
+                ).items()
+            )
+        ),
+        bool(state.get("hourly_chime_enabled", False)),
+        clamp_hourly_chime_volume(state.get("hourly_chime_volume", 80)),
     )
 
 
@@ -1297,9 +1488,15 @@ def use_12hr_clock() -> bool:
     return bool(_state.get("clock_12hr", True))
 
 
-def toggle_clock_format():
-    _state["clock_12hr"] = not use_12hr_clock()
+def set_use_12hr_clock(enabled: bool) -> bool:
+    value = bool(enabled)
+    _state["clock_12hr"] = value
     _save(_state)
+    return value
+
+
+def toggle_clock_format():
+    return set_use_12hr_clock(not use_12hr_clock())
 
 
 def auto_idle_clock_enabled() -> bool:
@@ -1546,6 +1743,177 @@ def cycle_atc_quiet_time(which: str, *, step_minutes: int = 30) -> str:
     if which == "start":
         return set_atc_quiet_start(text)
     return set_atc_quiet_end(text)
+
+
+def radar_hud_enabled() -> bool:
+    return bool(_state.get("radar_hud_enabled", True))
+
+
+def set_radar_hud_enabled(enabled: bool) -> None:
+    _state["radar_hud_enabled"] = bool(enabled)
+    _save(_state)
+
+
+def toggle_radar_hud_enabled() -> bool:
+    set_radar_hud_enabled(not radar_hud_enabled())
+    return radar_hud_enabled()
+
+
+def radar_hud_position() -> str:
+    pos = str(_state.get("radar_hud_position") or "top").strip().lower()
+    return pos if pos in RADAR_HUD_POSITIONS else "top"
+
+
+def set_radar_hud_position(position: str) -> str:
+    pos = str(position or "top").strip().lower()
+    if pos not in RADAR_HUD_POSITIONS:
+        pos = "top"
+    _state["radar_hud_position"] = pos
+    _save(_state)
+    return pos
+
+
+def toggle_radar_hud_position() -> str:
+    nxt = "bottom" if radar_hud_position() == "top" else "top"
+    return set_radar_hud_position(nxt)
+
+
+def radar_hud_opacity() -> int:
+    try:
+        return clamp_radar_hud_opacity(int(_state.get("radar_hud_opacity", 72)))
+    except (TypeError, ValueError):
+        return 72
+
+
+def set_radar_hud_opacity(value: int, *, persist: bool = True) -> int:
+    global _disk_synced
+    pct = clamp_radar_hud_opacity(value)
+    _state["radar_hud_opacity"] = pct
+    if persist:
+        _save(_state)
+    else:
+        _disk_synced = False
+    return pct
+
+
+def radar_hud_arrange() -> bool:
+    """Debug-only: True when FLIGHTSCNR_HUD_ARRANGE=1 (no on-screen menu)."""
+    return radar_hud_arrange_debug_enabled()
+
+
+def set_radar_hud_arrange(enabled: bool) -> None:
+    """Legacy no-op — arrange mode is gated by FLIGHTSCNR_HUD_ARRANGE."""
+    _state["radar_hud_arrange"] = bool(enabled)
+    _save(_state)
+
+
+def toggle_radar_hud_arrange() -> bool:
+    """Legacy: flips persisted flag but does not enable arrange without env."""
+    set_radar_hud_arrange(not bool(_state.get("radar_hud_arrange", False)))
+    return radar_hud_arrange()
+
+
+def _radar_hud_layout_state_key() -> str:
+    return (
+        "radar_hud_layout_bottom"
+        if radar_hud_position() == "bottom"
+        else "radar_hud_layout_top"
+    )
+
+
+def radar_hud_layout_top() -> dict:
+    return normalize_radar_hud_layout(_state.get("radar_hud_layout_top"))
+
+
+def radar_hud_layout_bottom() -> dict:
+    return normalize_radar_hud_layout(_state.get("radar_hud_layout_bottom"))
+
+
+def radar_hud_layout() -> dict:
+    """Offsets for the active HUD position (top or bottom)."""
+    if radar_hud_position() == "bottom":
+        return radar_hud_layout_bottom()
+    return radar_hud_layout_top()
+
+
+def radar_hud_layout_offset(key: str) -> tuple[int, int]:
+    layout = radar_hud_layout()
+    pair = layout.get(key)
+    if not pair:
+        return (0, 0)
+    return (int(pair[0]), int(pair[1]))
+
+
+def set_radar_hud_layout_offset(
+    key: str, dx: int, dy: int, *, persist: bool = True
+) -> tuple[int, int]:
+    """Set one layout offset for the active HUD position. Returns clamped (dx, dy)."""
+    global _disk_synced
+    if key not in RADAR_HUD_LAYOUT_KEYS:
+        return (0, 0)
+    dx = clamp_radar_hud_layout_offset(dx)
+    dy = clamp_radar_hud_layout_offset(dy)
+    state_key = _radar_hud_layout_state_key()
+    layout = dict(normalize_radar_hud_layout(_state.get(state_key)))
+    if dx == 0 and dy == 0:
+        layout.pop(key, None)
+    else:
+        layout[key] = [dx, dy]
+    _state[state_key] = layout
+    if persist:
+        _save(_state)
+    else:
+        _disk_synced = False
+    return (dx, dy)
+
+
+def reset_radar_hud_layout_top() -> None:
+    """Restore baked top-pill layout defaults."""
+    _state["radar_hud_layout_top"] = copy_radar_hud_layout_top_default()
+    _save(_state)
+
+
+def reset_radar_hud_layout_bottom() -> None:
+    """Restore baked bottom-pill layout defaults."""
+    _state["radar_hud_layout_bottom"] = copy_radar_hud_layout_bottom_default()
+    _save(_state)
+
+
+def reset_radar_hud_layout() -> None:
+    """Reset layout for the active HUD position."""
+    if radar_hud_position() == "bottom":
+        reset_radar_hud_layout_bottom()
+    else:
+        reset_radar_hud_layout_top()
+
+
+def hourly_chime_enabled() -> bool:
+    return bool(_state.get("hourly_chime_enabled", False))
+
+
+def set_hourly_chime_enabled(enabled: bool) -> None:
+    _state["hourly_chime_enabled"] = bool(enabled)
+    _save(_state)
+
+
+def toggle_hourly_chime_enabled() -> bool:
+    set_hourly_chime_enabled(not hourly_chime_enabled())
+    return hourly_chime_enabled()
+
+
+def hourly_chime_volume() -> int:
+    return clamp_hourly_chime_volume(_state.get("hourly_chime_volume", 80))
+
+
+def set_hourly_chime_volume(value: int, *, persist: bool = True) -> int:
+    global _disk_synced
+    vol = clamp_hourly_chime_volume(value)
+    _state["hourly_chime_volume"] = vol
+    if persist:
+        _rmw_save({"hourly_chime_volume": vol})
+    else:
+        _disk_synced = False
+    return vol
 
 
 apply_theme_colors()

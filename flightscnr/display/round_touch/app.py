@@ -29,12 +29,14 @@ from display.round_touch import (
     frame_debug,
     ghost_touch_filter,
     gesture_handler,
+    hourly_chime,
     input_handler,
     long_press_pan,
     map_bg,
     nav,
     pinch_handler,
     position_smooth,
+    radar_hud,
     rainviewer_overlay,
     rotation,
     scale,
@@ -205,6 +207,10 @@ class RoundTouchDisplay:
         self._brightness_slider_active = False
         self._vfr_opacity_slider_active = False
         self._atc_volume_slider_active = False
+        self._radar_hud_volume_drag = False
+        self._radar_hud_layout_drag = False
+        self._hud_opacity_slider_active = False
+        self._chime_volume_slider_active = False
 
         radar._init_sweep()
         try:
@@ -537,6 +543,7 @@ class RoundTouchDisplay:
             and not self._calibrating_facing
             and not self._panning_map
             and not self._pan_commit_choice
+            and not radar_hud.volume_popover_open()
         ):
             layer, layer_gen = radar.frame_layer_snapshot()
             if layer is not None:
@@ -897,11 +904,16 @@ class RoundTouchDisplay:
         self._brightness_slider_active = False
         self._vfr_opacity_slider_active = False
         self._atc_volume_slider_active = False
+        self._radar_hud_volume_drag = False
+        self._radar_hud_layout_drag = False
+        self._hud_opacity_slider_active = False
+        self._chime_volume_slider_active = False
         self._system_confirm = None
         if page != self.settings_page:
             self._scroll.reset()
             if page not in (
                 info.PAGE_DISPLAY,
+                info.PAGE_HUD,
                 info.PAGE_OPTIONS,
                 info.PAGE_LAYERS,
                 info.PAGE_ATC,
@@ -1021,6 +1033,19 @@ class RoundTouchDisplay:
             return
         elif action == "idle_clock":
             settings.toggle_auto_idle_clock()
+        elif action == "radar_hud":
+            settings.toggle_radar_hud_enabled()
+            radar.invalidate_frame_layer()
+        elif action == "hud_position":
+            settings.toggle_radar_hud_position()
+            radar.invalidate_frame_layer()
+        elif action == "hud_opacity":
+            return
+        elif action == "hourly_chime":
+            settings.toggle_hourly_chime_enabled()
+            radar.invalidate_frame_layer()
+        elif action == "chime_volume":
+            return
         elif action == "enabled":
             from utilities import atc_audio
 
@@ -1115,6 +1140,167 @@ class RoundTouchDisplay:
         self._display_focus = info.atc_volume_row_index()
         return True
 
+    def _apply_radar_hud_volume(self, x: int, *, persist: bool = True) -> bool:
+        from utilities import atc_audio
+
+        value = radar_hud.volume_at_x(x)
+        if value is None:
+            return False
+        radar_hud.note_volume_activity()
+        if value == settings.atc_volume():
+            return False
+        atc_audio.set_volume(value, persist=persist)
+        return True
+
+    def _update_radar_hud_volume_drag(self) -> bool:
+        if self.screen != SCREEN_RADAR or not radar_hud.volume_popover_open():
+            self._radar_hud_volume_drag = False
+            return False
+        if not self.input.is_dragging():
+            if self._radar_hud_volume_drag:
+                self._radar_hud_volume_drag = False
+                from utilities import atc_audio
+
+                atc_audio.set_volume(settings.atc_volume(), persist=True)
+                self.input.consume_scroll_drag()
+                return True
+            return False
+        pos = self.input.drag_pos()
+        if pos is None:
+            return False
+        x, y = pos
+        if not self._radar_hud_volume_drag:
+            if not radar_hud.hit_volume_slider(x, y):
+                return False
+            self._radar_hud_volume_drag = True
+            # Don't let this drag become a screen-change swipe on release.
+            self.input.suppress_finish_result()
+        changed = self._apply_radar_hud_volume(x, persist=False)
+        self.input.consume_scroll_drag()
+        return changed
+
+    def _update_radar_hud_layout_drag(self) -> bool:
+        """Drag HUD items when FLIGHTSCNR_HUD_ARRANGE debug mode is on."""
+        arranging = (
+            self.screen == SCREEN_RADAR
+            and settings.radar_hud_enabled()
+            and settings.radar_hud_arrange()
+        )
+        if not arranging:
+            if self._radar_hud_layout_drag:
+                self._radar_hud_layout_drag = False
+                radar_hud.handle_layout_drag_end(persist=True)
+                try:
+                    radar_hud.rebuild_overlay()
+                except Exception:
+                    pass
+                radar.invalidate_frame_layer()
+                return True
+            return False
+        if not self.input.is_dragging():
+            if self._radar_hud_layout_drag:
+                self._radar_hud_layout_drag = False
+                radar_hud.handle_layout_drag_end(persist=True)
+                self.input.consume_scroll_drag()
+                try:
+                    radar_hud.rebuild_overlay()
+                except Exception:
+                    pass
+                radar.invalidate_frame_layer()
+                return True
+            return False
+        pos = self.input.drag_pos()
+        if pos is None:
+            return False
+        x, y = pos
+        if not self._radar_hud_layout_drag:
+            if radar_hud.handle_layout_drag_start(x, y) is None:
+                return False
+            self._radar_hud_layout_drag = True
+            self.input.suppress_finish_result()
+            # Cancel any in-progress recenter so the icon drag owns the gesture.
+            self._long_press_pan.clear_candidate()
+            if self._panning_map:
+                self._cancel_map_pan()
+        changed = radar_hud.handle_layout_drag_move(x, y, persist=False)
+        self.input.consume_scroll_drag()
+        if changed:
+            try:
+                radar_hud.rebuild_overlay()
+            except Exception:
+                pass
+            radar.invalidate_frame_layer()
+        return changed
+
+    def _apply_hud_opacity_slider(self, x: int, *, persist: bool = True) -> bool:
+        value = info.hud_opacity_slider_value_at(x, self._scroll.offset)
+        if value is None:
+            return False
+        if value == settings.radar_hud_opacity():
+            self._display_focus = info.hud_opacity_row_index()
+            return False
+        settings.set_radar_hud_opacity(value, persist=persist)
+        radar.invalidate_frame_layer()
+        self._display_focus = info.hud_opacity_row_index()
+        return True
+
+    def _update_hud_opacity_slider_drag(self) -> bool:
+        if self.screen != SCREEN_SETTINGS or self.settings_page != info.PAGE_HUD:
+            self._hud_opacity_slider_active = False
+            return False
+        if not self.input.is_dragging():
+            if self._hud_opacity_slider_active:
+                self._hud_opacity_slider_active = False
+                settings.set_radar_hud_opacity(settings.radar_hud_opacity(), persist=True)
+                self.input.consume_scroll_drag()
+                return True
+            return False
+        pos = self.input.drag_pos()
+        if pos is None:
+            return False
+        x, y = pos
+        if not self._hud_opacity_slider_active:
+            if not info.hud_opacity_slider_at(x, y, self._scroll.offset):
+                return False
+            self._hud_opacity_slider_active = True
+        changed = self._apply_hud_opacity_slider(x, persist=False)
+        self.input.consume_scroll_drag()
+        return changed
+
+    def _apply_chime_volume_slider(self, x: int, *, persist: bool = True) -> bool:
+        value = info.chime_volume_slider_value_at(x, self._scroll.offset)
+        if value is None:
+            return False
+        if value == settings.hourly_chime_volume():
+            self._display_focus = info.chime_volume_row_index()
+            return False
+        settings.set_hourly_chime_volume(value, persist=persist)
+        self._display_focus = info.chime_volume_row_index()
+        return True
+
+    def _update_chime_volume_slider_drag(self) -> bool:
+        if self.screen != SCREEN_SETTINGS or self.settings_page != info.PAGE_HUD:
+            self._chime_volume_slider_active = False
+            return False
+        if not self.input.is_dragging():
+            if self._chime_volume_slider_active:
+                self._chime_volume_slider_active = False
+                settings.set_hourly_chime_volume(settings.hourly_chime_volume(), persist=True)
+                self.input.consume_scroll_drag()
+                return True
+            return False
+        pos = self.input.drag_pos()
+        if pos is None:
+            return False
+        x, y = pos
+        if not self._chime_volume_slider_active:
+            if not info.chime_volume_slider_at(x, y, self._scroll.offset):
+                return False
+            self._chime_volume_slider_active = True
+        changed = self._apply_chime_volume_slider(x, persist=False)
+        self.input.consume_scroll_drag()
+        return changed
+
     def _update_atc_volume_slider_drag(self) -> bool:
         if self.screen != SCREEN_SETTINGS or self.settings_page != info.PAGE_ATC:
             self._atc_volume_slider_active = False
@@ -1149,6 +1335,17 @@ class RoundTouchDisplay:
             atc_audio.start(override=True)
         elif action == "stop":
             atc_audio.stop()
+
+    def _toggle_radar_hud_atc(self) -> None:
+        """HUD ATC icon: stop if playing, otherwise start (quiet-hours override)."""
+        from utilities import atc_audio
+
+        if atc_audio.is_playing():
+            atc_audio.stop()
+            return
+        if not settings.atc_enabled():
+            atc_audio.apply_enabled(True)
+        atc_audio.start(override=True)
 
     def _begin_facing_calibrate(self):
         """Enter radar facing-calibrate mode (circular drag = dial analogue)."""
@@ -1316,6 +1513,14 @@ class RoundTouchDisplay:
 
     def _tick_long_press_pan(self) -> bool:
         """Arm map pan after a still hold on radar. Returns True if newly armed."""
+        # Debug HUD arrange owns the finger — do not steal into recenter pan.
+        if (
+            self.screen == SCREEN_RADAR
+            and settings.radar_hud_enabled()
+            and settings.radar_hud_arrange()
+        ):
+            self._long_press_pan.clear_candidate()
+            return False
         second_finger = self.gestures.pinch.finger_count() > 1
         if self._long_press_pan.should_arm(
             is_dragging=self.input.is_dragging(),
@@ -1858,7 +2063,13 @@ class RoundTouchDisplay:
     def _handle_settings_tap(self, x: int | None = None, y: int | None = None):
         if (
             self.settings_page
-            in (info.PAGE_DISPLAY, info.PAGE_OPTIONS, info.PAGE_LAYERS, info.PAGE_ATC)
+            in (
+                info.PAGE_DISPLAY,
+                info.PAGE_HUD,
+                info.PAGE_OPTIONS,
+                info.PAGE_LAYERS,
+                info.PAGE_ATC,
+            )
             and x is not None
             and y is not None
         ):
@@ -1866,6 +2077,16 @@ class RoundTouchDisplay:
                 x, y, self._scroll.offset
             ):
                 self._apply_brightness_slider(x, persist=True)
+                return
+            if self.settings_page == info.PAGE_HUD and info.hud_opacity_slider_at(
+                x, y, self._scroll.offset
+            ):
+                self._apply_hud_opacity_slider(x, persist=True)
+                return
+            if self.settings_page == info.PAGE_HUD and info.chime_volume_slider_at(
+                x, y, self._scroll.offset
+            ):
+                self._apply_chime_volume_slider(x, persist=True)
                 return
             if self.settings_page == info.PAGE_OPTIONS and info.vfr_opacity_slider_at(
                 x, y, self._scroll.offset
@@ -1983,6 +2204,18 @@ class RoundTouchDisplay:
                     self._safe_draw()
                 return
 
+        # HUD volume popover / arrange drag owns gestures — don't navigate away.
+        if (
+            self.screen == SCREEN_RADAR
+            and swipe != input_handler.SWIPE_NONE
+            and (
+                self._radar_hud_volume_drag
+                or self._radar_hud_layout_drag
+                or radar_hud.volume_popover_open()
+            )
+        ):
+            return
+
         # Tracked sits left of radar: swipe right on radar opens it; swipe left returns.
         if swipe == input_handler.SWIPE_RIGHT and self.screen == SCREEN_RADAR:
             travel = 0.0
@@ -2082,6 +2315,8 @@ class RoundTouchDisplay:
             elif self.screen == SCREEN_SETTINGS and self.settings_page == info.PAGE_LAYERS:
                 self._set_settings_page(info.PAGE_OPTIONS)
             elif self.screen == SCREEN_SETTINGS and self.settings_page == info.PAGE_OPTIONS:
+                self._set_settings_page(info.PAGE_HUD)
+            elif self.screen == SCREEN_SETTINGS and self.settings_page == info.PAGE_HUD:
                 self._set_settings_page(info.PAGE_DISPLAY)
             elif self.screen == SCREEN_SETTINGS and self.settings_page == info.PAGE_DISPLAY:
                 self._set_settings_page(info.PAGE_MAIN)
@@ -2092,8 +2327,30 @@ class RoundTouchDisplay:
         elif tap and self.screen == SCREEN_RADAR:
             if self.pinch.should_suppress_tap():
                 tap = None
-            if tap and not self._radar_modal_active() and self._open_flight_or_fire_at(tap[0], tap[1]):
-                self._safe_draw()
+            if tap and not self._radar_modal_active():
+                # Arrange mode: consume taps on HUD items so they don't open flights.
+                if (
+                    settings.radar_hud_arrange()
+                    and settings.radar_hud_enabled()
+                    and radar_hud.handle_layout_drag_start(tap[0], tap[1]) is not None
+                ):
+                    radar_hud.handle_layout_drag_end(persist=False)
+                    self._note_activity()
+                    self._safe_draw()
+                else:
+                    hud_action = radar_hud.handle_tap(tap[0], tap[1])
+                    if hud_action is not None:
+                        self._note_activity()
+                        if hud_action == "slider":
+                            self._apply_radar_hud_volume(tap[0], persist=True)
+                        elif hud_action == "atc":
+                            self._toggle_radar_hud_atc()
+                            radar.invalidate_frame_layer()
+                        elif hud_action in ("chime", "speaker", "dismiss"):
+                            radar.invalidate_frame_layer()
+                        self._safe_draw()
+                    elif self._open_flight_or_fire_at(tap[0], tap[1]):
+                        self._safe_draw()
         elif tap and self.screen == SCREEN_FLIGHT:
             # Any tap (content or footer) restarts the idle countdown.
             self._note_activity()
@@ -2316,6 +2573,21 @@ class RoundTouchDisplay:
             self._last_firms_poll = 0.0
         except Exception:
             logger.debug("AIS sync after settings reload failed", exc_info=True)
+        # Weather units live in weather_prefs.json (portal Weather card) — refresh
+        # so the radar HUD / clock pick up °F↔°C without a service restart.
+        try:
+            import weather_prefs
+            from display.round_touch import weather_data
+
+            weather_prefs.reload()
+            # Keep Tomorrow.io cache; temperatures convert on read. Rebuild payload.
+            weather_data.invalidate_cache()
+            weather_data.refresh(force=True)
+            radar_hud.rebuild_overlay()
+            self._weather_redraw_pending = True
+        except Exception:
+            logger.debug("Weather refresh after settings reload failed", exc_info=True)
+        radar.invalidate_frame_layer()
         self._safe_draw()
 
     def _maybe_reload_location(self):
@@ -2645,11 +2917,15 @@ class RoundTouchDisplay:
 
                 if (
                     self._update_facing_drag()
+                    or self._update_radar_hud_layout_drag()
                     or self._update_map_pan_drag()
                     or self._update_theme_rgb_drag()
                     or self._update_brightness_slider_drag()
+                    or self._update_hud_opacity_slider_drag()
+                    or self._update_chime_volume_slider_drag()
                     or self._update_vfr_opacity_slider_drag()
                     or self._update_atc_volume_slider_drag()
+                    or self._update_radar_hud_volume_drag()
                 ):
                     self._safe_draw()
                     self._last_radar_draw = time.time()
@@ -2737,8 +3013,11 @@ class RoundTouchDisplay:
                 if self._weather_redraw_pending and self.screen in (
                     SCREEN_CLOCK,
                     SCREEN_FORECAST,
+                    SCREEN_RADAR,
                 ):
                     self._weather_redraw_pending = False
+                    if self.screen == SCREEN_RADAR:
+                        radar.invalidate_frame_layer()
                     self._safe_draw()
 
                 # Re-open captive setup if known Wi-Fi stays down past the grace window.
@@ -2835,6 +3114,10 @@ class RoundTouchDisplay:
                 _lt = time.perf_counter()
                 self._tick_timeout()
                 self._tick_auto_idle_clock()
+                if radar_hud.tick_popover_timeout():
+                    radar.invalidate_frame_layer()
+                    self._safe_draw()
+                hourly_chime.tick()
                 self._tick_off_hours_clock()
                 self._apply_brightness()
                 self._loop_stage("loop_misc", _lt)

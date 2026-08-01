@@ -760,6 +760,12 @@ def display_json():
             "clock_timeout_s": settings.clock_timeout_s(),
             "auto_idle_clock": settings.auto_idle_clock_enabled(),
             "display_rotation": settings.display_rotation(),
+            "clock_12hr": settings.use_12hr_clock(),
+            "radar_hud_enabled": settings.radar_hud_enabled(),
+            "radar_hud_position": settings.radar_hud_position(),
+            "radar_hud_opacity": settings.radar_hud_opacity(),
+            "hourly_chime_enabled": settings.hourly_chime_enabled(),
+            "hourly_chime_volume": settings.hourly_chime_volume(),
         }
     )
 
@@ -782,6 +788,24 @@ def display_save():
         settings.set_clock_timeout_s(data.get("clock_timeout_s"))
     if "display_rotation" in data:
         settings.set_display_rotation(data.get("display_rotation"))
+    if "clock_12hr" in data:
+        settings.set_use_12hr_clock(bool(data.get("clock_12hr")))
+    if "radar_hud_enabled" in data:
+        settings.set_radar_hud_enabled(bool(data.get("radar_hud_enabled")))
+    if "radar_hud_position" in data:
+        settings.set_radar_hud_position(str(data.get("radar_hud_position") or "top"))
+    if "radar_hud_opacity" in data:
+        try:
+            settings.set_radar_hud_opacity(int(data.get("radar_hud_opacity")))
+        except (TypeError, ValueError):
+            return jsonify({"message": "radar_hud_opacity must be a number"}), 400
+    if "hourly_chime_enabled" in data:
+        settings.set_hourly_chime_enabled(bool(data.get("hourly_chime_enabled")))
+    if "hourly_chime_volume" in data:
+        try:
+            settings.set_hourly_chime_volume(int(data.get("hourly_chime_volume")))
+        except (TypeError, ValueError):
+            return jsonify({"message": "hourly_chime_volume must be a number"}), 400
     return jsonify(
         {
             "ok": True,
@@ -790,7 +814,34 @@ def display_save():
             "clock_timeout_s": settings.clock_timeout_s(),
             "auto_idle_clock": settings.auto_idle_clock_enabled(),
             "display_rotation": settings.display_rotation(),
+            "clock_12hr": settings.use_12hr_clock(),
+            "radar_hud_enabled": settings.radar_hud_enabled(),
+            "radar_hud_position": settings.radar_hud_position(),
+            "radar_hud_opacity": settings.radar_hud_opacity(),
+            "hourly_chime_enabled": settings.hourly_chime_enabled(),
+            "hourly_chime_volume": settings.hourly_chime_volume(),
             "message": "Display settings saved.",
+        }
+    )
+
+
+@app.post("/display/chime-preview")
+def display_chime_preview():
+    """Play the hourly chime once at the current (or requested) volume."""
+    from display.round_touch import hourly_chime, settings
+
+    data = request.get_json(silent=True) or {}
+    if "hourly_chime_volume" in data:
+        try:
+            settings.set_hourly_chime_volume(int(data.get("hourly_chime_volume")))
+        except (TypeError, ValueError):
+            return jsonify({"message": "hourly_chime_volume must be a number"}), 400
+    hourly_chime.play_chime_async()
+    return jsonify(
+        {
+            "ok": True,
+            "hourly_chime_volume": settings.hourly_chime_volume(),
+            "message": "Playing chime preview.",
         }
     )
 
