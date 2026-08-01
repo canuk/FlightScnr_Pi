@@ -9,6 +9,7 @@
 
 """Display rotation — logical draw buffer vs physical screen and touch."""
 
+import math
 import time
 
 import pygame
@@ -19,6 +20,10 @@ from display.round_touch import frame_debug, theme
 _rot_base: pygame.Surface | None = None
 _rot_base_key = None
 _prev_sweep_rect: pygame.Rect | None = None
+# Rotated transparent HUD stamp (curved pill); blitted after the sweep.
+_rot_hud: pygame.Surface | None = None
+_rot_hud_key = None
+_prev_hud_rect: pygame.Rect | None = None
 # Radar layer generation seen but not yet rotated/swapped (one-frame pipeline).
 _pending_key = None
 # Pre-rotated next base prepared between frames (see prewarm_base).
@@ -136,7 +141,7 @@ def present_radar_sweep(
     doesn't re-push the whole framebuffer.
     """
     global _rot_base, _rot_base_key, _prev_sweep_rect, _pending_key, _needs_full
-    global _next_base, _next_base_key
+    global _next_base, _next_base_key, _prev_hud_rect
     from display.round_touch import draw
 
     rotation = rotation_degrees()
@@ -199,6 +204,7 @@ def present_radar_sweep(
         else:
             display.blit(_rot_base, (0, 0))
         _prev_sweep_rect = None
+        _prev_hud_rect = None
         full_refresh = True
         _needs_full = False
     else:
@@ -214,8 +220,19 @@ def present_radar_sweep(
                 r.h,
             )
             display.blit(_rot_base, r.topleft, src)
+        # Erase previous HUD stamp the same way (base has no HUD baked in).
+        if _prev_hud_rect is not None:
+            r = _prev_hud_rect
+            src = pygame.Rect(
+                r.x - origin_off[0],
+                r.y - origin_off[1],
+                r.w,
+                r.h,
+            )
+            display.blit(_rot_base, r.topleft, src)
 
     old_rect = _prev_sweep_rect
+    old_hud = _prev_hud_rect
     new_rect = None
     if draw_sweep:
         # present() rotates the frame by -rotation; a logical tip at angle θ lands
@@ -233,17 +250,117 @@ def present_radar_sweep(
         )
     _prev_sweep_rect = new_rect
 
+    # Curved frosted pill on top of the sweep (SRCALPHA — no rectangular hole).
+    hud_dirty = _blit_hud_overlay(display, origin_off, rotation)
+    _prev_hud_rect = hud_dirty
+
     _t = time.perf_counter()
     if full_refresh:
         pygame.display.flip()
     else:
-        dirty = [r for r in (old_rect, new_rect) if r is not None]
+        dirty = [r for r in (old_rect, new_rect, old_hud, hud_dirty) if r is not None]
         if dirty:
             pygame.display.update(dirty)
         else:
             pygame.display.flip()
     if frame_debug.ENABLED:
         frame_debug.stage("4r_flip" if full_refresh else "4s_update", time.perf_counter() - _t)
+
+
+def _rotate_rect_aabb(
+    rect: pygame.Rect, rotation_cw: int, size: int
+) -> pygame.Rect:
+    """AABB of ``rect`` after the same transform as ``rotate(surf, -rotation_cw)``.
+
+    Pygame uses a y-down pixel grid; positive ``rotate`` angles are CCW in that
+    space, which differs from the usual y-up math matrix.
+    """
+    if rotation_cw % 360 == 0:
+        return pygame.Rect(rect)
+
+    # Match pygame.transform.rotate(surf, -rotation_cw).
+    angle = -float(rotation_cw % 360)
+    theta = math.radians(angle)
+    cos_a, sin_a = math.cos(theta), math.sin(theta)
+    cx = cy = size / 2.0
+    xs: list[float] = []
+    ys: list[float] = []
+    for x, y in (
+        (rect.left, rect.top),
+        (rect.right, rect.top),
+        (rect.right, rect.bottom),
+        (rect.left, rect.bottom),
+    ):
+        dx, dy = x - cx, y - cy
+        xs.append(cx + dx * cos_a + dy * sin_a)
+        ys.append(cy - dx * sin_a + dy * cos_a)
+    x0 = int(math.floor(min(xs)))
+    y0 = int(math.floor(min(ys)))
+    x1 = int(math.ceil(max(xs)))
+    y1 = int(math.ceil(max(ys)))
+    return pygame.Rect(x0, y0, max(1, x1 - x0), max(1, y1 - y0))
+
+
+def _ensure_rot_hud(rotation: int) -> pygame.Surface | None:
+    """Cache a display-oriented copy of the transparent HUD overlay."""
+    global _rot_hud, _rot_hud_key
+    try:
+        from display.round_touch import radar_hud
+    except ImportError:
+        return None
+    overlay, gen = radar_hud.overlay_snapshot()
+    if overlay is None:
+        _rot_hud = None
+        _rot_hud_key = None
+        return None
+    key = (gen, rotation, theme.SIZE)
+    if _rot_hud is not None and _rot_hud_key == key:
+        return _rot_hud
+    try:
+        if rotation % 360 == 0:
+            # Overlay ref is swapped atomically on rebuild; safe to hold.
+            _rot_hud = overlay
+        else:
+            _rot_hud = pygame.transform.rotate(overlay, -rotation)
+    except pygame.error:
+        return _rot_hud
+    _rot_hud_key = key
+    return _rot_hud
+
+
+def _blit_hud_overlay(
+    display: pygame.Surface,
+    origin_off: tuple[int, int],
+    rotation: int,
+) -> pygame.Rect | None:
+    """Stamp the curved HUD after the sweep; transparent pixels leave the beam."""
+    try:
+        from display.round_touch import radar_hud, settings
+    except ImportError:
+        return None
+    if not settings.radar_hud_enabled():
+        return None
+    rot_hud = _ensure_rot_hud(rotation)
+    if rot_hud is None:
+        return None
+    logical = radar_hud.hud_bounds()
+    if logical.width <= 0 or logical.height <= 0:
+        # Fall back to full overlay blit if bounds are unknown.
+        display.blit(rot_hud, origin_off)
+        return rot_hud.get_rect(topleft=origin_off)
+    size = rot_hud.get_width()
+    src = _rotate_rect_aabb(logical.inflate(2, 2), rotation, size)
+    src = src.clip(pygame.Rect(0, 0, size, rot_hud.get_height()))
+    if src.width <= 0 or src.height <= 0:
+        return None
+    dst = pygame.Rect(
+        src.x + origin_off[0],
+        src.y + origin_off[1],
+        src.w,
+        src.h,
+    )
+    display.blit(rot_hud, dst.topleft, src)
+    return dst
 
 
 def _center_offset(dst: pygame.Surface, src: pygame.Surface) -> tuple[int, int]:

@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 import unittest
 from datetime import datetime
@@ -56,6 +57,58 @@ class RadarHudSettingsTests(unittest.TestCase):
             settings._state["hourly_chime_enabled"] = False
             self.assertTrue(settings.toggle_hourly_chime_enabled())
             self.assertFalse(settings.toggle_hourly_chime_enabled())
+
+    def test_layout_offset_clamp_and_reset(self):
+        from display.round_touch import settings
+
+        with mock.patch.object(settings, "_save"):
+            settings._state["radar_hud_position"] = "top"
+            settings._state["radar_hud_layout_top"] = {}
+            dx, dy = settings.set_radar_hud_layout_offset("clock", 500, -500)
+            self.assertEqual(dx, settings.RADAR_HUD_LAYOUT_OFFSET_MAX)
+            self.assertEqual(dy, -settings.RADAR_HUD_LAYOUT_OFFSET_MAX)
+            self.assertEqual(
+                settings.radar_hud_layout_offset("clock"),
+                (settings.RADAR_HUD_LAYOUT_OFFSET_MAX, -settings.RADAR_HUD_LAYOUT_OFFSET_MAX),
+            )
+            settings.reset_radar_hud_layout_top()
+            self.assertEqual(
+                settings.radar_hud_layout_top(),
+                settings.copy_radar_hud_layout_top_default(),
+            )
+            self.assertEqual(settings.radar_hud_layout_offset("wx_icon"), (-29, 31))
+            self.assertEqual(settings.radar_hud_layout_offset("temp"), (45, -31))
+            self.assertEqual(settings.radar_hud_layout_offset("wind"), (14, -6))
+            self.assertEqual(settings.radar_hud_layout_offset("clock"), (0, 0))
+
+    def test_arrange_gated_by_env(self):
+        from display.round_touch import settings
+
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("FLIGHTSCNR_HUD_ARRANGE", None)
+            self.assertFalse(settings.radar_hud_arrange())
+        with mock.patch.dict(os.environ, {"FLIGHTSCNR_HUD_ARRANGE": "1"}):
+            self.assertTrue(settings.radar_hud_arrange())
+
+    def test_bottom_layout_offset_independent(self):
+        from display.round_touch import settings
+
+        with mock.patch.object(settings, "_save"):
+            settings._state["radar_hud_layout_top"] = {"clock": [5, 5]}
+            settings._state["radar_hud_layout_bottom"] = {}
+            settings._state["radar_hud_position"] = "bottom"
+            settings.set_radar_hud_layout_offset("clock", 10, -4)
+            self.assertEqual(settings.radar_hud_layout_offset("clock"), (10, -4))
+            self.assertEqual(settings.radar_hud_layout_bottom()["clock"], [10, -4])
+            self.assertEqual(settings.radar_hud_layout_top()["clock"], [5, 5])
+            settings.reset_radar_hud_layout_bottom()
+            self.assertEqual(
+                settings.radar_hud_layout_bottom(),
+                settings.copy_radar_hud_layout_bottom_default(),
+            )
+            self.assertEqual(settings.radar_hud_layout_offset("wx_icon"), (2, -6))
+            self.assertEqual(settings.radar_hud_layout_offset("wind"), (4, 0))
+            self.assertEqual(settings.radar_hud_layout_offset("clock"), (0, 0))
 
 
 class HourlyChimeGuardTests(unittest.TestCase):
@@ -161,61 +214,62 @@ class RadarHudGeometryTests(unittest.TestCase):
 
         with mock.patch.object(settings, "radar_hud_enabled", return_value=True):
             with mock.patch.object(settings, "radar_hud_position", return_value="top"):
-                with mock.patch.object(settings, "radar_hud_opacity", return_value=55):
-                    with mock.patch.object(settings, "hourly_chime_enabled", return_value=True):
-                        with mock.patch.object(settings, "atc_volume", return_value=80):
-                            with mock.patch.object(settings, "use_12hr_clock", return_value=False):
-                                with mock.patch.object(radar_hud, "_wx_snapshot", return_value=None):
-                                    surf = pygame.Surface((theme.SIZE, theme.SIZE), pygame.SRCALPHA)
-                                    radar_hud.close_volume_popover()
-                                    radar_hud.draw_hud(surf, include_popover=False)
-                                    g = radar_hud._geometry()
-                                    self.assertTrue(radar_hud.hit_chime(*g["chime_c"]))
-                                    self.assertTrue(radar_hud.hit_speaker(*g["speaker_c"]))
-                                    self.assertFalse(radar_hud.hit_chime(theme.CENTER_X, theme.CENTER_Y))
-                                    # Top: volume left of chime (chime is farthest right).
-                                    self.assertLess(g["speaker_c"][0], g["chime_c"][0])
-                                    # With weather+wind present, left cluster is left of clock.
-                                    wx = {
-                                        "ready": True,
-                                        "temp": 69,
-                                        "weather_code": 1000,
-                                        "wind_speed": 6,
-                                        "wind_direction": 270,
-                                        "wind_unit": "mph",
-                                        "unit": "F",
-                                    }
-                                    g2 = radar_hud._geometry(wx)
-                                    self.assertLess(g2["weather_c"][0], g2["wind_c"][0])
-                                    self.assertLess(g2["wind_c"][0], g2["clock_c"][0])
-                                    self.assertLess(g2["clock_c"][0], g2["speaker_c"][0])
-                                    self.assertLess(g2["speaker_c"][0], g2["chime_c"][0])
-                                    self.assertLess(g2["chime_c"][0], g2["atc_c"][0])
-                                    # Clock stays at the arc midpoint (centered on N).
-                                    self.assertAlmostEqual(
-                                        g2["clock_c"][0], theme.CENTER_X, delta=2
-                                    )
-                                    # Weather icon + temp share one cluster (icon above temp;
-                                    # temp nudged slightly left for optical balance).
-                                    self.assertLess(g2["temp_c"][0], g2["wx_icon_c"][0])
-                                    self.assertLess(g2["wx_icon_c"][1], g2["temp_c"][1])
-                                    self.assertGreater(g2["wx_icon_px"], g2["icon_px"])
-                                    # Right icons are spaced evenly (equal center gaps).
-                                    d_sc = g2["chime_c"][0] - g2["speaker_c"][0]
-                                    d_ca = g2["atc_c"][0] - g2["chime_c"][0]
-                                    self.assertAlmostEqual(d_sc, d_ca, delta=theme.s(3))
-                                    wind_w, _, _ = radar_hud._wind_bits(
-                                        wx, g2["arrow_px"], (0, 0, 0)
-                                    )
-                                    clock_w, _, _ = radar_hud._clock_bits((0, 0, 0))
-                                    edge_gap = (g2["clock_c"][0] - clock_w // 2) - (
-                                        g2["wind_c"][0] + wind_w // 2
-                                    )
-                                    # Chordal gap can be ~1px under the arc major_gap.
-                                    self.assertGreaterEqual(edge_gap, theme.s(7))
-                                    self.assertGreater(g2["weather_c"][1], g2["clock_c"][1])
-                                    self.assertGreater(g2["atc_c"][1], g2["clock_c"][1])
-                                    self.assertTrue(radar_hud.hit_atc(*g2["atc_c"]))
+                with mock.patch.object(settings, "radar_hud_layout", return_value={}):
+                    with mock.patch.object(settings, "radar_hud_opacity", return_value=55):
+                        with mock.patch.object(settings, "hourly_chime_enabled", return_value=True):
+                            with mock.patch.object(settings, "atc_volume", return_value=80):
+                                with mock.patch.object(settings, "use_12hr_clock", return_value=False):
+                                    with mock.patch.object(radar_hud, "_wx_snapshot", return_value=None):
+                                        surf = pygame.Surface((theme.SIZE, theme.SIZE), pygame.SRCALPHA)
+                                        radar_hud.close_volume_popover()
+                                        radar_hud.draw_hud(surf, include_popover=False)
+                                        g = radar_hud._geometry()
+                                        self.assertTrue(radar_hud.hit_chime(*g["chime_c"]))
+                                        self.assertTrue(radar_hud.hit_speaker(*g["speaker_c"]))
+                                        self.assertFalse(radar_hud.hit_chime(theme.CENTER_X, theme.CENTER_Y))
+                                        # Top: volume left of chime (chime is farthest right).
+                                        self.assertLess(g["speaker_c"][0], g["chime_c"][0])
+                                        # With weather+wind present, left cluster is left of clock.
+                                        wx = {
+                                            "ready": True,
+                                            "temp": 69,
+                                            "weather_code": 1000,
+                                            "wind_speed": 6,
+                                            "wind_direction": 270,
+                                            "wind_unit": "mph",
+                                            "unit": "F",
+                                        }
+                                        g2 = radar_hud._geometry(wx)
+                                        self.assertLess(g2["weather_c"][0], g2["wind_c"][0])
+                                        self.assertLess(g2["wind_c"][0], g2["clock_c"][0])
+                                        self.assertLess(g2["clock_c"][0], g2["speaker_c"][0])
+                                        self.assertLess(g2["speaker_c"][0], g2["chime_c"][0])
+                                        self.assertLess(g2["chime_c"][0], g2["atc_c"][0])
+                                        # Clock stays at the arc midpoint (centered on N).
+                                        self.assertAlmostEqual(
+                                            g2["clock_c"][0], theme.CENTER_X, delta=2
+                                        )
+                                        # Weather icon + temp share one cluster (icon above temp;
+                                        # temp nudged slightly left for optical balance).
+                                        self.assertLess(g2["temp_c"][0], g2["wx_icon_c"][0])
+                                        self.assertLess(g2["wx_icon_c"][1], g2["temp_c"][1])
+                                        self.assertGreater(g2["wx_icon_px"], g2["icon_px"])
+                                        # Right icons are spaced evenly (equal center gaps).
+                                        d_sc = g2["chime_c"][0] - g2["speaker_c"][0]
+                                        d_ca = g2["atc_c"][0] - g2["chime_c"][0]
+                                        self.assertAlmostEqual(d_sc, d_ca, delta=theme.s(3))
+                                        wind_w, _, _ = radar_hud._wind_bits(
+                                            wx, g2["arrow_px"], (0, 0, 0)
+                                        )
+                                        clock_w, _, _ = radar_hud._clock_bits((0, 0, 0))
+                                        edge_gap = (g2["clock_c"][0] - clock_w // 2) - (
+                                            g2["wind_c"][0] + wind_w // 2
+                                        )
+                                        # Chordal gap can be ~1px under the arc major_gap.
+                                        self.assertGreaterEqual(edge_gap, theme.s(7))
+                                        self.assertGreater(g2["weather_c"][1], g2["clock_c"][1])
+                                        self.assertGreater(g2["atc_c"][1], g2["clock_c"][1])
+                                        self.assertTrue(radar_hud.hit_atc(*g2["atc_c"]))
 
     def test_wind_arrow_tip_points_from(self):
         """Tip extends toward the meteorological FROM direction (not downwind)."""
@@ -251,6 +305,92 @@ class RadarHudGeometryTests(unittest.TestCase):
             bot_y = radar_hud._geometry()["clock_c"][1]
         self.assertLess(top_y, theme.CENTER_Y)
         self.assertGreater(bot_y, theme.CENTER_Y)
+
+    def test_temp_nudge_flips_at_bottom(self):
+        """Top: stacked with tip-ward temp nudge. Bottom: icon upper-left, temp lower."""
+        from display.round_touch import radar_hud, settings
+
+        wx = {
+            "ready": True,
+            "temp": 78,
+            "weather_code": 1000,
+            "wind_speed": 15,
+            "wind_direction": 315,
+            "wind_unit": "mph",
+            "unit": "F",
+        }
+        with mock.patch.object(settings, "radar_hud_position", return_value="top"):
+            with mock.patch.object(settings, "radar_hud_layout", return_value={}):
+                g_top = radar_hud._geometry(wx)
+        with mock.patch.object(settings, "radar_hud_position", return_value="bottom"):
+            with mock.patch.object(settings, "radar_hud_layout", return_value={}):
+                g_bot = radar_hud._geometry(wx)
+        # Top: icon above temp, temp nudged left.
+        self.assertLess(g_top["temp_c"][0], g_top["wx_icon_c"][0])
+        self.assertLess(g_top["wx_icon_c"][1], g_top["temp_c"][1])
+        # Bottom: icon further top-left than temp; temp sits lower.
+        self.assertLess(g_bot["wx_icon_c"][0], g_bot["temp_c"][0])
+        self.assertLess(g_bot["wx_icon_c"][1], g_bot["temp_c"][1])
+        # Pill slot width matches top (no bottom side-by-side expansion).
+        self.assertAlmostEqual(g_top["half_span"], g_bot["half_span"], delta=0.02)
+
+    def test_layout_offsets_apply_per_position(self):
+        from display.round_touch import radar_hud, settings
+
+        wx = {
+            "ready": True,
+            "temp": 78,
+            "weather_code": 1000,
+            "wind_speed": 15,
+            "wind_direction": 315,
+            "wind_unit": "mph",
+            "unit": "F",
+        }
+        top_layout = {"clock": [12, -8], "wx_icon": [5, 3]}
+        bot_layout = {"clock": [-6, 4]}
+        with mock.patch.object(settings, "radar_hud_layout", return_value=top_layout):
+            with mock.patch.object(settings, "radar_hud_position", return_value="top"):
+                g_top = radar_hud._geometry(wx)
+                base_clock = g_top["base_centers"]["clock"]
+                self.assertEqual(g_top["clock_c"][0], base_clock[0] + 12)
+                self.assertEqual(g_top["clock_c"][1], base_clock[1] - 8)
+                base_wx = g_top["base_centers"]["wx_icon"]
+                self.assertEqual(g_top["wx_icon_c"][0], base_wx[0] + 5)
+                self.assertEqual(g_top["wx_icon_c"][1], base_wx[1] + 3)
+        with mock.patch.object(settings, "radar_hud_layout", return_value=bot_layout):
+            with mock.patch.object(settings, "radar_hud_position", return_value="bottom"):
+                g_bot = radar_hud._geometry(wx)
+                base_clock = g_bot["base_centers"]["clock"]
+                self.assertEqual(g_bot["clock_c"][0], base_clock[0] - 6)
+                self.assertEqual(g_bot["clock_c"][1], base_clock[1] + 4)
+
+    def test_layout_drag_updates_offset(self):
+        from display.round_touch import radar_hud, settings
+
+        with mock.patch.object(settings, "_save"):
+            settings._state["radar_hud_layout_top"] = {}
+            settings._state["radar_hud_layout_bottom"] = {}
+            settings._state["radar_hud_position"] = "bottom"
+            settings._state["radar_hud_enabled"] = True
+            with mock.patch.object(settings, "radar_hud_arrange", return_value=True):
+                with mock.patch.object(settings, "radar_hud_position", return_value="bottom"):
+                    with mock.patch.object(settings, "radar_hud_enabled", return_value=True):
+                        g = radar_hud._geometry()
+                        radar_hud._refresh_hit_targets(g)
+                        cx, cy = g["speaker_c"]
+                        key = radar_hud.handle_layout_drag_start(cx, cy)
+                        self.assertEqual(key, "speaker")
+                        base = radar_hud._layout_base["speaker"]
+                        radar_hud.handle_layout_drag_move(
+                            base[0] + 20, base[1] - 10, persist=False
+                        )
+                        self.assertEqual(
+                            settings.radar_hud_layout_offset("speaker"), (20, -10)
+                        )
+                        self.assertEqual(
+                            settings.radar_hud_layout_bottom()["speaker"], [20, -10]
+                        )
+                        self.assertTrue(radar_hud.handle_layout_drag_end(persist=True))
 
     def test_icons_smaller_than_band(self):
         from display.round_touch import radar_hud, settings

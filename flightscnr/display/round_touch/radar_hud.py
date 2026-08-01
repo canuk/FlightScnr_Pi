@@ -31,6 +31,24 @@ _speaker_rect = pygame.Rect(0, 0, 0, 0)
 _atc_rect = pygame.Rect(0, 0, 0, 0)
 _slider_track = pygame.Rect(0, 0, 0, 0)
 _hud_bounds = pygame.Rect(0, 0, 0, 0)
+# Transparent HUD stamp (curved pill + icons). Blitted after the sweep so the
+# beam passes under the frost without a rectangular clip.
+_overlay: pygame.Surface | None = None
+_overlay_gen = 0
+# Layout arrange: hit rects + base centers (before top offsets) for drag math.
+_layout_hit: dict[str, pygame.Rect] = {}
+_layout_base: dict[str, tuple[int, int]] = {}
+_layout_drag_key: str | None = None
+
+_CENTER_KEY = {
+    "wx_icon": "wx_icon_c",
+    "temp": "temp_c",
+    "wind": "wind_c",
+    "clock": "clock_c",
+    "speaker": "speaker_c",
+    "chime": "chime_c",
+    "atc": "atc_c",
+}
 
 _ASSETS_DIR = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "..", "assets")
@@ -142,8 +160,9 @@ def _weather_bits(
     return icon_w, temp_w, temp_img, code if code is not None else None
 
 
-def _weather_cluster_width(icon_w: int, temp_w: int) -> int:
-    """Vertical stack packing width: max(icon, temp)."""
+def _weather_cluster_width(icon_w: int, temp_w: int, *, bottom: bool = False) -> int:
+    """Packing width for the weather arc slot (same top/bottom — keeps pill length)."""
+    del bottom  # layout differs; span does not
     return max(icon_w, temp_w)
 
 
@@ -211,7 +230,8 @@ def _geometry(wx: dict | None = None) -> dict:
     color = (28, 30, 34)
 
     wx_icon_w, temp_w, _, _ = _weather_bits(wx, wx_icon_px, color)
-    weather_w = _weather_cluster_width(wx_icon_w, temp_w)
+    bottom = settings.radar_hud_position() == "bottom"
+    weather_w = _weather_cluster_width(wx_icon_w, temp_w, bottom=bottom)
     wind_w, _, _ = _wind_bits(wx, arrow_px, color)
     clock_w, _, _ = _clock_bits(color)
     has_wx_icon = wx_icon_w > 0
@@ -264,7 +284,6 @@ def _geometry(wx: dict | None = None) -> dict:
         )
 
     # Top: decreasing angle = screen-left. Bottom: increasing angle = screen-left.
-    bottom = settings.radar_hud_position() == "bottom"
     left_step = 1.0 if bottom else -1.0
     right_step = -left_step
 
@@ -299,29 +318,67 @@ def _geometry(wx: dict | None = None) -> dict:
 
     y_fallback = int(round(cy + r_mid * math.sin(mid)))
     weather_c = centers.get("weather", (cx, y_fallback))
-    # Sub-centers inside the combined weather cluster (icon above temp).
-    # Optical nudge: temperature sits slightly left of the icon centerline.
-    temp_nudge_x = theme.s(5)
+    # Sub-centers inside the weather cluster (slot width unchanged).
+    # Top: icon above temp, temp nudged tip-ward (left) by theme.s(15).
+    # Bottom: icon upper-left, temperature lower — staggered in the same slot.
     wx_icon_c = weather_c
     temp_c = weather_c
     if has_weather:
         cx_w, cy_w = weather_c
-        gap = theme.s(1)
-        icon_h = wx_icon_px if has_wx_icon else 0
-        # Temp height ≈ ampm font; estimate from width when no surface yet.
-        temp_h = theme.s(11) if has_temp else 0
-        total_h = icon_h + ((gap + temp_h) if icon_h and temp_h else temp_h)
-        y = cy_w - total_h // 2
-        if has_wx_icon:
-            wx_icon_c = (cx_w, y + icon_h // 2)
-            y += icon_h + (gap if has_temp else 0)
-        if has_temp:
-            temp_c = (cx_w - temp_nudge_x, y + temp_h // 2)
+        if bottom:
+            if has_wx_icon:
+                wx_icon_c = (cx_w - theme.s(16), cy_w - theme.s(8))
+            if has_temp:
+                temp_c = (cx_w + theme.s(8), cy_w + theme.s(4))
+        else:
+            gap = theme.s(1)
+            temp_dx = -theme.s(15)
+            icon_h = wx_icon_px if has_wx_icon else 0
+            temp_h = theme.s(11) if has_temp else 0
+            total_h = icon_h + ((gap + temp_h) if icon_h and temp_h else temp_h)
+            y = cy_w - total_h // 2
+            if has_wx_icon:
+                wx_icon_c = (cx_w, y + icon_h // 2)
+                y += icon_h + (gap if has_temp else 0)
+            if has_temp:
+                temp_c = (cx_w + temp_dx, y + temp_h // 2)
     wind_c = centers.get("wind", (cx, y_fallback))
     clock_c = centers["clock"]
     speaker_c = centers["speaker"]
     chime_c = centers["chime"]
     atc_c = centers["atc"]
+
+    # Defaults before top-layout offsets (used by arrange drag).
+    base = {
+        "wx_icon": wx_icon_c,
+        "temp": temp_c,
+        "wind": wind_c,
+        "clock": clock_c,
+        "speaker": speaker_c,
+        "chime": chime_c,
+        "atc": atc_c,
+    }
+    global _layout_base
+    _layout_base = dict(base)
+
+    for key, (dx, dy) in settings.radar_hud_layout().items():
+        if key not in base:
+            continue
+        bx, by = base[key]
+        if key == "wx_icon":
+            wx_icon_c = (bx + dx, by + dy)
+        elif key == "temp":
+            temp_c = (bx + dx, by + dy)
+        elif key == "wind":
+            wind_c = (bx + dx, by + dy)
+        elif key == "clock":
+            clock_c = (bx + dx, by + dy)
+        elif key == "speaker":
+            speaker_c = (bx + dx, by + dy)
+        elif key == "chime":
+            chime_c = (bx + dx, by + dy)
+        elif key == "atc":
+            atc_c = (bx + dx, by + dy)
 
     inward = r_mid - theme.s(40)
     pop_r = max(theme.s(48), inward)
@@ -355,6 +412,7 @@ def _geometry(wx: dict | None = None) -> dict:
         "has_temp": has_temp,
         "has_weather": has_weather,
         "has_wind": has_wind,
+        "base_centers": base,
     }
 
 
@@ -550,15 +608,33 @@ def _draw_weather_cluster(
     color: tuple[int, int, int],
     wx: dict | None,
 ) -> None:
-    """Weather icon above temperature, centered on the arc slot."""
+    """Weather cluster: stacked on top; staggered icon/temp on bottom."""
     icon_w, temp_w, temp_img, code = _weather_bits(wx, icon_px, color)
-    cluster_w = _weather_cluster_width(icon_w, temp_w)
+    bottom = settings.radar_hud_position() == "bottom"
+    cluster_w = _weather_cluster_width(icon_w, temp_w, bottom=bottom)
     if cluster_w <= 0:
         return
     cx, cy = center
+    if bottom:
+        # Same slot width as top: icon further left, temperature up and right.
+        if code is not None:
+            _draw_weather_icon(
+                surface,
+                (cx - theme.s(16), cy - theme.s(8)),
+                icon_px,
+                color,
+                wx,
+            )
+        if temp_img is not None:
+            surface.blit(
+                temp_img,
+                temp_img.get_rect(center=(cx + theme.s(8), cy + theme.s(4))),
+            )
+        return
+
+    # Top: icon above temp, intentional tip-ward (left) temp nudge.
     gap = theme.s(1)
-    # Slight left nudge so °F doesn't look optically heavy under the icon.
-    temp_nudge_x = theme.s(15)
+    temp_dx = -theme.s(15)
     icon_h = icon_px if code is not None else 0
     speed_h = temp_img.get_height() if temp_img is not None else 0
     total_h = icon_h + ((gap + speed_h) if speed_h and icon_h else speed_h)
@@ -568,7 +644,7 @@ def _draw_weather_cluster(
         y += icon_h + (gap if speed_h else 0)
     if temp_img is not None:
         surface.blit(
-            temp_img, temp_img.get_rect(midtop=(cx - temp_nudge_x, y))
+            temp_img, temp_img.get_rect(midtop=(cx + temp_dx, y))
         )
 
 
@@ -690,7 +766,7 @@ def _draw_curved_white_pill(
 
 
 def _refresh_hit_targets(g: dict) -> None:
-    global _chime_rect, _speaker_rect, _atc_rect, _hud_bounds
+    global _chime_rect, _speaker_rect, _atc_rect, _hud_bounds, _layout_hit
     ir = g["icon_r"]
     hit = ir * 2 + theme.s(12)
     _chime_rect = pygame.Rect(0, 0, hit, hit)
@@ -699,6 +775,33 @@ def _refresh_hit_targets(g: dict) -> None:
     _speaker_rect.center = g["speaker_c"]
     _atc_rect = pygame.Rect(0, 0, hit, hit)
     _atc_rect.center = g["atc_c"]
+
+    _layout_hit = {}
+    arrange = settings.radar_hud_arrange()
+    items: list[tuple[str, tuple[int, int], int]] = [
+        ("speaker", g["speaker_c"], hit),
+        ("chime", g["chime_c"], hit),
+        ("atc", g["atc_c"], hit),
+    ]
+    if arrange or g.get("has_wind"):
+        items.append(("wind", g["wind_c"], hit))
+    if arrange or g.get("has_wx_icon"):
+        wx_hit = int(g.get("wx_icon_px") or hit) + theme.s(8)
+        items.append(("wx_icon", g["wx_icon_c"], wx_hit))
+    if arrange or g.get("has_temp"):
+        items.append(("temp", g["temp_c"], hit))
+    if arrange:
+        items.append(("clock", g["clock_c"], hit + theme.s(16)))
+    for key, center, size in items:
+        if not g.get("has_wx_icon") and key == "wx_icon":
+            continue
+        if not g.get("has_temp") and key == "temp":
+            continue
+        if not g.get("has_wind") and key == "wind":
+            continue
+        r = pygame.Rect(0, 0, size, size)
+        r.center = center
+        _layout_hit[key] = r
 
 
 def draw_hud(
@@ -709,16 +812,17 @@ def draw_hud(
 ) -> None:
     """Draw the curved white glass pill HUD onto ``surface`` (logical coords).
 
-    ``draw_pill=False`` draws only the volume popover (used when the pill is
-    already baked into the radar frame layer).
+    ``draw_pill=False`` draws only the volume popover (used when the pill was
+    already stamped via the transparent overlay).
     """
     global _slider_track, _hud_bounds
 
     if not settings.radar_hud_enabled():
-        global _chime_rect, _speaker_rect, _atc_rect
+        global _chime_rect, _speaker_rect, _atc_rect, _layout_hit
         _chime_rect = pygame.Rect(0, 0, 0, 0)
         _speaker_rect = pygame.Rect(0, 0, 0, 0)
         _atc_rect = pygame.Rect(0, 0, 0, 0)
+        _layout_hit = {}
         _slider_track = pygame.Rect(0, 0, 0, 0)
         return
 
@@ -762,8 +866,10 @@ def draw_hud(
                 max(ys) - min(ys) + pad * 2,
             )
 
-        if g.get("has_weather"):
-            _draw_weather_cluster(surface, g["weather_c"], wx_icon_px, color, wx)
+        if g.get("has_wx_icon"):
+            _draw_weather_icon(surface, g["wx_icon_c"], wx_icon_px, color, wx)
+        if g.get("has_temp"):
+            _draw_temp(surface, g["temp_c"], wx_icon_px, color, wx)
         if g.get("has_wind"):
             _draw_wind_cluster(surface, g["wind_c"], arrow_px, color, wx)
         _draw_clock_cluster(surface, g["clock_c"], color)
@@ -787,6 +893,8 @@ def draw_hud(
             icon_px,
             alpha=255 if atc_playing else 120,
         )
+        if settings.radar_hud_arrange():
+            _draw_arrange_chrome(surface, g)
     else:
         # Approximate bounds from hit targets when only drawing the popover.
         _hud_bounds = _chime_rect.union(_speaker_rect).inflate(theme.s(48), theme.s(24))
@@ -834,6 +942,76 @@ def draw_hud(
         _hud_bounds = _hud_bounds.union(back)
 
 
+def _draw_arrange_chrome(surface: pygame.Surface, g: dict) -> None:
+    """Thin rings on arrangable items; thicker ring on the active drag target."""
+    ring = (40, 120, 220)
+    for key, rect in _layout_hit.items():
+        width = theme.s(3) if key == _layout_drag_key else theme.s(1)
+        pygame.draw.circle(
+            surface,
+            ring,
+            rect.center,
+            max(rect.w, rect.h) // 2,
+            max(1, width),
+        )
+
+
+def layout_drag_active() -> bool:
+    return _layout_drag_key is not None
+
+
+def handle_layout_drag_start(x: int, y: int) -> str | None:
+    """Begin arranging a HUD pill item (debug). Returns key or None."""
+    global _layout_drag_key
+    if not settings.radar_hud_enabled():
+        return None
+    if not settings.radar_hud_arrange():
+        return None
+    # Ensure hit targets match current geometry.
+    g = _geometry(_wx_snapshot())
+    _refresh_hit_targets(g)
+    # Prefer smallest containing rect (tighter target wins).
+    best_key = None
+    best_area = None
+    for key, rect in _layout_hit.items():
+        if rect.collidepoint(x, y):
+            area = rect.w * rect.h
+            if best_area is None or area < best_area:
+                best_key = key
+                best_area = area
+    _layout_drag_key = best_key
+    return best_key
+
+
+def handle_layout_drag_move(x: int, y: int, *, persist: bool = False) -> bool:
+    """Update the active item's offset from its base center. Returns True if changed."""
+    if _layout_drag_key is None:
+        return False
+    base = _layout_base.get(_layout_drag_key)
+    if base is None:
+        return False
+    dx = int(round(x - base[0]))
+    dy = int(round(y - base[1]))
+    prev = settings.radar_hud_layout_offset(_layout_drag_key)
+    nxt = settings.set_radar_hud_layout_offset(
+        _layout_drag_key, dx, dy, persist=persist
+    )
+    return nxt != prev
+
+
+def handle_layout_drag_end(*, persist: bool = True) -> bool:
+    """Finish arrange drag; optionally persist. Returns True if a drag was active."""
+    global _layout_drag_key
+    if _layout_drag_key is None:
+        return False
+    key = _layout_drag_key
+    _layout_drag_key = None
+    if persist:
+        dx, dy = settings.radar_hud_layout_offset(key)
+        settings.set_radar_hud_layout_offset(key, dx, dy, persist=True)
+    return True
+
+
 # Back-compat alias used by callers.
 draw = draw_hud
 
@@ -861,6 +1039,37 @@ def hit_hud(x: int, y: int) -> bool:
     return _hud_bounds.width > 0 and _hud_bounds.collidepoint(x, y)
 
 
+def hud_bounds() -> pygame.Rect:
+    """Axis-aligned bounds of the last drawn HUD pill (logical coords)."""
+    if _hud_bounds.width <= 0 or _hud_bounds.height <= 0:
+        return pygame.Rect(0, 0, 0, 0)
+    return _hud_bounds.copy()
+
+
+def rebuild_overlay() -> int:
+    """Rasterize the curved pill HUD onto a transparent overlay.
+
+    Returns a generation counter so the present path can rotate/cache the stamp.
+    The overlay is blitted *after* the sweep so only frosted pixels occlude it.
+    """
+    global _overlay, _overlay_gen
+    if not settings.radar_hud_enabled():
+        _overlay = None
+        _overlay_gen += 1
+        return _overlay_gen
+    size = (theme.SIZE, theme.SIZE)
+    draft = pygame.Surface(size, pygame.SRCALPHA)
+    draw_hud(draft, include_popover=False, draw_pill=True)
+    _overlay = draft  # atomic publish for the present thread
+    _overlay_gen += 1
+    return _overlay_gen
+
+
+def overlay_snapshot() -> tuple[pygame.Surface | None, int]:
+    """Return (logical SRCALPHA overlay, generation)."""
+    return _overlay, _overlay_gen
+
+
 def volume_at_x(x: int) -> int | None:
     if _slider_track.width <= 0:
         return None
@@ -871,6 +1080,9 @@ def volume_at_x(x: int) -> int | None:
 def handle_tap(x: int, y: int) -> str | None:
     """Handle a radar tap. Returns action name or None if not consumed."""
     if not settings.radar_hud_enabled():
+        return None
+    # Arrange mode: taps never fire controls (drag path owns the finger).
+    if settings.radar_hud_arrange():
         return None
     if hit_chime(x, y):
         settings.toggle_hourly_chime_enabled()

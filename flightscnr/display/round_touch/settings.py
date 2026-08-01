@@ -106,6 +106,85 @@ def clamp_hourly_chime_volume(value) -> int:
     except (TypeError, ValueError):
         return 80
 
+
+# Top-pill layout keys (pixel offsets from default centers).
+RADAR_HUD_LAYOUT_KEYS = (
+    "wx_icon",
+    "temp",
+    "wind",
+    "clock",
+    "speaker",
+    "chime",
+    "atc",
+)
+# Absolute px clamp so load works before display theme.s() is ready (~theme.s(48) @720).
+RADAR_HUD_LAYOUT_OFFSET_MAX = 96
+
+# Baked top-pill offsets (from device arrange pass, 2026-07-31).
+RADAR_HUD_LAYOUT_TOP_DEFAULT = {
+    "wx_icon": [-29, 31],
+    "temp": [42, -29],
+    "wind": [14, -6],
+    "chime": [10, 4],
+    "atc": [19, 17],
+}
+
+# Baked bottom-pill offsets (from device arrange pass, 2026-07-31).
+RADAR_HUD_LAYOUT_BOTTOM_DEFAULT = {
+    "wx_icon": [2, -6],
+    "wind": [4, 0],
+    "chime": [11, -5],
+    "atc": [18, -16],
+}
+
+
+def clamp_radar_hud_layout_offset(value) -> int:
+    try:
+        v = int(round(float(value)))
+    except (TypeError, ValueError):
+        return 0
+    return max(-RADAR_HUD_LAYOUT_OFFSET_MAX, min(RADAR_HUD_LAYOUT_OFFSET_MAX, v))
+
+
+def normalize_radar_hud_layout(raw) -> dict:
+    """Return a clean {key: [dx, dy]} map (missing keys omitted)."""
+    out: dict = {}
+    if not isinstance(raw, dict):
+        return out
+    for key in RADAR_HUD_LAYOUT_KEYS:
+        pair = raw.get(key)
+        if not isinstance(pair, (list, tuple)) or len(pair) < 2:
+            continue
+        dx = clamp_radar_hud_layout_offset(pair[0])
+        dy = clamp_radar_hud_layout_offset(pair[1])
+        if dx == 0 and dy == 0:
+            continue
+        out[key] = [dx, dy]
+    return out
+
+
+# Back-compat alias.
+normalize_radar_hud_layout_top = normalize_radar_hud_layout
+
+
+def copy_radar_hud_layout_top_default() -> dict:
+    """Fresh copy of the baked top-layout defaults."""
+    return normalize_radar_hud_layout(RADAR_HUD_LAYOUT_TOP_DEFAULT)
+
+
+def copy_radar_hud_layout_bottom_default() -> dict:
+    """Fresh copy of the baked bottom-layout defaults."""
+    return normalize_radar_hud_layout(RADAR_HUD_LAYOUT_BOTTOM_DEFAULT)
+
+
+def radar_hud_arrange_debug_enabled() -> bool:
+    """True when FLIGHTSCNR_HUD_ARRANGE enables debug HUD arrange mode."""
+    return os.environ.get("FLIGHTSCNR_HUD_ARRANGE", "").lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+
 _defaults = {
     "brightness_percent": 100,
     "distance_units": "km",
@@ -169,6 +248,9 @@ _defaults = {
     "radar_hud_enabled": True,
     "radar_hud_position": "top",
     "radar_hud_opacity": 72,
+    "radar_hud_arrange": False,  # legacy; arrange is gated by FLIGHTSCNR_HUD_ARRANGE
+    "radar_hud_layout_top": copy_radar_hud_layout_top_default(),
+    "radar_hud_layout_bottom": copy_radar_hud_layout_bottom_default(),
     "hourly_chime_enabled": False,
     "hourly_chime_volume": 80,
 }
@@ -560,6 +642,27 @@ def _load():
     except (TypeError, ValueError):
         state["radar_hud_opacity"] = 72
         migrated = True
+    if "radar_hud_arrange" not in data:
+        state["radar_hud_arrange"] = False
+        migrated = True
+    else:
+        state["radar_hud_arrange"] = bool(state.get("radar_hud_arrange"))
+    if "radar_hud_layout_top" not in data:
+        state["radar_hud_layout_top"] = copy_radar_hud_layout_top_default()
+        migrated = True
+    else:
+        layout = normalize_radar_hud_layout(state.get("radar_hud_layout_top"))
+        if state.get("radar_hud_layout_top") != layout:
+            state["radar_hud_layout_top"] = layout
+            migrated = True
+    if "radar_hud_layout_bottom" not in data:
+        state["radar_hud_layout_bottom"] = copy_radar_hud_layout_bottom_default()
+        migrated = True
+    else:
+        layout_b = normalize_radar_hud_layout(state.get("radar_hud_layout_bottom"))
+        if state.get("radar_hud_layout_bottom") != layout_b:
+            state["radar_hud_layout_bottom"] = layout_b
+            migrated = True
     if "hourly_chime_enabled" not in data:
         state["hourly_chime_enabled"] = False
         migrated = True
@@ -640,6 +743,23 @@ def _settings_snapshot(state: dict) -> tuple:
         bool(state.get("radar_hud_enabled", True)),
         str(state.get("radar_hud_position") or "top"),
         clamp_radar_hud_opacity(state.get("radar_hud_opacity", 72)),
+        bool(radar_hud_arrange_debug_enabled()),
+        tuple(
+            sorted(
+                (k, tuple(v))
+                for k, v in normalize_radar_hud_layout(
+                    state.get("radar_hud_layout_top")
+                ).items()
+            )
+        ),
+        tuple(
+            sorted(
+                (k, tuple(v))
+                for k, v in normalize_radar_hud_layout(
+                    state.get("radar_hud_layout_bottom")
+                ).items()
+            )
+        ),
         bool(state.get("hourly_chime_enabled", False)),
         clamp_hourly_chime_volume(state.get("hourly_chime_volume", 80)),
     )
@@ -1675,6 +1795,97 @@ def set_radar_hud_opacity(value: int, *, persist: bool = True) -> int:
     else:
         _disk_synced = False
     return pct
+
+
+def radar_hud_arrange() -> bool:
+    """Debug-only: True when FLIGHTSCNR_HUD_ARRANGE=1 (no on-screen menu)."""
+    return radar_hud_arrange_debug_enabled()
+
+
+def set_radar_hud_arrange(enabled: bool) -> None:
+    """Legacy no-op — arrange mode is gated by FLIGHTSCNR_HUD_ARRANGE."""
+    _state["radar_hud_arrange"] = bool(enabled)
+    _save(_state)
+
+
+def toggle_radar_hud_arrange() -> bool:
+    """Legacy: flips persisted flag but does not enable arrange without env."""
+    set_radar_hud_arrange(not bool(_state.get("radar_hud_arrange", False)))
+    return radar_hud_arrange()
+
+
+def _radar_hud_layout_state_key() -> str:
+    return (
+        "radar_hud_layout_bottom"
+        if radar_hud_position() == "bottom"
+        else "radar_hud_layout_top"
+    )
+
+
+def radar_hud_layout_top() -> dict:
+    return normalize_radar_hud_layout(_state.get("radar_hud_layout_top"))
+
+
+def radar_hud_layout_bottom() -> dict:
+    return normalize_radar_hud_layout(_state.get("radar_hud_layout_bottom"))
+
+
+def radar_hud_layout() -> dict:
+    """Offsets for the active HUD position (top or bottom)."""
+    if radar_hud_position() == "bottom":
+        return radar_hud_layout_bottom()
+    return radar_hud_layout_top()
+
+
+def radar_hud_layout_offset(key: str) -> tuple[int, int]:
+    layout = radar_hud_layout()
+    pair = layout.get(key)
+    if not pair:
+        return (0, 0)
+    return (int(pair[0]), int(pair[1]))
+
+
+def set_radar_hud_layout_offset(
+    key: str, dx: int, dy: int, *, persist: bool = True
+) -> tuple[int, int]:
+    """Set one layout offset for the active HUD position. Returns clamped (dx, dy)."""
+    global _disk_synced
+    if key not in RADAR_HUD_LAYOUT_KEYS:
+        return (0, 0)
+    dx = clamp_radar_hud_layout_offset(dx)
+    dy = clamp_radar_hud_layout_offset(dy)
+    state_key = _radar_hud_layout_state_key()
+    layout = dict(normalize_radar_hud_layout(_state.get(state_key)))
+    if dx == 0 and dy == 0:
+        layout.pop(key, None)
+    else:
+        layout[key] = [dx, dy]
+    _state[state_key] = layout
+    if persist:
+        _save(_state)
+    else:
+        _disk_synced = False
+    return (dx, dy)
+
+
+def reset_radar_hud_layout_top() -> None:
+    """Restore baked top-pill layout defaults."""
+    _state["radar_hud_layout_top"] = copy_radar_hud_layout_top_default()
+    _save(_state)
+
+
+def reset_radar_hud_layout_bottom() -> None:
+    """Restore baked bottom-pill layout defaults."""
+    _state["radar_hud_layout_bottom"] = copy_radar_hud_layout_bottom_default()
+    _save(_state)
+
+
+def reset_radar_hud_layout() -> None:
+    """Reset layout for the active HUD position."""
+    if radar_hud_position() == "bottom":
+        reset_radar_hud_layout_bottom()
+    else:
+        reset_radar_hud_layout_top()
 
 
 def hourly_chime_enabled() -> bool:

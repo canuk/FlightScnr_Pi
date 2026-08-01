@@ -71,15 +71,15 @@ DISPLAY_ACTIONS = (
     "compass",
     "range_rings",
     "sweep",
-    "units",
-    "range",
-    "rotate",
-    "brightness",
     "radar_hud",
     "hud_position",
     "hud_opacity",
     "hourly_chime",
     "chime_volume",
+    "units",
+    "range",
+    "rotate",
+    "brightness",
 )
 # Filter / map controls — kept short so rows fit the round viewport.
 OPTIONS_ACTIONS = (
@@ -1042,22 +1042,23 @@ def _display_row_labels() -> list[str]:
     hud = "on" if settings.radar_hud_enabled() else "off"
     hud_pos = settings.radar_hud_position()
     chime = "on" if settings.hourly_chime_enabled() else "off"
-    # Brightness / HUD opacity are drawn as sliders; placeholders keep row count aligned.
+    # Brightness / HUD opacity / chime volume are drawn as sliders; placeholders
+    # keep row count aligned with DISPLAY_ACTIONS.
     return [
         f"Change Compass Heading: {facing}",
         "Click to Set Radar Center",
         f"Compass Rose: {rose}",
         f"Radar Range Rings: {rings}",
         f"Radar Sweep Line: {sweep}",
-        f"Units: {settings.unit_preset_label()}",
-        f"Radar Range: {settings.scale_label()}",
-        f"Rotate Screen: {settings.display_rotation()}°",
-        "",  # brightness slider
         f"Radar Clock: {hud}",
         f"Clock Position: {hud_pos}",
         "",  # HUD opacity slider
         f"Hourly Chime: {chime}",
         "",  # chime volume slider
+        f"Units: {settings.unit_preset_label()}",
+        f"Radar Range: {settings.scale_label()}",
+        f"Rotate Screen: {settings.display_rotation()}°",
+        "",  # brightness slider
     ]
 
 

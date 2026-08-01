@@ -11,7 +11,8 @@
 
 Hold still ~HOLD_MS on the radar, then drag. Release after a drag saves;
 release without moving cancels. Settings → Set radar center stays available
-as the tap-to-confirm fallback.
+as the tap-to-confirm fallback. Disabled while FLIGHTSCNR_HUD_ARRANGE is on
+(so HUD icon arrange drags are not stolen).
 """
 
 from __future__ import annotations
