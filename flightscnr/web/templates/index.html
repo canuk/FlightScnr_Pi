@@ -313,6 +313,49 @@
     </details>
 
     <details class="card" open>
+        <summary><span class="ico">&#9888;</span>Alerts<span class="sum">aircraft filters</span><span class="chev">&#9656;</span></summary>
+        <div class="body">
+            <div class="chk"><label for="alert-mil">Alert on military aircraft</label><span class="switch"><input id="alert-mil" type="checkbox"><span class="track"></span></span></div>
+            <div class="chk"><label for="alert-emrg">Alert on emergency squawk (7700/7600/7500)</label><span class="switch"><input id="alert-emrg" type="checkbox"><span class="track"></span></span></div>
+            <div class="chk"><label for="alert-hide">Hide non-alerted aircraft on radar</label><span class="switch"><input id="alert-hide" type="checkbox"><span class="track"></span></span></div>
+            <label for="alert-watch">Watch list (callsigns / registrations)</label>
+            <input id="alert-watch" type="text" autocomplete="off" placeholder="UAL123, D-AIML, N2136U">
+            <p class="hint">Many flights to highlight on the local radar when they appear in range — not a dedicated follow. Callsigns (UAL123) or tails (D-AIML, N2136U).</p>
+            <label for="alert-watch-types">Watch list (aircraft types)</label>
+            <input id="alert-watch-types" type="text" autocomplete="off" placeholder="A337, B748, A330-743">
+            <p class="hint">Comma-separated ICAO type codes or designations (e.g. A337, B738, A330-743). Matches every aircraft of that type on radar. Clear either field and Save to remove those watches.</p>
+            <button class="btn btn-primary" id="btn-alerts" style="margin-top:.7rem" type="button">Save alerts</button>
+            <div id="alert-status" class="status"></div>
+        </div>
+    </details>
+
+    <details class="card">
+        <summary><span class="ico">&#9992;</span>Tracking<span class="sum">follow one flight worldwide</span><span class="chev">&#9656;</span></summary>
+        <div class="body">
+            <label for="callsign-input">Track callsign or registration</label>
+            <div class="track-row">
+                <input type="text" id="callsign-input" placeholder="UAL1134 / N2136U / CS-TPQ" maxlength="12">
+                <button class="btn btn-primary" id="btn-track" type="button">Track</button>
+                <button class="btn" id="btn-clear-track" type="button">Clear</button>
+            </div>
+            <p class="hint">Follow <strong>one</strong> flight worldwide on the Tracked screen (route, ETA, pin) — even outside radar range. Callsign (UAL1134 / DLH3Y) or tail (D-AIML, N2136U).</p>
+            <p class="hint" id="current-tracked">Loading tracked flight...</p>
+            <div id="track-status" class="status"></div>
+            <div class="track-row hidden" id="confirm-row">
+                <button class="btn btn-primary" id="btn-save-anyway" type="button">Save anyway</button>
+                <button class="btn" id="btn-cancel-save" type="button">Cancel</button>
+            </div>
+            <label style="margin-top:1rem;">Route search (live)</label>
+            <div class="row3">
+                <input type="text" id="origin-input" placeholder="SFO" maxlength="4">
+                <input type="text" id="dest-input" placeholder="JFK" maxlength="4">
+                <button class="btn" id="btn-route" type="button">Search</button>
+            </div>
+            <div id="route-results" class="note"></div>
+        </div>
+    </details>
+
+    <details class="card" open>
         <summary><span class="ico">&#9788;</span>Display &amp; screens<span class="sum">brightness, rotation, timeouts</span><span class="chev">&#9656;</span></summary>
         <div class="body">
             <label for="bright_pct">Screen brightness <span id="bright_pct_label">100%</span></label>
@@ -429,46 +472,50 @@
         </div>
     </details>
 
-    <details class="card" open>
-        <summary><span class="ico">&#9888;</span>Alerts<span class="sum">aircraft filters</span><span class="chev">&#9656;</span></summary>
+    <details class="card atc-card">
+        <summary><span class="ico">&#9835;</span>ATC Audio<span class="sum">LiveATC USB</span><span class="chev">&#9656;</span></summary>
         <div class="body">
-            <div class="chk"><label for="alert-mil">Alert on military aircraft</label><span class="switch"><input id="alert-mil" type="checkbox"><span class="track"></span></span></div>
-            <div class="chk"><label for="alert-emrg">Alert on emergency squawk (7700/7600/7500)</label><span class="switch"><input id="alert-emrg" type="checkbox"><span class="track"></span></span></div>
-            <div class="chk"><label for="alert-hide">Hide non-alerted aircraft on radar</label><span class="switch"><input id="alert-hide" type="checkbox"><span class="track"></span></span></div>
-            <label for="alert-watch">Watch list (callsigns / registrations)</label>
-            <input id="alert-watch" type="text" autocomplete="off" placeholder="UAL123, D-AIML, N2136U">
-            <p class="hint">Many flights to highlight on the local radar when they appear in range — not a dedicated follow. Callsigns (UAL123) or tails (D-AIML, N2136U).</p>
-            <label for="alert-watch-types">Watch list (aircraft types)</label>
-            <input id="alert-watch-types" type="text" autocomplete="off" placeholder="A337, B748, A330-743">
-            <p class="hint">Comma-separated ICAO type codes or designations (e.g. A337, B738, A330-743). Matches every aircraft of that type on radar. Clear either field and Save to remove those watches.</p>
-            <button class="btn btn-primary" id="btn-alerts" style="margin-top:.7rem" type="button">Save alerts</button>
-            <div id="alert-status" class="status"></div>
-        </div>
-    </details>
-
-    <details class="card">
-        <summary><span class="ico">&#9992;</span>Tracking<span class="sum">follow one flight worldwide</span><span class="chev">&#9656;</span></summary>
-        <div class="body">
-            <label for="callsign-input">Track callsign or registration</label>
-            <div class="track-row">
-                <input type="text" id="callsign-input" placeholder="UAL1134 / N2136U / CS-TPQ" maxlength="12">
-                <button class="btn btn-primary" id="btn-track" type="button">Track</button>
-                <button class="btn" id="btn-clear-track" type="button">Clear</button>
+            <p class="hint">Manual LiveATC stream to the Pi’s USB / default speaker via <code>mpv</code> (<code>sudo apt install mpv</code>). Airport lists every large/medium field in radar range. Channel loads known streams immediately from the local seed/index, then auto-discovers more mounts in the background (same idea as plane-tracker ATC: probe <code>d.liveatc.net</code>, never wait on LiveATC HTML). If audio is already playing, changing airport (or moving the map) retunes to that airport’s Tower and keeps playing; if it was stopped, only the selection changes. Playback resumes after reboot/app restart when it was playing (Stop clears that). Quiet hours block auto-start and resume; Play still overrides until you Stop.</p>
+            <div class="chk">
+                <label for="atc_enabled">Enable ATC audio</label>
+                <span class="switch"><input id="atc_enabled" type="checkbox"><span class="track"></span></span>
             </div>
-            <p class="hint">Follow <strong>one</strong> flight worldwide on the Tracked screen (route, ETA, pin) — even outside radar range. Callsign (UAL1134 / DLH3Y) or tail (D-AIML, N2136U).</p>
-            <p class="hint" id="current-tracked">Loading tracked flight...</p>
-            <div id="track-status" class="status"></div>
-            <div class="track-row hidden" id="confirm-row">
-                <button class="btn btn-primary" id="btn-save-anyway" type="button">Save anyway</button>
-                <button class="btn" id="btn-cancel-save" type="button">Cancel</button>
+            <label>Volume <span id="atc_vol_label">100%</span>
+                <input type="range" id="atc_volume" min="0" max="100" value="100">
+            </label>
+            <div class="chk">
+                <label for="atc_quiet_enabled">Quiet hours</label>
+                <span class="switch"><input id="atc_quiet_enabled" type="checkbox"><span class="track"></span></span>
             </div>
-            <label style="margin-top:1rem;">Route search (live)</label>
-            <div class="row3">
-                <input type="text" id="origin-input" placeholder="SFO" maxlength="4">
-                <input type="text" id="dest-input" placeholder="JFK" maxlength="4">
-                <button class="btn" id="btn-route" type="button">Search</button>
+            <div class="track-row" style="flex-wrap:wrap;gap:.5rem">
+                <label>Start
+                    <span class="track-row" style="gap:.25rem">
+                        <select id="atc_quiet_start_h"></select>
+                        <select id="atc_quiet_start_m"></select>
+                        <select id="atc_quiet_start_ap"><option>AM</option><option>PM</option></select>
+                    </span>
+                </label>
+                <label>End
+                    <span class="track-row" style="gap:.25rem">
+                        <select id="atc_quiet_end_h"></select>
+                        <select id="atc_quiet_end_m"></select>
+                        <select id="atc_quiet_end_ap"><option>AM</option><option>PM</option></select>
+                    </span>
+                </label>
             </div>
-            <div id="route-results" class="note"></div>
+            <label>Airport
+                <select id="atc_airport"></select>
+            </label>
+            <label>Channel
+                <select id="atc_channel"></select>
+            </label>
+            <p class="hint" id="atc_status_line">Status: —</p>
+            <div class="track-row" style="margin-top:.55rem">
+                <button class="btn btn-primary" id="btn-atc-save" type="button">Save</button>
+                <button class="btn btn-primary" id="btn-atc-play" type="button">Play</button>
+                <button class="btn" id="btn-atc-stop" type="button">Stop</button>
+            </div>
+            <div id="atc-status" class="status"></div>
         </div>
     </details>
 
@@ -554,53 +601,6 @@
         </div>
     </details>
 
-    <details class="card atc-card">
-        <summary><span class="ico">&#9835;</span>ATC Audio<span class="sum">LiveATC USB</span><span class="chev">&#9656;</span></summary>
-        <div class="body">
-            <p class="hint">Manual LiveATC stream to the Pi’s USB / default speaker via <code>mpv</code> (<code>sudo apt install mpv</code>). Airport lists every large/medium field in radar range. Channel loads known streams immediately from the local seed/index, then auto-discovers more mounts in the background (same idea as plane-tracker ATC: probe <code>d.liveatc.net</code>, never wait on LiveATC HTML). If audio is already playing, changing airport (or moving the map) retunes to that airport’s Tower and keeps playing; if it was stopped, only the selection changes. Playback resumes after reboot/app restart when it was playing (Stop clears that). Quiet hours block auto-start and resume; Play still overrides until you Stop.</p>
-            <div class="chk">
-                <label for="atc_enabled">Enable ATC audio</label>
-                <span class="switch"><input id="atc_enabled" type="checkbox"><span class="track"></span></span>
-            </div>
-            <label>Volume <span id="atc_vol_label">100%</span>
-                <input type="range" id="atc_volume" min="0" max="100" value="100">
-            </label>
-            <div class="chk">
-                <label for="atc_quiet_enabled">Quiet hours</label>
-                <span class="switch"><input id="atc_quiet_enabled" type="checkbox"><span class="track"></span></span>
-            </div>
-            <div class="track-row" style="flex-wrap:wrap;gap:.5rem">
-                <label>Start
-                    <span class="track-row" style="gap:.25rem">
-                        <select id="atc_quiet_start_h"></select>
-                        <select id="atc_quiet_start_m"></select>
-                        <select id="atc_quiet_start_ap"><option>AM</option><option>PM</option></select>
-                    </span>
-                </label>
-                <label>End
-                    <span class="track-row" style="gap:.25rem">
-                        <select id="atc_quiet_end_h"></select>
-                        <select id="atc_quiet_end_m"></select>
-                        <select id="atc_quiet_end_ap"><option>AM</option><option>PM</option></select>
-                    </span>
-                </label>
-            </div>
-            <label>Airport
-                <select id="atc_airport"></select>
-            </label>
-            <label>Channel
-                <select id="atc_channel"></select>
-            </label>
-            <p class="hint" id="atc_status_line">Status: —</p>
-            <div class="track-row" style="margin-top:.55rem">
-                <button class="btn btn-primary" id="btn-atc-save" type="button">Save</button>
-                <button class="btn btn-primary" id="btn-atc-play" type="button">Play</button>
-                <button class="btn" id="btn-atc-stop" type="button">Stop</button>
-            </div>
-            <div id="atc-status" class="status"></div>
-        </div>
-    </details>
-
     <details class="card system-card">
         <summary><span class="ico">&#9881;</span>System<span class="sum">power</span><span class="chev">&#9656;</span></summary>
         <div class="body">
@@ -624,6 +624,7 @@
             <div id="system-status" class="status"></div>
         </div>
     </details>
+
 
     <p class="wifi-note">First-time Wi-Fi uses the on-device QR setup hotspot when no network is configured.</p>
     <p class="foot">
