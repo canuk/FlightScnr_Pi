@@ -44,16 +44,15 @@ def draw_forecast(surface):
 
     if not wx or not wx.get("ready"):
         y += theme.s(12)
-        draw.draw_center_line(surface, "Weather unavailable", y, body_font, theme.HINT)
-        y += theme.s(8)
-        draw.draw_center_line(surface, "Set TOMORROW_API_KEY", y, detail_font, theme.HINT)
+        headline, detail = weather_data.unavailable_messages()
+        y = draw.draw_center_line(surface, headline, y, body_font, theme.HINT)
+        draw.draw_center_line(surface, detail, y, detail_font, theme.HINT)
         return
 
     days = wx.get("days") or []
     if not days:
         y += theme.s(12)
-        draw.draw_center_line(surface, "Forecast unavailable", y, body_font, theme.HINT)
-        y += theme.s(8)
+        y = draw.draw_center_line(surface, "Forecast unavailable", y, body_font, theme.HINT)
         draw.draw_center_line(
             surface,
             "Will retry automatically",

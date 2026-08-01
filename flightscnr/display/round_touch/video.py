@@ -58,6 +58,15 @@ def init_display(width: int, height: int, fullscreen: bool) -> pygame.Surface:
         label = driver or "auto"
 
         try:
+            # Avoid SDL/Pulse probing when no USB speaker is present (root +
+            # XDG_RUNTIME_DIR noise, ALSA underruns). Display does not need audio.
+            try:
+                from utilities.audio_output import speaker_connected
+
+                if not speaker_connected():
+                    os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
+            except Exception:
+                pass
             pygame.init()
             pygame.display.set_caption("FlightScnr Pi")
             surface = pygame.display.set_mode((width, height), flags)

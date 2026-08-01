@@ -643,7 +643,7 @@ def brightness_slider_value_at(x: int, scroll_offset: int = 0) -> int | None:
 
 def _hud_opacity_slider_metrics() -> tuple[int, int, int, int]:
     body_font = _display_font()
-    label_w = body_font.size("Clock opacity")[0]
+    label_w = body_font.size("HUD Opacity")[0]
     value_w = body_font.size("100%")[0]
     track_w = theme.s(120)
     row_h = body_font.get_height() + theme.s(8)
@@ -1067,7 +1067,7 @@ def _hud_row_labels() -> list[str]:
     chime = "on" if settings.hourly_chime_enabled() else "off"
     # HUD opacity / chime volume are drawn as sliders; placeholders align rows.
     return [
-        f"Radar Clock: {hud}",
+        f"HUD: {hud}",
         f"Clock Position: {hud_pos}",
         "",  # HUD opacity slider
         f"Hourly Chime: {chime}",
@@ -1234,7 +1234,7 @@ def _draw_hud_opacity_slider_row(surface, ry: int, focused: bool) -> None:
             row_h + pad,
         )
         pygame.draw.rect(surface, theme.GRID, focus, max(1, theme.s(1)))
-    label = body_font.render("Clock opacity", True, theme.MUTED)
+    label = body_font.render("HUD Opacity", True, theme.MUTED)
     surface.blit(label, (left_x, int(ry + (row_h - text_h) // 2)))
     track_cy = int(ry + row_h // 2)
     track_rect = pygame.Rect(track_x, track_cy - max(2, theme.s(2)), track_w, max(4, theme.s(4)))

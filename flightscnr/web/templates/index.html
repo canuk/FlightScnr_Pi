@@ -423,6 +423,8 @@
                 <option value="imperial">Imperial (°F)</option>
             </select>
             <button class="btn btn-primary" id="btn-weather" type="button">Save weather units</button>
+            <button class="btn" id="btn-weather-fetch" type="button" style="margin-top:.5rem">Fetch weather now</button>
+            <p class="hint">Clears the local rate-limit backoff and asks the display to call Tomorrow.io once. Current weather/wind also refresh automatically at :01 and :31; forecast with the :01 slot. Use sparingly (free tier ≈ 25 requests/hour).</p>
             <div id="weather-status" class="status"></div>
         </div>
     </details>
@@ -602,6 +604,17 @@
     <details class="card system-card">
         <summary><span class="ico">&#9881;</span>System<span class="sum">power</span><span class="chev">&#9656;</span></summary>
         <div class="body">
+            <p class="hint">Download a backup of portal preferences (radar, display, alerts, weather, off-hours, favourites, location, ATC, and API keys). The file includes secrets — keep it private. Does not include maps, photos, or <code>/etc/flightscnr.env</code>.</p>
+            <div class="track-row" style="margin-top:.55rem">
+                <button class="btn btn-primary" id="btn-export-settings" type="button">Download settings</button>
+            </div>
+            <p class="hint" style="margin-top:.85rem">Restore from a previously downloaded <code>.config</code> file. This overwrites matching preference files on the Pi and relaunches the app.</p>
+            <div class="track-row" style="margin-top:.55rem;align-items:center;flex-wrap:wrap;gap:.5rem">
+                <input id="import-settings-file" type="file" accept=".config,application/json,text/json" style="max-width:100%">
+                <button class="btn btn-primary" id="btn-import-settings" type="button">Upload &amp; apply</button>
+            </div>
+            <div id="export-status" class="status"></div>
+            <hr style="border:none;border-top:1px solid var(--line, #333);margin:1rem 0">
             <p class="hint">Relaunch the app, or restart / power off this Raspberry Pi. Reboot and shutdown take the display and portal offline.</p>
             <div class="track-row" style="margin-top:.55rem">
                 <button class="btn btn-primary" id="btn-restart-app" type="button">Relaunch app</button>
@@ -1231,6 +1244,20 @@ async function saveWeather() {
     }
 }
 
+async function fetchWeatherNow() {
+    clearStatus("weather-status");
+    try {
+        const data = await jsonFetch("/weather/fetch", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: "{}",
+        });
+        showStatus("weather-status", data.message || "Weather refresh requested.");
+    } catch (e) {
+        showStatus("weather-status", e.message, true);
+    }
+}
+
 async function saveAlerts() {
     clearStatus("alert-status");
     try {
@@ -1810,11 +1837,55 @@ $("btn-update-now").addEventListener("click", applyUpdate);
 $("btn-restart-app").addEventListener("click", requestAppRestart);
 $("btn-reboot").addEventListener("click", () => requestSystemAction("reboot"));
 $("btn-shutdown").addEventListener("click", () => requestSystemAction("shutdown"));
+
+$("btn-export-settings").addEventListener("click", () => {
+    showStatus("export-status", "Downloading settings…");
+    // Navigate so the browser saves the attachment; timestamp avoids cache.
+    window.location.href = "/settings/export?t=" + Date.now();
+    setTimeout(() => {
+        showStatus("export-status", "Download started — check your browser downloads.");
+    }, 400);
+});
+
+$("btn-import-settings").addEventListener("click", async () => {
+    const input = $("import-settings-file");
+    const file = input && input.files && input.files[0];
+    if (!file) {
+        showStatus("export-status", "Choose a .config file first.", true);
+        return;
+    }
+    const ok = window.confirm(
+        "Apply settings from this file? Matching preferences on this Pi will be overwritten, and FlightScnr will relaunch."
+    );
+    if (!ok) return;
+
+    showStatus("export-status", "Uploading and applying…");
+    $("btn-import-settings").disabled = true;
+    $("btn-export-settings").disabled = true;
+    try {
+        const body = new FormData();
+        body.append("config", file, file.name || "flightscnr.config");
+        const res = await fetch("/settings/import", { method: "POST", body });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.ok) {
+            throw new Error(data.message || "Import failed");
+        }
+        showStatus(
+            "export-status",
+            data.message || "Settings applied. App is restarting…"
+        );
+    } catch (err) {
+        showStatus("export-status", err.message || String(err), true);
+        $("btn-import-settings").disabled = false;
+        $("btn-export-settings").disabled = false;
+    }
+});
 $("btn-radar").addEventListener("click", saveRadar);
 $("btn-dump1090").addEventListener("click", saveDump1090);
 $("btn-save-reload").addEventListener("click", saveAndReloadSettings);
 $("btn-offhours").addEventListener("click", saveOffHours);
 $("btn-weather").addEventListener("click", saveWeather);
+$("btn-weather-fetch").addEventListener("click", fetchWeatherNow);
 $("btn-alerts").addEventListener("click", saveAlerts);
 $("btn-track").addEventListener("click", lookupAndTrack);
 $("btn-clear-track").addEventListener("click", clearTracked);

@@ -13,13 +13,14 @@ from __future__ import annotations
 
 import logging
 import time
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 logger = logging.getLogger(__name__)
 
 _CACHE: dict = {"ts": 0.0, "payload": None, "date": None}
-_CACHE_TTL_S = 1800
+_CACHE_TTL_S = 1800  # Match half-hour current-weather cadence
 _FAIL_RETRY_S = 120
+_last_current_slot_key: str | None = None
 
 
 def _today() -> date:
@@ -128,6 +129,15 @@ def refresh(force: bool = False) -> dict | None:
     """Fetch temperature + forecast when clock/forecast screens are open."""
     global _CACHE
     now = time.time()
+    try:
+        from utilities.temperature import consume_manual_refresh_request
+
+        if consume_manual_refresh_request():
+            force = True
+            invalidate_cache()
+            logger.info("Manual weather refresh requested")
+    except Exception:
+        pass
     try:
         from weather_prefs import temperature_units, unit_symbol
         from utilities.temperature import grab_forecast, grab_temperature_and_humidity
@@ -239,13 +249,237 @@ def snapshot() -> dict | None:
     return _CACHE["payload"]
 
 
+def unavailable_messages() -> tuple[str, str]:
+    """Headline + detail when clock/forecast have no ready weather payload."""
+    try:
+        from utilities.temperature import weather_fetch_status
+
+        status = weather_fetch_status()
+    except Exception:
+        status = "unknown"
+    if status == "no_key":
+        return "Weather unavailable", "Add TOMORROW_API_KEY in the portal"
+    if status == "disabled":
+        return "Weather disabled", "Enable Tomorrow.io in the portal"
+    if status == "backoff":
+        return "Weather rate-limited", "Tomorrow.io limit reached - retrying later"
+    if status == "rate_limited":
+        return "Weather updating", "Next refresh at :01 or :31"
+    return "Weather unavailable", "Tap to retry · or use portal Weather"
+
+
+def request_fetch_now() -> dict | None:
+    """Manual refresh: unlock the rate budget and fetch immediately."""
+    try:
+        from utilities.temperature import allow_immediate_fetch, invalidate_caches
+
+        allow_immediate_fetch()
+        invalidate_caches()
+    except Exception:
+        logger.debug("Manual weather unlock failed", exc_info=True)
+    invalidate_cache()
+    return refresh(force=True)
+
+
+def refresh_current(force: bool = False) -> dict | None:
+    """Update temperature + wind only; keep cached forecast days when present."""
+    global _CACHE
+    now = time.time()
+    try:
+        from weather_prefs import unit_symbol
+        from utilities.temperature import (
+            current_weather_code,
+            current_wind,
+            grab_temperature_and_humidity,
+        )
+    except ImportError:
+        try:
+            from config import TEMPERATURE_UNITS
+        except ImportError:
+            TEMPERATURE_UNITS = "metric"
+
+        def unit_symbol() -> str:
+            return "F" if TEMPERATURE_UNITS == "imperial" else "C"
+
+        from utilities.temperature import (
+            current_weather_code,
+            current_wind,
+            grab_temperature_and_humidity,
+        )
+
+    units = unit_symbol()
+    today = _today()
+    cached = _CACHE.get("payload")
+    if (
+        not force
+        and cached
+        and cached.get("unit") == units
+        and _CACHE.get("date") == today
+        and cached.get("ready")
+        and now - _CACHE["ts"] < _CACHE_TTL_S
+    ):
+        try:
+            speed, direction, wind_unit = current_wind()
+            if speed is not None or direction is not None:
+                cached = {
+                    **cached,
+                    "wind_speed": speed,
+                    "wind_direction": direction,
+                    "wind_unit": wind_unit,
+                }
+                _CACHE["payload"] = cached
+        except Exception:
+            pass
+        return cached
+
+    temp_hum = grab_temperature_and_humidity()
+    temp, humidity = temp_hum if temp_hum else (None, None)
+    try:
+        realtime_code = current_weather_code()
+    except Exception:
+        realtime_code = None
+    try:
+        wind_speed, wind_direction, wind_unit = current_wind()
+    except Exception:
+        wind_speed, wind_direction, wind_unit = None, None, "m/s"
+
+    base = cached if isinstance(cached, dict) else {}
+    days = list(base.get("days") or [])
+    current_code = realtime_code or (days[0].get("weather_code") if days else None)
+    payload = {
+        "temp": temp,
+        "humidity": humidity,
+        "unit": units,
+        "days": days,
+        "sunrise": base.get("sunrise") or (days[0].get("sunrise") if days else "—"),
+        "sunset": base.get("sunset") or (days[0].get("sunset") if days else "—"),
+        "weather_label": _weather_code_label(current_code),
+        "weather_code": current_code,
+        "wind_speed": wind_speed,
+        "wind_direction": wind_direction,
+        "wind_unit": wind_unit,
+        "ready": temp is not None or bool(days),
+    }
+    _CACHE["ts"] = now
+    _CACHE["date"] = today
+    _CACHE["payload"] = payload
+    return payload
+
+
+def _current_slot_key(when: datetime | None = None) -> str:
+    """Half-hour slot key for current weather: ``YYYYMMDDHH01`` or ``…31``.
+
+    Slots start at one minute past the hour and half-hour (:01, :31). Times
+    before :01 belong to the previous hour's :31 slot.
+    """
+    when = when or datetime.now()
+    if when.minute >= 31:
+        return when.strftime("%Y%m%d%H") + "31"
+    if when.minute >= 1:
+        return when.strftime("%Y%m%d%H") + "01"
+    prev = when - timedelta(hours=1)
+    return prev.strftime("%Y%m%d%H") + "31"
+
+
+def _slot_includes_forecast(slot_key: str) -> bool:
+    return slot_key.endswith("01")
+
+
+def _run_current_slot_refresh(*, include_forecast: bool) -> dict | None:
+    try:
+        if include_forecast:
+            from utilities.temperature import allow_immediate_fetch, invalidate_caches
+
+            allow_immediate_fetch()
+            invalidate_caches()
+            invalidate_cache()
+            return refresh(force=True)
+
+        from utilities.temperature import allow_temp_fetch, invalidate_temp_cache
+
+        allow_temp_fetch()
+        invalidate_temp_cache()
+        return refresh_current(force=True)
+    except Exception:
+        logger.debug("Scheduled weather refresh failed", exc_info=True)
+        return None
+
+
+def tick_hourly_refresh(
+    when: datetime | None = None,
+    *,
+    background: bool = True,
+) -> bool:
+    """Compat alias — current weather at :01/:31; forecast with :01."""
+    return tick_scheduled_refresh(when, background=background)
+
+
+def tick_scheduled_refresh(
+    when: datetime | None = None,
+    *,
+    background: bool = True,
+) -> bool:
+    """Refresh current weather/wind every 30 minutes at :01 and :31.
+
+    The :01 slot also refreshes the daily forecast. On first tick after process
+    start, adopts the current slot without forcing an API call when a ready
+    payload already exists.
+    """
+    global _last_current_slot_key
+    when = when or datetime.now()
+    key = _current_slot_key(when)
+    if _last_current_slot_key == key:
+        return False
+    first = _last_current_slot_key is None
+    _last_current_slot_key = key
+    include_forecast = _slot_includes_forecast(key)
+
+    if first:
+        cached = _CACHE.get("payload")
+        if cached and cached.get("ready"):
+            return False
+
+        def _soft():
+            refresh(force=False)
+
+        if not background:
+            _soft()
+            return True
+        import threading
+
+        threading.Thread(target=_soft, name="weather-boot", daemon=True).start()
+        return True
+
+    logger.info(
+        "Scheduled weather refresh (%s%s)",
+        key,
+        " +forecast" if include_forecast else "",
+    )
+
+    def _run():
+        _run_current_slot_refresh(include_forecast=include_forecast)
+
+    if not background:
+        _run()
+        return True
+
+    import threading
+
+    threading.Thread(target=_run, name="weather-slot", daemon=True).start()
+    return True
+
+
 def invalidate_cache() -> None:
     global _CACHE
     _CACHE = {"ts": 0.0, "payload": None, "date": None}
 
 
 def refresh_for_location_change() -> dict | None:
-    """Fetch weather immediately after the radar center moves."""
+    """Fetch weather after the radar center moves (display process).
+
+    Respects the shared Tomorrow.io rate budget - may return stale/empty data
+    until the next allowed API slot.
+    """
     invalidate_cache()
     try:
         from utilities.temperature import reset_for_location_change
@@ -257,8 +491,39 @@ def refresh_for_location_change() -> dict | None:
     return refresh(force=True)
 
 
+def notify_radar_center_changed(lat: float, lon: float) -> None:
+    """Portal-safe recenter hook: invalidate caches, no Tomorrow.io HTTP.
+
+    The display process owns weather fetches (shared rate file). Portal must not
+    call the API or it doubles spend against the free-tier hourly cap.
+    """
+    invalidate_cache()
+    try:
+        from utilities.temperature import reset_for_location_change
+
+        reset_for_location_change()
+    except ImportError:
+        pass
+    try:
+        from display.round_touch import settings
+
+        if settings.auto_timezone_enabled():
+            from utilities.tz_lookup import invalidate_cache, maybe_apply_auto_timezone
+
+            invalidate_cache()
+            maybe_apply_auto_timezone(float(lat), float(lon))
+    except Exception:
+        logger.exception("Timezone refresh after radar center change failed")
+    try:
+        from utilities import atc_audio
+
+        atc_audio.on_radar_center_changed()
+    except Exception:
+        logger.exception("ATC refresh after radar center change failed")
+
+
 def after_radar_center_changed(lat: float, lon: float) -> dict | None:
-    """Weather + local time after the radar center moves."""
+    """Weather + local time after the radar center moves (display process)."""
     payload = refresh_for_location_change()
     try:
         from display.round_touch import settings

@@ -501,20 +501,74 @@ class TestNoAPIHammering:
 class TestWeatherModuleRateLimiting:
     """Tests for the temperature.py module-level rate limiting."""
 
+    def setup_method(self):
+        import tempfile
+        from utilities import temperature as t
+
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self._rate_path = self._tmpdir.name + "/tomorrow_rate.json"
+        self._old_path = t._RATE_STATE_PATH
+        t._RATE_STATE_PATH = self._rate_path
+        t._apply_rate_state(t._default_rate_state())
+
+    def teardown_method(self):
+        from utilities import temperature as t
+
+        t._RATE_STATE_PATH = self._old_path
+        t._apply_rate_state(t._default_rate_state())
+        self._tmpdir.cleanup()
+
     def test_rate_limited_skips_call(self):
         """Rate limiter prevents calls within the interval."""
         from utilities import temperature as t
-        # Record a call for temp endpoint
+
         t._record_call("temp")
         assert t._rate_limited("temp") is True
 
     def test_rate_limited_returns_stale_cache_on_429(self):
         """After 429, backoff mode is entered."""
         from utilities import temperature as t
+
         t._enter_backoff()
         assert t._in_backoff is True
         t._exit_backoff()
         assert t._in_backoff is False
+
+    def test_global_min_interval_blocks_other_endpoint(self):
+        from utilities import temperature as t
+
+        t._record_call("temp")
+        # Same endpoint stays blocked; forecast is allowed as the hourly pair.
+        assert t._rate_limited("temp") is True
+        assert t._rate_limited("forecast") is False
+
+    def test_hourly_interval_blocks_repeat_after_pair(self):
+        from utilities import temperature as t
+
+        t._record_call("temp")
+        t._record_call("forecast")
+        assert t._rate_limited("temp") is True
+        assert t._rate_limited("forecast") is True
+        assert t._TEMP_INTERVAL_S == 1800
+        assert t._FORECAST_INTERVAL_S == 3600
+
+    def test_timelines_forbidden_persists(self):
+        from utilities import temperature as t
+
+        assert t._timelines_is_forbidden() is False
+        t._mark_timelines_forbidden()
+        assert t._timelines_is_forbidden() is True
+        # Reload from disk as a second "process" would.
+        t._apply_rate_state(t._default_rate_state())
+        state = t._with_rate_state(lambda s: dict(s))
+        assert state["timelines_forbidden"] is True
+
+    def test_location_reset_does_not_clear_rate_budget(self):
+        from utilities import temperature as t
+
+        t._record_call("temp")
+        t.reset_for_location_change()
+        assert t._rate_limited("temp") is True
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -541,9 +595,18 @@ class TestEdgeCases:
 
     def test_weather_module_initial_state(self):
         """Temperature module rate limiter is not rate limited initially for a fresh endpoint."""
+        import tempfile
         from utilities import temperature as t
-        # A never-used endpoint key should not be rate limited
-        assert t._rate_limited("test_fresh_endpoint") is False
+
+        with tempfile.TemporaryDirectory() as tmp:
+            old = t._RATE_STATE_PATH
+            t._RATE_STATE_PATH = tmp + "/tomorrow_rate.json"
+            try:
+                t._apply_rate_state(t._default_rate_state())
+                assert t._rate_limited("test_fresh_endpoint") is False
+            finally:
+                t._RATE_STATE_PATH = old
+                t._apply_rate_state(t._default_rate_state())
 
     def test_concurrent_cache_access(self):
         """Multiple threads reading/writing the FR24 cache simultaneously."""

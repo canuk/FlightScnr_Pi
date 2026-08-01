@@ -368,6 +368,8 @@ class PlayerTests(unittest.TestCase):
             mock.patch("utilities.atc_audio.shutil.which", return_value="/usr/bin/mpv"),
             mock.patch.object(atc_audio, "fetch_liveatc_feeds", return_value=[]),
             mock.patch.object(atc_audio, "_ensure_system_output_volume"),
+            mock.patch.object(atc_audio, "_speaker_ready", return_value=True),
+            mock.patch("utilities.audio_output.ensure_speaker_watch"),
         ]
         for p in self.patches:
             p.start()
@@ -651,6 +653,48 @@ class PlayerTests(unittest.TestCase):
             st = atc_audio.maybe_resume_after_boot(max_attempts=3, delay_s=0.01)
         self.assertTrue(st["playing"])
         self.assertEqual(popen.call_count, 2)
+
+    def test_start_deferred_without_speaker(self):
+        from utilities import atc_audio
+
+        with mock.patch.object(atc_audio, "in_quiet_hours", return_value=False), mock.patch.object(
+            atc_audio, "_speaker_ready", return_value=False
+        ), mock.patch("utilities.atc_audio.subprocess.Popen") as popen:
+            st = atc_audio.start(override=True)
+        self.assertFalse(st["playing"])
+        self.assertIn("speaker", (st.get("error") or "").lower())
+        self.settings.set_atc_want_playing.assert_called_with(True)
+        popen.assert_not_called()
+
+    def test_maybe_resume_deferred_without_speaker(self):
+        from utilities import atc_audio
+
+        self.settings.atc_want_playing.return_value = True
+        self.settings.atc_quiet_override.return_value = False
+        with mock.patch.object(atc_audio, "in_quiet_hours", return_value=False), mock.patch.object(
+            atc_audio, "_speaker_ready", return_value=False
+        ), mock.patch("utilities.atc_audio.subprocess.Popen") as popen, mock.patch(
+            "utilities.audio_output.ensure_speaker_watch"
+        ):
+            st = atc_audio.maybe_resume_after_boot(max_attempts=3, delay_s=0.01)
+        self.assertFalse(st["playing"])
+        self.assertIn("speaker", (st.get("error") or "").lower())
+        popen.assert_not_called()
+
+    def test_maybe_resume_when_speaker_ready(self):
+        from utilities import atc_audio
+
+        self.settings.atc_want_playing.return_value = True
+        self.settings.atc_quiet_override.return_value = False
+        proc = self._fake_proc()
+        with mock.patch.object(atc_audio, "in_quiet_hours", return_value=False), mock.patch.object(
+            atc_audio, "_speaker_ready", return_value=True
+        ), mock.patch(
+            "utilities.atc_audio.subprocess.Popen", return_value=proc
+        ), mock.patch("utilities.atc_audio.time.sleep"):
+            st = atc_audio.maybe_resume_when_speaker_ready()
+        self.assertTrue(st["playing"])
+
 
 if __name__ == "__main__":
     unittest.main()

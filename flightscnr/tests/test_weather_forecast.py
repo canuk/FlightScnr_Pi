@@ -98,3 +98,40 @@ class TestForecastDayRollover:
         second = weather_data.refresh(force=False)
         assert second is not None
         assert second["days"][0]["label"] == "Today"
+
+
+class TestHourlyWeatherRefresh:
+    def test_current_slot_keys(self):
+        assert weather_data._current_slot_key(datetime(2026, 8, 1, 10, 0, 30)).endswith("31")
+        assert weather_data._current_slot_key(datetime(2026, 8, 1, 10, 1, 0)).endswith("01")
+        assert weather_data._current_slot_key(datetime(2026, 8, 1, 10, 30, 59)).endswith("01")
+        assert weather_data._current_slot_key(datetime(2026, 8, 1, 10, 31, 0)).endswith("31")
+
+    def test_tick_scheduled_half_hour_slots(self, monkeypatch):
+        weather_data._last_current_slot_key = None
+        calls = []
+
+        def fake_run(*, include_forecast):
+            calls.append(include_forecast)
+            return {"ready": True}
+
+        monkeypatch.setattr(weather_data, "_run_current_slot_refresh", fake_run)
+
+        # First tick adopts the slot without a forced unlock/refresh.
+        t0 = datetime(2026, 8, 1, 10, 1, 0)
+        weather_data._CACHE = {
+            "ts": t0.timestamp(),
+            "payload": {"ready": True},
+            "date": t0.date(),
+        }
+        assert weather_data.tick_scheduled_refresh(t0, background=False) is False
+        assert calls == []
+        assert weather_data.tick_scheduled_refresh(t0.replace(minute=15), background=False) is False
+
+        t31 = datetime(2026, 8, 1, 10, 31, 0)
+        assert weather_data.tick_scheduled_refresh(t31, background=False) is True
+        assert calls == [False]
+
+        t_next = datetime(2026, 8, 1, 11, 1, 0)
+        assert weather_data.tick_scheduled_refresh(t_next, background=False) is True
+        assert calls == [False, True]

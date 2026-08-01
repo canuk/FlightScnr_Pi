@@ -245,7 +245,10 @@ class RoundTouchDisplay:
             # first attempt; maybe_resume_after_boot retries further on failure.
             time.sleep(5.0)
             from utilities import atc_audio
+            from utilities.audio_output import ensure_speaker_watch
 
+            # Watch USB speaker plug/unplug; skips ATC/chime until one appears.
+            ensure_speaker_watch()
             atc_audio.maybe_resume_after_boot()
         except Exception:
             logger.debug("ATC resume after boot failed", exc_info=True)
@@ -2427,6 +2430,14 @@ class RoundTouchDisplay:
             if action == "radar":
                 self._return_to_radar()
                 self._safe_draw()
+            else:
+                from display.round_touch import weather_data
+
+                wx = weather_data.snapshot()
+                if not wx or not wx.get("ready"):
+                    weather_data.request_fetch_now()
+                    self._note_activity()
+                    self._safe_draw()
         elif tap and self.screen == SCREEN_DETAILS:
             action = details.tap_footer_action(tap[0], tap[1])
             if action == "radar":
@@ -2512,6 +2523,37 @@ class RoundTouchDisplay:
             self._last_clock_minute = minute
             self._last_clock_draw = now
             self._safe_draw()
+
+    def _tick_manual_weather_refresh(self):
+        """Honor portal 'Fetch weather now' even while staying on radar."""
+        try:
+            from utilities.temperature import consume_manual_refresh_request
+            from display.round_touch import weather_data
+
+            if not consume_manual_refresh_request():
+                return
+            weather_data.invalidate_cache()
+            weather_data.refresh(force=True)
+            radar_hud.rebuild_overlay()
+            self._weather_redraw_pending = True
+            if self.screen in (SCREEN_CLOCK, SCREEN_CLOCK_SETTINGS, SCREEN_FORECAST):
+                self._safe_draw()
+            logger.info("Manual weather refresh completed")
+        except Exception:
+            logger.debug("Manual weather refresh tick failed", exc_info=True)
+
+    def _tick_hourly_weather_refresh(self):
+        """Current weather/wind at :01/:31; forecast with the :01 slot."""
+        try:
+            from display.round_touch import weather_data
+
+            if not weather_data.tick_scheduled_refresh():
+                return
+            # Background fetch; redraw when/if HUD or clock paints next.
+            radar_hud.rebuild_overlay()
+            self._weather_redraw_pending = True
+        except Exception:
+            logger.debug("Scheduled weather refresh tick failed", exc_info=True)
 
     def _tick_auto_idle_clock(self):
         if self._radar_modal_active():
@@ -3118,6 +3160,8 @@ class RoundTouchDisplay:
                     radar.invalidate_frame_layer()
                     self._safe_draw()
                 hourly_chime.tick()
+                self._tick_hourly_weather_refresh()
+                self._tick_manual_weather_refresh()
                 self._tick_off_hours_clock()
                 self._apply_brightness()
                 self._loop_stage("loop_misc", _lt)

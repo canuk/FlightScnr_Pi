@@ -155,8 +155,24 @@ def _spawn(cmd: list[str]) -> bool:
     return False
 
 
+def _speaker_ready() -> bool:
+    try:
+        from utilities.audio_output import ensure_speaker_watch, speaker_connected
+
+        ok = speaker_connected()
+        if not ok:
+            ensure_speaker_watch()
+            logger.debug("Hourly chime skipped (no USB speaker)")
+        return ok
+    except Exception:
+        logger.debug("Speaker check failed; allowing chime", exc_info=True)
+        return True
+
+
 def _play_file(path: str) -> None:
     """Play ding without stopping ATC — prefer PipeWire so streams mix on USB."""
+    if not _speaker_ready():
+        return
     ext = os.path.splitext(path)[1].lower()
     atc_on = _atc_playing()
     vol_pct = max(0, min(100, int(settings.hourly_chime_volume())))

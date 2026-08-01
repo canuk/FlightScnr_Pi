@@ -137,11 +137,27 @@ def _pipewire_env() -> dict[str, str] | None:
     return None
 
 
+def _speaker_ready(*, start_watch: bool = True) -> bool:
+    """True when a USB speaker (or allowed builtin) is available for playback."""
+    try:
+        from utilities.audio_output import ensure_speaker_watch, speaker_connected
+
+        ok = speaker_connected()
+        if not ok and start_watch:
+            ensure_speaker_watch()
+        return ok
+    except Exception:
+        logger.debug("Speaker check failed; allowing audio attempt", exc_info=True)
+        return True
+
+
 def _ensure_system_output_volume(fraction: float = 1.0) -> None:
     """Raise PipeWire/Pulse default sink so mpv softvol is not fighting a quiet OS mixer.
 
     USB speaker sink was often ~40%, which made even 200% softvol sound soft.
     """
+    if not _speaker_ready(start_watch=False):
+        return
     fraction = max(0.0, min(1.0, float(fraction)))
     env = _pipewire_env()
     if env is None:
@@ -1204,6 +1220,20 @@ def start(
     settings.set_atc_airport(icao)
     settings.set_atc_mount(feed)
 
+    if not _speaker_ready():
+        # Remember intent so plug-in / speaker-watch can start the stream.
+        settings.set_atc_want_playing(True)
+        settings.set_atc_quiet_override(bool(quiet and override))
+        with _lock:
+            _quiet_override = bool(quiet and override)
+            _last_error = "No USB speaker connected"
+        logger.info(
+            "ATC deferred — no USB speaker (airport=%s mount=%s)",
+            icao,
+            feed,
+        )
+        return status()
+
     stop(clear_override=False)
     # USB/PipeWire sink is often left at ~40%; raise it before starting mpv.
     _ensure_system_output_volume(1.0)
@@ -1272,6 +1302,31 @@ def apply_enabled(enabled: bool) -> dict:
     return status()
 
 
+def maybe_resume_when_speaker_ready() -> dict:
+    """If ATC should be playing and a speaker just appeared, start once.
+
+    Used by the USB-speaker watch thread. Does not clear ``want_playing`` when
+    the speaker is still missing — that is handled by ``start()`` deferral.
+    """
+    settings = _settings()
+    if not settings.atc_enabled() or not settings.atc_want_playing():
+        return status()
+    if is_playing():
+        return status()
+    if not _speaker_ready():
+        return status()
+    quiet = in_quiet_hours()
+    forced = settings.atc_quiet_override()
+    if quiet and not forced:
+        return status()
+    logger.info(
+        "ATC starting after speaker connect airport=%s mount=%s",
+        settings.atc_airport(),
+        settings.atc_mount(),
+    )
+    return start(override=bool(forced))
+
+
 def maybe_resume_after_boot(
     *,
     max_attempts: int = 12,
@@ -1284,7 +1339,17 @@ def maybe_resume_after_boot(
     because PipeWire/network/LiveATC are often not ready on the first try.
 
     Honors quiet hours unless the user previously forced Play (quiet override).
+    Skips mpv entirely when no USB speaker is present (watch resumes later).
     """
+    global _last_error
+
+    try:
+        from utilities.audio_output import ensure_speaker_watch
+
+        ensure_speaker_watch()
+    except Exception:
+        logger.debug("Speaker watch start failed", exc_info=True)
+
     settings = _settings()
     if not settings.atc_enabled() or not settings.atc_want_playing():
         return status()
@@ -1295,6 +1360,16 @@ def maybe_resume_after_boot(
     forced = settings.atc_quiet_override()
     if quiet and not forced:
         logger.info("ATC resume skipped — quiet hours (no override)")
+        return status()
+
+    if not _speaker_ready():
+        with _lock:
+            _last_error = "No USB speaker connected"
+        logger.info(
+            "ATC resume deferred — no USB speaker (airport=%s mount=%s)",
+            settings.atc_airport(),
+            settings.atc_mount(),
+        )
         return status()
 
     logger.info(
@@ -1534,6 +1609,7 @@ def status() -> dict:
         "state": state,
         "error": _last_error,
         "mpv_available": shutil.which("mpv") is not None,
+        "speaker_connected": _speaker_ready(start_watch=False),
     }
 
 
