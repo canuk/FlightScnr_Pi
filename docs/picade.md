@@ -172,6 +172,96 @@ Nothing above is tied to the Picade. For any panel on a Pi:
 A touchscreen of any size works the same way, without the pointer daemon or the
 button bindings.
 
+## Dual boot with Recalbox
+
+A cabinet usually still has to play games. Rather than reinstall anything, the
+**original Recalbox stays untouched on the NVMe** and Raspberry Pi OS with
+FlightScnr goes on a **separate USB SSD**. Nothing is shared between the two —
+either drive can be wiped without affecting the other.
+
+| Drive | System | Origin |
+|---|---|---|
+| NVMe (`nvme0n1`) | Recalbox | the cabinet's original install, left as-is |
+| USB SSD (`sda`) | Raspberry Pi OS + FlightScnr | added for this project |
+
+The cabinet power button is wired to **GPIO17** through a latching
+power-management board (OnOff SHIM style), and the bootloader EEPROM picks the
+drive from the button state. This is the full config, as flashed:
+
+```ini
+[all]
+BOOT_UART=1
+POWER_OFF_ON_HALT=1
+BOOT_ORDER=0xf14
+
+[gpio17=0]
+BOOT_ORDER=0xf16
+```
+
+| Boot order | Sequence | Selected when |
+|---|---|---|
+| `0xf14` | USB → SD → retry | GPIO17 high → **Pi OS / FlightScnr** |
+| `0xf16` | NVMe → SD → retry | GPIO17 pulled low during boot → **Recalbox** |
+
+Digits are read right to left: `4` = USB-MSD, `6` = NVMe, `1` = SD card, and the
+leading `f` restarts the sequence instead of giving up.
+
+Apply it with `sudo rpi-eeprom-config --edit`, then reboot.
+
+### Choosing the system at power-on
+
+The same button powers the cabinet **and** drives GPIO17, so the order of
+presses is what selects the system.
+
+**Pi OS / FlightScnr** — short press, then leave the button alone. GPIO17 stays
+high, the `[gpio17=0]` filter does not apply, and `0xf14` boots the USB SSD.
+
+**Recalbox** — three steps:
+
+1. **Start from a cabinet that is completely off.** The Picade power HAT cuts
+   the supply at shutdown, so the Pi is genuinely unpowered rather than halted.
+   The bootloader only samples GPIO17 on a real cold start, so a reboot from a
+   running system cannot select Recalbox.
+2. **Short press** — the HAT latches the power on and the Pi starts.
+3. **Press again immediately**, and keep it down briefly. The bootloader
+   evaluates `[gpio17=0]` a moment into boot; seeing the pin low it switches to
+   `0xf16` and boots the NVMe.
+
+Release within the first three seconds. Once the kernel loads, the
+`gpio-shutdown` overlay watches the same pin and a press still held reads as a
+shutdown request — the machine powers straight back off.
+
+**This works on a Pi 5, which is not obvious.** The `[gpioNN=X]` filters are
+documented for the 2711 bootloader but not the 2712 one, and GPIO 0-27 sit
+behind the RP1 over PCIe — there was good reason to expect them to be ignored
+this early in boot. They are evaluated.
+
+### Pitfalls
+
+- **`rpi-eeprom-config` with no argument reads `blconfig`** — the config loaded
+  at boot, not the flash. After a successful write it still prints the old
+  values until you reboot; that is not a failure. To read the flash:
+  ```bash
+  sudo rpi-eeprom-ab dump out.bin && sudo rpi-eeprom-config out.bin
+  ```
+  On a Pi 5, `rpi-eeprom-config --edit` writes through `rpi-eeprom-ab` (A/B
+  slots, committed immediately), so there is no pending `pieeprom.upd` in
+  `/boot/firmware` to look for.
+- **Recalbox rewrites the EEPROM.** `/etc/init.d/S01rpieeprom` reflashes once
+  per Recalbox version, but only when `POWER_OFF_ON_HALT=0` or
+  `NET_INSTALL_AT_POWER_ON=1`. Keeping `POWER_OFF_ON_HALT=1` disables that path.
+  It does preserve conditional sections, since it starts from a dump of the
+  current config.
+- **Clean shutdown from the Pi OS side** needs the same overlays Recalbox uses,
+  in `/boot/firmware/config.txt`:
+  ```ini
+  dtoverlay=gpio-shutdown,gpio_pin=17,active_low,debounce=2000
+  dtoverlay=gpio-poweroff,gpiopin=4,active_low
+  ```
+  The 2s debounce means a deliberate long press. Release the button within the
+  first three seconds of boot, otherwise `gpio-keys` powers the machine off as
+  soon as the kernel loads.
+
 ## Installation
 
 `install-pi.sh` handles the pointer service in `install_pointer_service()`: the
