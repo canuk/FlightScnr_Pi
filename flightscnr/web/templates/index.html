@@ -612,6 +612,10 @@
                 <button class="btn" id="btn-check-updates" type="button">Check Updates</button>
                 <button class="btn btn-primary hidden" id="btn-update-now" type="button">Update Now</button>
             </div>
+            <div class="track-row hidden" id="update-confirm-row">
+                <button class="btn btn-primary" id="btn-update-confirm-yes" type="button">Install &amp; Restart</button>
+                <button class="btn" id="btn-update-confirm-no" type="button">Cancel</button>
+            </div>
             <div id="updates-status" class="status"></div>
         </div>
     </details>
@@ -869,11 +873,18 @@ function startUpdatePoll() {
     }, 4000);
 }
 
-async function applyUpdate() {
+function showUpdateConfirm(show) {
+    $("update-confirm-row").classList.toggle("hidden", !show);
+    $("btn-update-now").classList.toggle("hidden", show);
+}
+
+function applyUpdate() {
     clearStatus("updates-status");
-    if (!confirm("Install the latest update and restart FlightScnrPi? Your settings and API keys are preserved.")) {
-        return;
-    }
+    showUpdateConfirm(true);
+}
+
+async function applyUpdateConfirmed() {
+    showUpdateConfirm(false);
     $("btn-update-now").disabled = true;
     try {
         const data = await jsonFetch("/updates/apply", { method: "POST" });
@@ -1861,6 +1872,8 @@ async function requestAppRestart() {
 
 $("btn-check-updates").addEventListener("click", checkUpdates);
 $("btn-update-now").addEventListener("click", applyUpdate);
+$("btn-update-confirm-yes").addEventListener("click", applyUpdateConfirmed);
+$("btn-update-confirm-no").addEventListener("click", () => showUpdateConfirm(false));
 $("btn-restart-app").addEventListener("click", requestAppRestart);
 $("btn-reboot").addEventListener("click", () => requestSystemAction("reboot"));
 $("btn-shutdown").addEventListener("click", () => requestSystemAction("shutdown"));
