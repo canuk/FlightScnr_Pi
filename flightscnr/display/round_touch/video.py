@@ -73,6 +73,9 @@ def init_display(width: int, height: int, fullscreen: bool) -> pygame.Surface:
                     os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
             except Exception:
                 pass
+            # Cabinet sticks must keep working when the compositor gives focus
+            # elsewhere; without this SDL drops JOY* events for unfocused windows.
+            os.environ.setdefault("SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS", "1")
             pygame.init()
             pygame.display.set_caption("FlightScnr Pi")
             surface = pygame.display.set_mode((width, height), flags)

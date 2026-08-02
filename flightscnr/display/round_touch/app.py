@@ -31,6 +31,7 @@ from display.round_touch import (
     gesture_handler,
     hourly_chime,
     input_handler,
+    joystick_nav,
     long_press_pan,
     map_bg,
     nav,
@@ -112,7 +113,11 @@ class RoundTouchDisplay:
                 pygame.display.quit()
                 self._display = video.init_display(fit_side, fit_side, self._fullscreen)
         self.surface = pygame.Surface((theme.SIZE, theme.SIZE))
-        pygame.mouse.set_visible(False)
+        try:
+            from config import SHOW_MOUSE_CURSOR
+        except ImportError:
+            SHOW_MOUSE_CURSOR = False
+        pygame.mouse.set_visible(bool(SHOW_MOUSE_CURSOR))
         pygame.event.set_allowed(
             None
         )  # allow all; we filter QUIT manually
@@ -132,6 +137,7 @@ class RoundTouchDisplay:
         self.input = input_handler.TouchInput()
         self.pinch = pinch_handler.PinchZoom()
         self.gestures = gesture_handler.RadarGestureHandler(self.input, self.pinch)
+        self._joystick_nav = joystick_nav.JoystickNav()
         self._ghost_filter = ghost_touch_filter.GhostTouchFilter()
         self.screen = SCREEN_RADAR
         self.settings_page = info.PAGE_MAIN
@@ -1768,6 +1774,25 @@ class RoundTouchDisplay:
         if off_hours.effective_brightness_percent(settings.brightness_percent()) == 0:
             self._off_hours_wake_until = time.time() + OFF_HOURS_TOUCH_WAKE_S
 
+    def _handle_stick_button(self, action):
+        """Cabinet button press: a swipe direction (int) or an ACTION_* string."""
+        self._note_off_hours_override()
+        if isinstance(action, int):
+            self.input.inject_swipe(action)
+            self._handle_navigation()
+            return
+        if action == joystick_nav.ACTION_RADAR:
+            if self.screen != SCREEN_RADAR:
+                self._return_to_radar()
+                self._safe_draw()
+        elif action == joystick_nav.ACTION_ZOOM_IN:
+            self._apply_scale_step(-1)
+        elif action == joystick_nav.ACTION_ZOOM_OUT:
+            self._apply_scale_step(1)
+        else:
+            return
+        self._note_activity()
+
     def _apply_scale_step(self, delta: int):
         """delta: -1 closer range, +1 wider range."""
         idx = settings.scale_index()
@@ -2333,7 +2358,11 @@ class RoundTouchDisplay:
                 )
             threshold = input_handler.gesture_threshold_px()
             opened = False
-            if travel >= threshold:
+            # A stick swipe carries no path, so travel stays 0 and the
+            # open-flight-under-the-finger branch below can never fire — treat
+            # a coordinate-less swipe as a deliberate full-travel one.
+            pathless = swipe_start is None and swipe_end is None
+            if pathless or travel >= threshold:
                 self._open_screen(SCREEN_TRACKED)
                 self._scroll.reset()
                 self._note_activity()
@@ -2386,11 +2415,52 @@ class RoundTouchDisplay:
             self.settings_page = info.PAGE_MAIN
             self._note_activity()
             self._safe_draw()
+        elif swipe == input_handler.SWIPE_LEFT and self.screen == SCREEN_SETTINGS:
+            # Touch builds walk settings pages by tapping the breadcrumb, which
+            # needs coordinates an arcade stick cannot supply — step the pages.
+            self._set_settings_page(min(self.settings_page + 1, info.PAGE_COUNT - 1))
+            self._note_activity()
+            self._safe_draw()
+        elif swipe == input_handler.SWIPE_RIGHT and self.screen == SCREEN_SETTINGS:
+            # Mirrors radar → settings: right from the first page backs out.
+            if self.settings_page <= info.PAGE_MAIN:
+                self._return_to_radar()
+            else:
+                self._set_settings_page(self.settings_page - 1)
+            self._note_activity()
+            self._safe_draw()
+        elif self.screen == SCREEN_FLIGHT and swipe in (
+            input_handler.SWIPE_LEFT, input_handler.SWIPE_RIGHT,
+        ):
+            # Step the card like the PREV/NEXT footer taps, so panel buttons
+            # walk the flights without aiming at the footer.
+            self._sync_selected_flight_index()
+            ordered = self._ordered_flights()
+            if ordered:
+                step = 1 if swipe == input_handler.SWIPE_LEFT else -1
+                self._select_flight_at_index(self.flight_index + step, ordered)
+                self._scroll.reset()
+                self._maybe_enrich_flight_detail()
+                self._note_activity()
+                self._safe_draw()
         elif self.screen == SCREEN_FLIGHT and swipe in (input_handler.SWIPE_UP, input_handler.SWIPE_DOWN):
             delta = -nav.scroll_step() if swipe == input_handler.SWIPE_UP else nav.scroll_step()
             self._scroll.step(delta)
             self._note_activity()
             self._safe_draw()
+        elif self.screen == SCREEN_FIRE and swipe in (
+            input_handler.SWIPE_LEFT, input_handler.SWIPE_RIGHT,
+        ):
+            # Same footer shortcut as the flight card.
+            self._sync_selected_fire_index()
+            ordered = wildfire_overlay.fires_by_distance()
+            if ordered:
+                step = 1 if swipe == input_handler.SWIPE_LEFT else -1
+                self._select_fire_at_index(self.fire_index + step, ordered)
+                self._scroll.reset()
+                self._maybe_fetch_fire_map()
+                self._note_activity()
+                self._safe_draw()
         elif self.screen == SCREEN_FIRE and swipe in (input_handler.SWIPE_UP, input_handler.SWIPE_DOWN):
             delta = -nav.scroll_step() if swipe == input_handler.SWIPE_UP else nav.scroll_step()
             self._scroll.step(delta)
@@ -2985,6 +3055,13 @@ class RoundTouchDisplay:
                         continue
                     # Do not recreate the display on WINDOWEXPOSED / FOCUSGAINED —
                     # that races the render loop and can black-screen the kiosk.
+
+                    # Cabinet panel buttons stand in for swipes where there is no
+                    # touchscreen; is_touch_event() below would drop JOY* events.
+                    stick_button = self._joystick_nav.handle_button(event)
+                    if stick_button is not None:
+                        self._handle_stick_button(stick_button)
+                        continue
                     if gesture_handler.RadarGestureHandler.is_touch_event(event):
                         if not self._ghost_filter.allow(
                             event,
