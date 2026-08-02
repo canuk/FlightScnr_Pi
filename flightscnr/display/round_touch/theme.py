@@ -18,6 +18,11 @@ except ImportError:
     def square_framebuffer_side() -> int:
         return 720
 
+try:
+    from config import UI_SCALE
+except ImportError:
+    UI_SCALE = 1.0
+
 
 def s(value: float) -> int:
     return max(1, int(round(value * SCALE)))
@@ -34,7 +39,9 @@ def _apply_framebuffer_side(side: int) -> None:
     global FONT_CARDINAL, FONT_CARDINAL_DIAG, FONT_TAG, FONT_TAG_SUB
 
     SIZE = side
-    SCALE = SIZE / REF_SIZE
+    # UI_SCALE < 1 keeps chrome compact on large panels, leaving more of the
+    # circle for the basemap (which picks its own tile zoom from px_per_km).
+    SCALE = SIZE / REF_SIZE * UI_SCALE
     CENTER_X = SIZE // 2
     CENTER_Y = SIZE // 2
     # Thin rim so sweep/tags are not clipped by the physical round bezel.
@@ -85,6 +92,9 @@ _apply_framebuffer_side(square_framebuffer_side())
 
 # Colors (FlightScnr radar_theme.h)
 BG = (2, 15, 3)
+# Mask outside the visible circle. Separate from BG so the dark green stays
+# under the basemap while the corners match the letterbox on non-round panels.
+BEZEL_BG = (0, 0, 0)
 GRID = (16, 100, 32)
 PAGE_DOT_INACTIVE = (8, 42, 14)
 CROSSHAIR = GRID

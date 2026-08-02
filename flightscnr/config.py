@@ -306,6 +306,39 @@ DISPLAY_ROTATION = int(os.environ.get("DISPLAY_ROTATION", "90")) % 360
 if DISPLAY_ROTATION not in (0, 90, 180, 270):
     DISPLAY_ROTATION = round(DISPLAY_ROTATION / 90) * 90 % 360
 DISPLAY_FULLSCREEN = _bool(os.environ.get("DISPLAY_FULLSCREEN", "True"))
+# UI element scale multiplier (fonts, icons, grid dashes). Layout sizes are
+# derived from the framebuffer side, so a larger panel magnifies everything.
+# Values below 1.0 shrink the chrome and free up radar area for map detail.
+# 1.0 keeps the stock proportions.
+UI_SCALE = _float_env("UI_SCALE") or 1.0
+if not 0.2 <= UI_SCALE <= 3.0:
+    logger.warning("UI_SCALE (%s) out of range 0.2-3.0 — using 1.0", UI_SCALE)
+    UI_SCALE = 1.0
+
+# Touch panels hide the pointer; cabinets driven by a mouse (or a stick mapped
+# to the pointer at the OS level) need to see where they are aiming.
+SHOW_MOUSE_CURSOR = _bool(os.environ.get("SHOW_MOUSE_CURSOR", "False"))
+
+
+def _btn_env(name: str) -> int:
+    """Cabinet button index for an action; -1 (default) leaves it unbound."""
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return -1
+    try:
+        return int(raw)
+    except ValueError:
+        logger.warning("%s (%s) is not an integer — button unbound", name, raw)
+        return -1
+
+
+# Cabinet button bindings, by SDL button index. Unbound by default so touch
+# builds are unaffected; read them off the app log (joy event ... button=N).
+JOYSTICK_BTN_SWIPE_LEFT = _btn_env("JOYSTICK_BTN_SWIPE_LEFT")
+JOYSTICK_BTN_SWIPE_RIGHT = _btn_env("JOYSTICK_BTN_SWIPE_RIGHT")
+JOYSTICK_BTN_RADAR = _btn_env("JOYSTICK_BTN_RADAR")
+JOYSTICK_BTN_ZOOM_IN = _btn_env("JOYSTICK_BTN_ZOOM_IN")
+JOYSTICK_BTN_ZOOM_OUT = _btn_env("JOYSTICK_BTN_ZOOM_OUT")
 # Flight detail: show airline logo when no aircraft photo (False = photo-only / text).
 SHOW_AIRLINE_LOGOS = _bool(os.environ.get("SHOW_AIRLINE_LOGOS", "False"))
 

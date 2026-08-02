@@ -477,7 +477,9 @@ def draw_radar(
 
 def _draw_grid(surface, *, calibrate: bool = False):
     center = (theme.CENTER_X, theme.CENTER_Y)
-    line_w = max(1, theme.s(2))
+    # Hairline rings/crosshairs: s(2) reads as 4-5 px on a large panel, which
+    # crowds the basemap. s(1) keeps them ~2 px and still tracks UI_SCALE.
+    line_w = max(1, theme.s(1))
     facing = settings.effective_facing_deg()
     if settings.show_range_rings():
         for ring in range(1, theme.RING_COUNT + 1):
@@ -486,6 +488,11 @@ def _draw_grid(surface, *, calibrate: bool = False):
 
         cx, cy = theme.CENTER_X, theme.CENTER_Y
         r = theme.GRID_OUTER_RADIUS
+        if settings.show_compass_rose():
+            # N/E/S/W sit on the rim; a full-radius crosshair strikes through
+            # the glyphs. Stop one cardinal font-size short of their centers.
+            card_r = theme.VISIBLE_RADIUS - theme.CARDINAL_NORTH_OFFSET_Y
+            r = min(r, max(1, card_r - theme.FONT_CARDINAL))
         # Crosshairs follow true N/S and E/W (rotate with facing).
         for bearing in (0, 90):
             rad = math.radians(bearing - facing - 90)

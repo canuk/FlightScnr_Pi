@@ -86,9 +86,38 @@ def rotation_degrees() -> int:
     return normalize_degrees(DISPLAY_ROTATION)
 
 
+_pointer_offset_cache = None
+
+
+def _pointer_offset() -> tuple[int, int]:
+    """Letterbox margin to strip off incoming pointer coordinates.
+
+    A fullscreen window narrower than the panel is centred, and SDL reports the
+    pointer in desktop space rather than window space — so a click on the middle
+    of the circle arrives offset by the margin, and hit-testing misses.
+    Zero on square panels, where desktop and draw buffer are the same size.
+    """
+    global _pointer_offset_cache
+    surface = pygame.display.get_surface()
+    if surface is None:
+        return (0, 0)
+    size = surface.get_size()
+    side = theme.SIZE
+    key = (size, side)
+    if _pointer_offset_cache is not None and _pointer_offset_cache[0] == key:
+        return _pointer_offset_cache[1]
+    # Same centring present() uses to blit the frame — see _center_offset().
+    offset = (max(0, (size[0] - side) // 2), max(0, (size[1] - side) // 2))
+    _pointer_offset_cache = (key, offset)
+    return offset
+
+
 def to_logical(x: float, y: float) -> tuple[int, int]:
     """Map a physical screen/touch coordinate into the draw buffer."""
     side = theme.SIZE
+    off_x, off_y = _pointer_offset()
+    x -= off_x
+    y -= off_y
     rotation = rotation_degrees()
     if rotation == 0:
         return int(x), int(y)
