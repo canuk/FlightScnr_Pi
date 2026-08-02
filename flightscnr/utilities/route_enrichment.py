@@ -110,6 +110,7 @@ def _from_opensky(flight: dict) -> dict | None:
         "route_source": "opensky",
     }
 
+
 def fetch_route_enrichment(flight: dict) -> dict | None:
     """Try each source in config.ROUTE_SOURCE_ORDER in turn, filling only the
     gaps left by earlier sources, stopping as soon as both origin and
