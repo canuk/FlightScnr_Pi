@@ -1,0 +1,16 @@
+[Unit]
+Description=Picade joystick as a virtual mouse and keyboard
+Documentation=file:__REPO_DIR__/flightscnr/setup/picade-pointer
+# The cabinet may only be enumerated after this service starts, so let systemd
+# retry forever. StartLimit* belongs in [Unit]: systemd silently ignores it in
+# [Service], which caps restarts at the default 5 per 10s.
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+ExecStart=__REPO_DIR__/flightscnr/setup/picade-pointer
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

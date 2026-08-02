@@ -519,6 +519,35 @@ install_systemd_service() {
     log_ok "Enabled for boot (graphical.target)"
 }
 
+install_pointer_service() {
+    # Arcade cabinets (Picade) drive the pointer from the stick: a small uinput
+    # daemon turns the joystick into a virtual mouse, leaving the app to see
+    # ordinary mouse events. Skipped when no stick is wired.
+    local service_src="$SETUP_DIR/picade-pointer.service"
+    local daemon="$SETUP_DIR/picade-pointer"
+    local dest="/etc/systemd/system/picade-pointer.service"
+
+    log_step "Picade pointer service (joystick as mouse)"
+
+    if [ ! -f "$service_src" ] || [ ! -f "$daemon" ]; then
+        log_warn "Missing $service_src or $daemon — skipped pointer service"
+        return 0
+    fi
+
+    # /dev/uinput only appears once the module is loaded; without this the
+    # daemon's open() fails at every boot and Restart=always spins forever.
+    printf 'uinput\n' > /etc/modules-load.d/picade-pointer.conf
+    modprobe uinput 2>/dev/null || log_warn "modprobe uinput failed — check after reboot"
+
+    chmod 0755 "$daemon"
+    sed -e "s|__REPO_DIR__|$REPO_ROOT|g" "$service_src" > "$dest"
+    chmod 0644 "$dest"
+    systemctl daemon-reload
+    systemctl enable picade-pointer.service >/dev/null 2>&1 || true
+    log_ok "Copied to $dest"
+    log_ok "uinput queued for boot (/etc/modules-load.d/picade-pointer.conf)"
+}
+
 fix_repo_permissions() {
     log_step "Repository permissions"
     chown -R "$REPO_OWNER:$REPO_OWNER" "$REPO_ROOT"
@@ -609,6 +638,7 @@ cmd_install() {
     setup_env_file
     suppress_desktop_bluetooth_popups
     install_systemd_service
+    install_pointer_service
     install_update_sudoers
     fix_repo_permissions
 
