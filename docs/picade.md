@@ -208,6 +208,24 @@ leading `f` restarts the sequence instead of giving up.
 
 Apply it with `sudo rpi-eeprom-config --edit`, then reboot.
 
+### First boot from the USB SSD
+
+Before that config is flashed the Pi boots the NVMe, so the freshly written USB
+SSD is never reached. Two ways out for that first boot:
+
+- **Unplug the NVMe.** Crude, always works.
+- **Use the bootloader menu.** Plug a USB keyboard into the Pi, hold **Space**,
+  and power the cabinet on with the button. The bootloader lists the bootable
+  devices; pick the USB SSD.
+
+> **Keyboards are the hard part here.** At bootloader stage USB support is much
+> narrower than under Linux: several keyboards are simply never seen, and among
+> those that are, some only enumerate on the **USB 2.0** ports while others only
+> work on **USB 3.0**. If Space appears to be ignored, that is the first thing to
+> suspect — try the other pair of ports, then another keyboard, before
+> concluding the menu is unavailable. A keyboard that works perfectly once the
+> desktop is up proves nothing about this stage.
+
 ### Choosing the system at power-on
 
 The same button powers the cabinet **and** drives GPIO17, so the order of
