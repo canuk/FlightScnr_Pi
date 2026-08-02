@@ -169,6 +169,7 @@ Portal preferences are stored on the Pi in `/var/lib/flightscnr/` and apply with
 | **[OpenSky Network](https://opensky-network.org/)**                    | Optional                 | Further route fallback when FR24/AirLabs/FlightAware lack origin/destination; derived from position history (destination often empty while airborne) |
 | **[LiveATC](https://www.liveatc.net/)**                                | Optional                 | Manual ATC audio to a USB or Bluetooth speaker via `mpv` (portal / Settings → ATC). Pair Bluetooth on the web portal; on-screen ATC offers quick reconnect. Install: `sudo apt install mpv bluez`. |
 
+The order these three route fallbacks are tried in — and whether a given one is used at all — is configurable via `ROUTE_SOURCE_ORDER` in `.env` (see `.env.example`). Setting `ROUTE_SOURCE_ORDER=opensky` runs a fully free/open-source route lookup that never calls AirLabs or FlightAware.
 
 API responses are **cached** (e.g. FR24 feed ~90s, flight details ~30 min, weather ~1 hr) to reduce quota use during 24/7 operation. Offline databases (`airports.json`, `airlines.json`, `icao_types.json`) download on first run.
 
