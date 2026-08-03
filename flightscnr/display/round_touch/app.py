@@ -2932,6 +2932,14 @@ class RoundTouchDisplay:
             self._weather_redraw_pending = True
         except Exception:
             logger.debug("Weather refresh after settings reload failed", exc_info=True)
+        # Portal Disable/Stop updates JSON in the web process; stop display-owned
+        # mpv here so audio cannot keep playing after ATC is turned off.
+        try:
+            from utilities import atc_audio
+
+            atc_audio.reconcile_enabled_state()
+        except Exception:
+            logger.debug("ATC reconcile after settings reload failed", exc_info=True)
         radar.invalidate_frame_layer()
         self._safe_draw()
 
