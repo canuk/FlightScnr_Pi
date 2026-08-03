@@ -472,7 +472,7 @@
     <details class="card atc-card">
         <summary><span class="ico">&#9835;</span>ATC Audio<span class="sum">LiveATC</span><span class="chev">&#9656;</span></summary>
         <div class="body">
-            <p class="hint">Manual LiveATC stream to the Pi’s USB or Bluetooth speaker via <code>mpv</code> (<code>sudo apt install mpv</code>). Pair a Bluetooth speaker in the card below. Airport lists every large/medium field in radar range. Channel loads known streams immediately from the local seed/index, then auto-discovers more mounts in the background (same idea as plane-tracker ATC: probe <code>d.liveatc.net</code>, never wait on LiveATC HTML). If audio is already playing, changing airport (or moving the map) retunes to that airport’s Tower and keeps playing; if it was stopped, only the selection changes. Playback resumes after reboot/app restart when it was playing (Stop clears that). Quiet hours block auto-start and resume; Play still overrides until you Stop.</p>
+            <p class="hint">Manual LiveATC stream to the Pi’s USB or Bluetooth speaker via <code>mpv</code> (<code>sudo apt install mpv</code>). Pair a Bluetooth speaker in the card below. Airport lists every large/medium field in radar range. Channel loads local seed/index immediately, then auto-fetches the full LiveATC feed list in the background (Cloudflare-bypass search). If ATC is enabled and playback is active (or was left on via Play), changing airport or moving the map selects that area’s Tower and keeps playing; Stop clears that so a map move only updates the selection. Playback resumes after reboot/app restart when it was playing. Quiet hours block auto-start and resume; Play still overrides until you Stop.</p>
             <div class="chk">
                 <label for="atc_enabled">Enable ATC audio</label>
                 <span class="switch"><input id="atc_enabled" type="checkbox"><span class="track"></span></span>
@@ -1788,8 +1788,8 @@ async function populateAtcChannels(airport, selectedMount) {
     loading.textContent = "Loading channels…";
     sel.appendChild(loading);
 
-    // Fast local list first. Discovery polling continues in the background so
-    // Save/retune is not blocked for up to ~30s.
+    // Fast local list first. Background LiveATC search continues so Save/retune
+    // is not blocked.
     let data = await jsonFetch(
         `/atc/channels?airport=${encodeURIComponent(airport)}`
     );
@@ -1799,8 +1799,8 @@ async function populateAtcChannels(airport, selectedMount) {
     if (!data.discovering) return;
     (async () => {
         let attempts = 0;
-        while (attempts < 20) {
-            await _sleep(1500);
+        while (attempts < 40) {
+            await _sleep(2000);
             if (token !== _atcChannelPollToken || $("atc_airport").value !== airport) return;
             data = await jsonFetch(
                 `/atc/channels?airport=${encodeURIComponent(airport)}`

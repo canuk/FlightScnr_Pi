@@ -35,9 +35,11 @@ STREAM_BASE = "https://d.liveatc.net/"
 SEED_PATH = Path(__file__).resolve().parents[1] / "assets" / "atc" / "atc_stations_seed.json"
 INDEX_PATH = Path(__file__).resolve().parents[1] / "assets" / "atc" / "atc_feeds_index.json"
 IPC_PATH = os.environ.get("FLIGHTSCNR_ATC_IPC", "/tmp/flightscnr-atc-mpv.sock")
-# Softvol ceiling (must match settings.ATC_VOLUME_MAX). System PipeWire/ALSA
-# sink is raised to 100% on play; UI softvol stays a normal 0–100% range.
-VOLUME_MAX = 100
+_MPV_LOG_PATH = os.environ.get("FLIGHTSCNR_ATC_MPV_LOG", "/tmp/flightscnr-atc-mpv.log")
+# UI volume is 0–100. mpv softvol applies SOFTVOL_GAIN so 100% UI → louder output
+# for quiet LiveATC feeds / bone-conduction headphones. PipeWire sink stays at 100%.
+SOFTVOL_GAIN = 2.0
+VOLUME_MAX = 200
 # On-demand LiveATC feed index (one fetch per ICAO, disk-cached).
 # Mobile host is often unreachable; desktop search is tried as a fallback.
 LIVEATC_FEED_URLS = (
@@ -47,35 +49,15 @@ LIVEATC_FEED_URLS = (
 FEED_CACHE_DIR = Path(os.environ.get("FLIGHTSCNR_DATA_DIR", "/var/lib/flightscnr")) / "atc_feeds_cache"
 FEED_CACHE_TTL_S = 7 * 24 * 3600
 FEED_NEGATIVE_TTL_S = 6 * 3600
-# Mount-suffix discovery (same idea as plane-tracker-rgb-pi PR #48 / atc-audio):
-# probe d.liveatc.net/<icao><suffix> in a background worker. Never block the
-# portal/status path on a ~15-URL sweep. HTML scrape is unreliable (CF/DNS).
+# Background LiveATC search (curl_cffi CF-bypass via liveatc_client). Never
+# block the portal on network; seed/index serve until discovery finishes.
 DISCOVERED_CACHE_PATH = (
     Path(os.environ.get("FLIGHTSCNR_DATA_DIR", "/var/lib/flightscnr")) / "atc_discovered.json"
 )
-_PROBE_COOLDOWN_SEC = 900
 _DISCOVER_POSITIVE_TTL_S = 30 * 24 * 3600
 _DISCOVER_NEGATIVE_TTL_S = 24 * 3600
-# Bump when candidate mount patterns change so empty negative caches re-probe.
-_PROBE_SET_VERSION = 2
-# Common LiveATC mount tails. Also try bare ``icao`` / ``icao2`` (e.g. essb2).
-_PROBE_SUFFIXES = (
-    "_twr",
-    "_app",
-    "_dep",
-    "_gnd",
-    "_gnd_twr",
-    "_del",
-    "_del_gnd",
-    "_atis",
-    "_atis1",
-    "_twr1",
-    "_twr2",
-    "_app_n",
-    "_app_s",
-    "_dep_n",
-    "_dep_s",
-)
+# Bump to invalidate old mount-probe discovery caches.
+_DISCOVER_SET_VERSION = 7
 
 _KIND_ORDER = {
     "twr": 0,
@@ -105,7 +87,8 @@ _discovered: dict[str, dict] | None = None
 _discover_queue: set[str] = set()
 _discover_lock = threading.Lock()
 _discover_thread: threading.Thread | None = None
-_probe_cooldown_until = 0.0
+_keepalive_next_at = 0.0
+_keepalive_failures = 0
 
 
 def _pipewire_env() -> dict[str, str] | None:
@@ -485,8 +468,8 @@ def parse_liveatc_mobile_html(html: str) -> list[dict]:
                     _add(b, a)
                 else:
                     _add(a, b)
-        if out:
-            return out
+        # Do not return early — mixed mobile/desktop HTML often needs every
+        # pattern (and the .pls / archive fallbacks) to collect all mounts.
 
     for mount in re.findall(r"play/([a-zA-Z0-9_]+)\.pls", html, flags=re.I):
         _add(mount, mount)
@@ -547,7 +530,11 @@ def _write_feed_cache(icao: str, feeds: list[dict], *, ok: bool) -> None:
 
 
 def fetch_liveatc_feeds(icao: str, *, force: bool = False) -> list[dict]:
-    """Fetch LiveATC feed list for an ICAO (cached; best-effort)."""
+    """Fetch LiveATC feed list for an ICAO (cached; best-effort).
+
+    Prefers Cloudflare-bypass search via ``utilities.liveatc_client`` (curl_cffi),
+    then falls back to plain HTML fetch/parse.
+    """
     code = (icao or "").strip().upper()
     if not code:
         return []
@@ -556,14 +543,29 @@ def fetch_liveatc_feeds(icao: str, *, force: bool = False) -> list[dict]:
         if fresh and cached is not None:
             return cached
 
+    # 1) curl_cffi Chrome impersonation (works when plain requests get CF 403).
+    try:
+        from utilities import liveatc_client
+
+        raw = liveatc_client.search_feeds(code)
+        feeds = [_normalize_feed(item) for item in raw]
+        feeds = [f for f in feeds if f]
+        if feeds:
+            _write_feed_cache(code, feeds, ok=True)
+            return feeds
+    except Exception:
+        logger.debug("LiveATC curl_cffi search failed for %s", code, exc_info=True)
+
+    # 2) Legacy plain requests + HTML parse (often CF-blocked on Pi).
     html = ""
+    blocked = False
     try:
         import requests
 
         headers = {
             "User-Agent": (
-                "FlightScnr/1.0 (+https://github.com/yashmulgaonkar/FlightScnr_Pi) "
-                "AppleWebKit/537.36 Mobile"
+                "Mozilla/5.0 (Linux; Android 14; Pixel 7) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
             ),
             "Accept": "text/html,application/xhtml+xml",
         }
@@ -576,9 +578,11 @@ def fetch_liveatc_feeds(icao: str, *, force: bool = False) -> list[dict]:
                 continue
             body = resp.text or ""
             head = body[:800].lower()
-            if resp.status_code != 200 or not body:
+            if resp.status_code == 403 or "cloudflare" in head or "just a moment" in head:
+                blocked = True
+                logger.info("LiveATC HTML blocked for %s (%s)", code, url)
                 continue
-            if "cloudflare" in head or "just a moment" in head:
+            if resp.status_code != 200 or not body:
                 continue
             html = body
             break
@@ -593,7 +597,10 @@ def fetch_liveatc_feeds(icao: str, *, force: bool = False) -> list[dict]:
     cached, _ = _read_feed_cache(code)
     if cached:
         return cached
-    _write_feed_cache(code, [], ok=False)
+    # Cloudflare / empty HTML is not a reliable "this airport has no feeds"
+    # signal — skip writing a long negative cache so discovery can retry.
+    if not blocked:
+        _write_feed_cache(code, [], ok=False)
     return []
 
 
@@ -665,12 +672,14 @@ def _discovery_fresh(icao: str) -> bool:
     except (TypeError, ValueError):
         return False
     feeds = entry.get("feeds") if isinstance(entry.get("feeds"), list) else []
-    # Empty results from an older probe set must be retried (e.g. missed essb2).
     try:
-        ver = int(entry.get("probe_ver") or 1)
+        ver = int(entry.get("discover_ver") or entry.get("probe_ver") or 1)
     except (TypeError, ValueError):
         ver = 1
-    if not feeds and ver < _PROBE_SET_VERSION:
+    if ver < _DISCOVER_SET_VERSION:
+        return False
+    # Incomplete attempts (network/CF failure) must be retried.
+    if not entry.get("html_tried"):
         return False
     ttl = _DISCOVER_POSITIVE_TTL_S if feeds else _DISCOVER_NEGATIVE_TTL_S
     age = time.time() - ts
@@ -689,142 +698,24 @@ def _discovered_feeds(icao: str) -> list[dict]:
     return out
 
 
-def _probe_bases(icao: str) -> list[str]:
-    """Candidate lowercase mount prefixes for an ICAO (PR #48 + ``icao1_``)."""
-    base = (icao or "").strip().lower()
-    if not base:
-        return []
-    bases = [base, f"{base}1"]
-    if base.startswith("k") and len(base) == 4:
-        bare = base[1:]
-        bases.extend([bare, f"p{bare}", f"{bare}1"])
-    # Preserve order, drop dupes.
-    out: list[str] = []
-    seen: set[str] = set()
-    for b in bases:
-        if b and b not in seen:
-            seen.add(b)
-            out.append(b)
-    return out
+def _html_cached_feeds(icao: str) -> list[dict]:
+    feeds, _fresh = _read_feed_cache(icao)
+    return list(feeds or [])
 
 
-def _probe_mount_candidates(icao: str) -> list[str]:
-    """All mount names to try for an ICAO (suffixes + bare numbered feeds)."""
-    mounts: list[str] = []
-    seen: set[str] = set()
-
-    def _add(mount: str) -> None:
-        m = (mount or "").strip().lower()
-        if not m or m in seen or not re.fullmatch(r"[a-z0-9_]+", m):
-            return
-        seen.add(m)
-        mounts.append(m)
-
-    for base in _probe_bases(icao):
-        _add(base)
-        # LiveATC often uses bare numbered mounts (essb2, egll_*, cyyz7).
-        for n in range(1, 8):
-            _add(f"{base}{n}")
-        for suffix in _PROBE_SUFFIXES:
-            _add(f"{base}{suffix}")
-            for n in range(1, 4):
-                _add(f"{base}{n}{suffix}")
-    return mounts
-
-
-def probe_feed_mount(mount: str, *, timeout: float = 2.0) -> bool | None:
-    """Probe ``d.liveatc.net/<mount>`` with one ranged GET.
-
-    Returns True (alive), False (404/dead), or None (unknown / 403 cooldown).
-    """
-    global _probe_cooldown_until
-    mount = (mount or "").strip()
-    if not mount or not re.fullmatch(r"[a-zA-Z0-9_]+", mount):
+def _discovery_pass_complete(icao: str) -> bool:
+    """True after a successful LiveATC HTML search pass for this version."""
+    entry = _discovery_entry(icao)
+    if entry is None or not _discovery_fresh(icao):
         return False
-    if time.time() < _probe_cooldown_until:
-        return None
-    url = stream_url(mount)
-    try:
-        import requests
-
-        resp = requests.get(
-            url,
-            timeout=timeout,
-            allow_redirects=True,
-            headers={
-                "User-Agent": (
-                    "Mozilla/5.0 (X11; Linux aarch64) AppleWebKit/537.36 "
-                    "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-                ),
-                "Range": "bytes=0-256",
-                "Accept": "*/*",
-            },
-            stream=True,
-        )
-        status = resp.status_code
-        ctype = (resp.headers.get("Content-Type") or "").lower()
-        resp.close()
-        if status == 403:
-            _probe_cooldown_until = time.time() + _PROBE_COOLDOWN_SEC
-            logger.info("LiveATC probe hit 403 — cooling down %ss", _PROBE_COOLDOWN_SEC)
-            return None
-        if 200 <= status < 300:
-            return "audio" in ctype or "ogg" in ctype or "mpeg" in ctype or "octet" in ctype
-        if status == 404:
-            return False
-        return None
-    except Exception:
-        return None
-
-
-def _probe_airport_feeds(icao: str) -> tuple[list[dict], bool]:
-    """Suffix/number probe sweep. Returns (feeds, complete).
-
-    Incomplete when rate-limited (403) or when every probe was indeterminate
-    (timeouts) — those must not be cached as a permanent empty airport.
-    """
-    found: dict[str, dict] = {}
-    code = (icao or "").strip().upper()
-    saw_definitive = False
-    for mount in _probe_mount_candidates(code):
-        if mount in found:
-            continue
-        result = probe_feed_mount(mount)
-        if result is True:
-            saw_definitive = True
-            kind = _infer_kind(mount, mount)
-            label = {
-                "twr": "Tower",
-                "app": "Approach",
-                "dep": "Departure",
-                "gnd": "Ground",
-                "del": "Clearance",
-                "atis": "ATIS",
-                "ctr": "Center",
-            }.get(kind, "Feed")
-            feed = _normalize_feed(
-                {"mount": mount, "label": f"{code} {label}", "kind": kind or "twr"}
-            )
-            if feed:
-                # Bare numbered mounts (essb2) with unknown kind → Tower default.
-                if not feed.get("kind"):
-                    feed["kind"] = "twr"
-                found[mount] = feed
-        elif result is False:
-            saw_definitive = True
-        elif result is None and time.time() < _probe_cooldown_until:
-            return list(found.values()), False
-    if not found and not saw_definitive:
-        # All probes timed out / unknown — do not cache as feedless.
-        return [], False
-    return list(found.values()), True
+    return bool(entry.get("html_tried"))
 
 
 def enqueue_discovery(icao: str) -> None:
-    """Queue an ICAO for background mount discovery (never probes inline)."""
+    """Queue an ICAO for background LiveATC search (never blocks the portal)."""
     global _discover_thread
     code = (icao or "").strip().upper()
-    if not code or time.time() < _probe_cooldown_until:
+    if not code:
         return
     with _discover_lock:
         _discover_queue.add(code)
@@ -832,13 +723,14 @@ def enqueue_discovery(icao: str) -> None:
             return
         _discover_thread = threading.Thread(
             target=_discover_worker,
-            name="atc-mount-discover",
+            name="atc-liveatc-discover",
             daemon=True,
         )
         _discover_thread.start()
 
 
 def _discover_worker() -> None:
+    """Fetch the full LiveATC feed list via curl_cffi search; cache the result."""
     while True:
         with _discover_lock:
             if not _discover_queue:
@@ -846,50 +738,67 @@ def _discover_worker() -> None:
                 _discover_thread = None
                 return
             code = _discover_queue.pop()
-        if time.time() < _probe_cooldown_until:
-            with _discover_lock:
-                _discover_queue.add(code)
-            time.sleep(5)
+
+        live: list[dict] = []
+        html_ok = False
+        try:
+            from utilities import liveatc_client
+
+            html = liveatc_client.fetch_search_html(code)
+            if not html:
+                # Network / Cloudflare failure — leave incomplete and retry later.
+                logger.info("ATC discovery %s: LiveATC HTML unavailable; will retry", code)
+                time.sleep(2.0)
+                continue
+            raw = liveatc_client.parse_search_html(html)
+            live = [_normalize_feed(item) for item in raw]
+            live = [f for f in live if f]
+            html_ok = True
+            if live:
+                _write_feed_cache(code, live, ok=True)
+        except Exception:
+            logger.debug("ATC LiveATC search failed for %s", code, exc_info=True)
+            time.sleep(2.0)
             continue
-        feeds, complete = _probe_airport_feeds(code)
-        if complete:
-            cache = _load_discovered()
-            cache[code] = {
-                "icao": code,
-                "ts": time.time(),
-                "feeds": feeds,
-                "source": "d.liveatc.net-probe",
-                "probe_ver": _PROBE_SET_VERSION,
-            }
-            _save_discovered()
-            logger.info(
-                "ATC discovery %s: %d mount(s)",
-                code,
-                len(feeds),
-            )
-        time.sleep(1.0)
+
+        merged = _merge_feeds(
+            _seed_feeds(code),
+            _index_feeds(code),
+            live,
+        )
+        cache = _load_discovered()
+        cache[code] = {
+            "icao": code,
+            "ts": time.time(),
+            "feeds": merged,
+            "source": "liveatc-search",
+            "discover_ver": _DISCOVER_SET_VERSION,
+            "html_tried": True,
+            "html_ok": bool(html_ok and live),
+        }
+        _save_discovered()
+        logger.info(
+            "ATC discovery %s: %d mount(s) via liveatc-search",
+            code,
+            len(merged),
+        )
+        time.sleep(0.5)
 
 
 def needs_discovery(icao: str) -> bool:
-    """True when we should still background-probe this airport for more feeds.
-
-    Rich curated seed (>=2 channels) is trusted. Otherwise probe unless a fresh
-    discovery cache entry already exists (positive or negative).
-    """
+    """True until a LiveATC HTML search pass has completed for this airport."""
     code = (icao or "").strip().upper()
     if not code:
         return False
-    if len(_seed_feeds(code)) >= 2:
-        return False
-    return not _discovery_fresh(code)
+    return not _discovery_pass_complete(code)
 
 
 def feeds_for_airport(icao: str, *, refresh: bool = False) -> list[dict]:
     """Return feeds for an ICAO without blocking on network discovery.
 
-    Merge order: curated seed + offline index + mount-discovery cache.
-    Cache misses enqueue a background ``d.liveatc.net`` suffix probe (PR #48
-    style). Optional HTML scrape only when ``refresh=True``.
+    Merge order: curated seed + offline index + discovery cache + HTML cache.
+    Cache misses enqueue a background LiveATC search (curl_cffi). Optional
+    ``refresh=True`` forces a synchronous fetch.
     """
     code = (icao or "").strip().upper()
     if not code:
@@ -897,7 +806,8 @@ def feeds_for_airport(icao: str, *, refresh: bool = False) -> list[dict]:
     seed = _seed_feeds(code)
     index = _index_feeds(code)
     discovered = _discovered_feeds(code)
-    local = _merge_feeds(seed, index, discovered)
+    html_cached = _html_cached_feeds(code)
+    local = _merge_feeds(seed, index, discovered, html_cached)
     if needs_discovery(code):
         enqueue_discovery(code)
     live: list[dict] = []
@@ -1052,12 +962,53 @@ def _mpv_alive() -> bool:
         code = _proc.poll()
         if code is None:
             return True
-        logger.info("ATC mpv exited with code %s", code)
+        # Exit 2 = mpv EXIT_ERROR ("Errors when loading file" / playback failure).
+        tail = _mpv_log_tail()
+        if tail:
+            logger.info("ATC mpv exited with code %s — %s", code, tail)
+        else:
+            logger.info("ATC mpv exited with code %s", code)
         _proc = None
         _playing_mount = None
         _playing_airport = None
         _quiet_override = False
     return _ipc_responsive()
+
+
+def _mpv_log_tail(max_chars: int = 400) -> str:
+    """Last non-empty lines from the mpv log (for exit diagnostics)."""
+    try:
+        with open(_MPV_LOG_PATH, encoding="utf-8", errors="replace") as fh:
+            text = fh.read()
+    except OSError:
+        return ""
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    if not lines:
+        return ""
+    # Prefer the most useful failure lines.
+    interesting = [
+        ln
+        for ln in lines
+        if any(
+            key in ln.lower()
+            for key in (
+                "error",
+                "failed",
+                "underrun",
+                "ao/",
+                "fatal",
+                "exiting",
+                "http",
+                "403",
+                "404",
+            )
+        )
+    ]
+    pick = interesting[-4:] if interesting else lines[-3:]
+    msg = " | ".join(pick)
+    if len(msg) > max_chars:
+        msg = "…" + msg[-(max_chars - 1) :]
+    return msg
 
 
 def is_playing() -> bool:
@@ -1140,13 +1091,32 @@ def _playing_from_ipc() -> tuple[str | None, str | None]:
     return airport, mount
 
 
+def _mpv_softvol(ui_percent: float | int) -> float:
+    """Map UI 0–100% to mpv softvol (may exceed 100 via SOFTVOL_GAIN)."""
+    try:
+        ui = float(ui_percent)
+    except (TypeError, ValueError):
+        ui = 100.0
+    return max(0.0, min(float(VOLUME_MAX), ui * float(SOFTVOL_GAIN)))
+
+
 def set_volume(percent: int, *, persist: bool = True) -> int:
     """Clamp, optionally persist, and apply volume to a running mpv (if any)."""
     value = _settings().set_atc_volume(percent, persist=persist)
     # Keep OS mixer at full while ATC is in use; softvol handles finer gain.
     _ensure_system_output_volume(1.0)
-    _send_ipc(["set_property", "volume", float(value)])
+    _send_ipc(["set_property", "volume", _mpv_softvol(value)])
     return value
+
+
+def reassert_output_levels() -> None:
+    """Re-raise PipeWire sink + mpv softvol (e.g. after Bluetooth reconnect)."""
+    _ensure_system_output_volume(1.0)
+    try:
+        ui = float(_settings().atc_volume())
+    except Exception:
+        ui = 100.0
+    _send_ipc(["set_property", "volume", _mpv_softvol(ui)])
 
 
 def stop(*, clear_override: bool = True) -> dict:
@@ -1252,6 +1222,7 @@ def start(
         return status()
 
     volume = settings.atc_volume()
+    softvol = _mpv_softvol(volume)
     url = stream_url(feed)
     settings.set_atc_airport(icao)
     settings.set_atc_mount(feed)
@@ -1284,12 +1255,26 @@ def start(
         "mpv",
         "--no-video",
         "--really-quiet",
+        # Keep a bit of demux/audio cushion — LiveATC over Bluetooth A2DP
+        # otherwise underruns and mpv exits with code 2.
+        "--cache=yes",
+        "--demuxer-max-bytes=2MiB",
+        "--demuxer-readahead-secs=5",
+        "--audio-buffer=0.5",
         f"--volume-max={VOLUME_MAX}",
-        f"--volume={volume}",
+        f"--volume={softvol:g}",
         f"--input-ipc-server={IPC_PATH}",
+        # Log file (not stderr) so we can diagnose exit code 2 without flooding journal.
+        f"--log-file={_MPV_LOG_PATH}",
+        "--msg-level=ao=warn,cplayer=warn,ffmpeg=warn,network=warn",
         url,
     ]
     try:
+        try:
+            if os.path.exists(_MPV_LOG_PATH):
+                os.unlink(_MPV_LOG_PATH)
+        except OSError:
+            pass
         proc = subprocess.Popen(
             cmd,
             stdout=subprocess.DEVNULL,
@@ -1306,9 +1291,11 @@ def start(
 
     time.sleep(0.15)
     if proc.poll() is not None:
+        detail = _mpv_log_tail() or "mpv exited immediately"
         with _lock:
-            _last_error = "mpv exited immediately"
+            _last_error = detail
             _quiet_override = False
+        logger.info("ATC mpv died on start (code %s) — %s", proc.returncode, detail)
         return status()
 
     with _lock:
@@ -1331,10 +1318,22 @@ def start(
 
 
 def apply_enabled(enabled: bool) -> dict:
-    """Persist enable flag; stop playback when disabling."""
-    _settings().set_atc_enabled(enabled)
+    """Persist enable flag; stop playback when disabling.
+
+    Disabling does **not** clear ``atc_want_playing`` — that flag is only cleared
+    by explicit Stop — so turning ATC Audio back on can resume after a restart
+    or a toggle, matching NVS intent.
+    """
+    settings = _settings()
+    settings.set_atc_enabled(enabled)
     if not enabled:
-        return stop()
+        return stop(clear_override=False)
+    if settings.atc_want_playing():
+        quiet = in_quiet_hours()
+        forced = settings.atc_quiet_override()
+        if quiet and not forced:
+            return status()
+        return start(override=bool(forced))
     return status()
 
 
@@ -1356,11 +1355,58 @@ def maybe_resume_when_speaker_ready() -> dict:
     if quiet and not forced:
         return status()
     logger.info(
-        "ATC starting after speaker connect airport=%s mount=%s",
+        "ATC resuming — speaker ready airport=%s mount=%s",
         settings.atc_airport(),
         settings.atc_mount(),
     )
     return start(override=bool(forced))
+
+
+def maybe_keepalive() -> dict:
+    """Restart mpv when NVS says we should be playing but the process died.
+
+    Boot resume only retries for a short window; LiveATC/mpv often exits later
+    (code 2). Poll from the speaker watch so ``atc_want_playing`` keeps audio up.
+    """
+    global _keepalive_next_at, _keepalive_failures
+
+    settings = _settings()
+    if not settings.atc_enabled() or not settings.atc_want_playing():
+        _keepalive_failures = 0
+        return status()
+    if is_playing():
+        _keepalive_failures = 0
+        return status()
+    if not settings.atc_airport():
+        return status()
+    quiet = in_quiet_hours()
+    forced = settings.atc_quiet_override()
+    if quiet and not forced:
+        return status()
+    if not _speaker_ready(start_watch=False):
+        return status()
+
+    now = time.monotonic()
+    if now < _keepalive_next_at:
+        return status()
+
+    logger.info(
+        "ATC keepalive restart airport=%s mount=%s (failures=%s)",
+        settings.atc_airport(),
+        settings.atc_mount(),
+        _keepalive_failures,
+    )
+    last = start(override=bool(forced))
+    if is_playing():
+        _keepalive_failures = 0
+        _keepalive_next_at = 0.0
+        return last
+
+    _keepalive_failures = min(8, _keepalive_failures + 1)
+    # 3s, 6s, 12s, … capped at ~90s so a dead mount does not hammer LiveATC.
+    delay = min(90.0, 3.0 * (2 ** max(0, _keepalive_failures - 1)))
+    _keepalive_next_at = now + delay
+    return last
 
 
 def maybe_resume_after_boot(
@@ -1516,10 +1562,11 @@ def on_radar_center_changed() -> dict:
 
     When the previously selected airport leaves the visible area (map moved to a
     completely different location), select the nearest airport that has feeds
-    (else nearest) and default the channel to Tower. If audio was already
-    playing, retune to that Tower and keep playing; if it was stopped, only
-    update the selection (do not auto-start). Stop only when playing and the
-    new area has nothing to tune to.
+    (else nearest) and default the channel to Tower. If ATC is enabled and
+    playback was active or intended (``want_playing``), retune/start that Tower
+    so audio keeps following the map. If ATC was off or explicitly Stopped,
+    only update the selection. Stop only when continuing playback but the new
+    area has nothing to tune to.
     Also kick off a background prefetch of feed lists for airports in range.
     """
     settings = _settings()
@@ -1527,6 +1574,11 @@ def on_radar_center_changed() -> dict:
     idents = {str(a.get("ident") or "").upper() for a in airports if a.get("ident")}
     current = settings.atc_airport()
     playing = is_playing()
+    try:
+        want = bool(settings.atc_enabled() and settings.atc_want_playing())
+    except Exception:
+        want = False
+    should_play = bool(settings.atc_enabled() and (playing or want))
 
     schedule_prefetch_visible_feeds()
 
@@ -1550,16 +1602,23 @@ def on_radar_center_changed() -> dict:
     settings.set_atc_airport(nxt)
     settings.set_atc_mount(mount)
     logger.info(
-        "ATC selection reset after location change -> %s Tower=%s; was %s playing=%s",
+        "ATC selection reset after location change -> %s Tower=%s; was %s "
+        "playing=%s want=%s",
         nxt or "(none)",
         mount or "-",
         current or "(none)",
         playing,
+        should_play,
     )
-    if playing:
+    if should_play:
         if nxt and mount:
-            return retune_if_playing(airport=nxt, mount=mount)
-        return stop()
+            if playing:
+                return retune_if_playing(airport=nxt, mount=mount)
+            # Was enabled + want_playing but not currently streaming (e.g. after
+            # a failed start / speaker blip) — start Tower at the new home.
+            return start(airport=nxt, mount=mount, override=True)
+        if playing:
+            return stop()
     return status()
 
 
@@ -1630,7 +1689,7 @@ def status() -> dict:
         "airport": prefs["airport"],
         "mount": prefs["mount"],
         "volume": prefs["volume"],
-        "volume_max": VOLUME_MAX,
+        "volume_max": int(getattr(_settings(), "ATC_VOLUME_MAX", 100)),
         "playing": playing,
         "playing_airport": playing_airport if playing else None,
         "playing_mount": playing_mount if playing else None,
@@ -1653,7 +1712,8 @@ def reset_runtime_for_tests() -> None:
     """Clear process/state without touching persisted settings (tests only)."""
     global _proc, _playing_mount, _playing_airport, _quiet_override, _last_error
     global _seed_cache, _seed_mtime, _index_cache, _index_mtime
-    global _discovered, _discover_thread, _probe_cooldown_until
+    global _discovered, _discover_thread
+    global _keepalive_next_at, _keepalive_failures
     with _lock:
         _proc = None
         _playing_mount = None
@@ -1664,8 +1724,9 @@ def reset_runtime_for_tests() -> None:
         _seed_mtime = None
         _index_cache = None
         _index_mtime = None
+    _keepalive_next_at = 0.0
+    _keepalive_failures = 0
     with _discover_lock:
         _discover_queue.clear()
         _discover_thread = None
     _discovered = None
-    _probe_cooldown_until = 0.0

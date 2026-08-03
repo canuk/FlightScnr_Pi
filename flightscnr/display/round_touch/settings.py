@@ -71,8 +71,8 @@ BRIGHTNESS_MAX_PERCENT = 100
 # VFR chart opacity on the radar (lower = more washed / pale).
 VFR_OPACITY_MIN_PERCENT = 15
 VFR_OPACITY_MAX_PERCENT = 100
-# Softvol boost for quiet LiveATC streams (mpv --volume-max).
-# ATC softvol UI max (system sink is boosted separately on play).
+# ATC UI volume is 0–100%. Quiet LiveATC / bone-conduction headphones get a
+# hidden softvol gain in mpv (see utilities.atc_audio.SOFTVOL_GAIN).
 ATC_VOLUME_MAX = 100
 # Radar clock HUD frosted-pill fill opacity (percent → blit alpha).
 RADAR_HUD_OPACITY_MIN = 0
@@ -425,13 +425,40 @@ def _default_show_wildfires() -> bool:
     return False
 
 
-def _save(data):
-    global _settings_mtime, _disk_synced
+# ATC keys are written via ``_rmw_save`` from display *and* web. A full
+# ``_save(_state)`` from a process with a stale in-memory copy must not wipe them.
+_ATC_PRESERVE_KEYS = (
+    "atc_enabled",
+    "atc_airport",
+    "atc_mount",
+    "atc_volume",
+    "atc_quiet_hours_enabled",
+    "atc_quiet_start",
+    "atc_quiet_end",
+    "atc_want_playing",
+    "atc_quiet_override",
+)
+
+
+def _save(data, *, merge_atc_from_disk: bool = True):
+    global _state, _settings_mtime, _disk_synced
+    out = dict(data)
+    if merge_atc_from_disk:
+        try:
+            with open(SETTINGS_PATH, encoding="utf-8") as fh:
+                disk = json.load(fh)
+            if isinstance(disk, dict):
+                for key in _ATC_PRESERVE_KEYS:
+                    if key in disk:
+                        out[key] = disk[key]
+                        _state[key] = disk[key]
+        except (OSError, json.JSONDecodeError, TypeError):
+            pass
     try:
         os.makedirs(DATA_DIR, exist_ok=True)
         tmp_path = SETTINGS_PATH + ".tmp"
         with open(tmp_path, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2)
+            json.dump(out, f, indent=2)
         os.replace(tmp_path, SETTINGS_PATH)
         try:
             _settings_mtime = os.path.getmtime(SETTINGS_PATH)
@@ -462,7 +489,8 @@ def _rmw_save(updates: dict) -> None:
     disk.update(updates)
     for key, value in updates.items():
         _state[key] = value
-    _save(disk)
+    # Caller already merged ``updates`` onto disk — do not re-preserve stale ATC.
+    _save(disk, merge_atc_from_disk=False)
 
 
 def _load():
@@ -1665,7 +1693,7 @@ def _night_quiet_defaults() -> tuple[str, str]:
 
 
 def clamp_atc_volume(value) -> int:
-    """ATC volume percent; 100 = unity, up to ATC_VOLUME_MAX for softvol boost."""
+    """ATC UI volume percent (0–100). Softvol gain is applied in atc_audio."""
     try:
         v = int(round(float(value)))
     except (TypeError, ValueError):
@@ -1765,6 +1793,8 @@ def atc_want_playing() -> bool:
 def set_atc_want_playing(enabled: bool, *, persist: bool = True) -> None:
     global _disk_synced
     value = bool(enabled)
+    if bool(_state.get("atc_want_playing", False)) == value:
+        return
     _state["atc_want_playing"] = value
     if persist:
         _rmw_save({"atc_want_playing": value})
@@ -1779,6 +1809,8 @@ def atc_quiet_override() -> bool:
 def set_atc_quiet_override(enabled: bool, *, persist: bool = True) -> None:
     global _disk_synced
     value = bool(enabled)
+    if bool(_state.get("atc_quiet_override", False)) == value:
+        return
     _state["atc_quiet_override"] = value
     if persist:
         _rmw_save({"atc_quiet_override": value})

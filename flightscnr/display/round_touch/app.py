@@ -160,11 +160,20 @@ class RoundTouchDisplay:
         self._last_clock_draw = 0.0
         self._last_radar_draw = 0
         self._last_static_draw = 0
+        self._last_timeout_content_draw = 0.0
+        # Pre-ring snapshot for smooth countdown while content redraws slowly.
+        self._timeout_content_cache: pygame.Surface | None = None
+        self._timeout_content_key: tuple | None = None
+        # Already-rotated content+bezel (no ring) for fast display blit.
+        self._timeout_rot_base: pygame.Surface | None = None
+        self._prev_timeout_ring_frac: float | None = None
         self._display_focus = 0
         self._system_confirm: str | None = None
         # ATC settings list picker: "airport" | "channel" | "output" | None.
         self._atc_picker: str | None = None
         self._atc_picker_scroll = nav.ScrollState()
+        # Finger Y while dragging inside the ATC picker (continuous scroll).
+        self._atc_picker_drag_y: int | None = None
         self._fatal_error = None
         self._scroll = nav.ScrollState()
         self._last_grab_seq = 0
@@ -690,8 +699,13 @@ class RoundTouchDisplay:
         self._scroll.clamp()
         remaining = self._timeout_remaining_fraction()
         if remaining is not None:
+            # Snapshot content+bezel (no ring) and a pre-rotated display base so
+            # ring ticks can blit+arc without another full-frame rotate.
+            self._capture_timeout_rot_base()
             draw.draw_timeout_ring(self.surface, remaining)
-            bezel_applied = False
+            bezel_applied = True  # already applied inside capture
+        else:
+            self._invalidate_timeout_content_cache()
         _t = time.perf_counter()
         if not bezel_applied:
             draw.apply_round_bezel(self.surface)
@@ -889,6 +903,86 @@ class RoundTouchDisplay:
     def _note_activity(self):
         self._secondary_activity = time.time()
 
+    def _invalidate_timeout_content_cache(self) -> None:
+        self._timeout_content_cache = None
+        self._timeout_content_key = None
+        self._timeout_rot_base = None
+        self._prev_timeout_ring_frac = None
+
+    def _timeout_content_cache_key(self) -> tuple:
+        return (
+            self.screen,
+            int(self.settings_page) if self.screen == SCREEN_SETTINGS else -1,
+            int(self._scroll.offset),
+            int(self._display_focus),
+            self._atc_picker or "",
+            int(self._atc_picker_scroll.offset) if self._atc_picker else 0,
+            self._system_confirm or "",
+        )
+
+    def _capture_timeout_rot_base(self) -> None:
+        """Bake content+bezel (no ring) and a pre-rotated copy for ring ticks."""
+        try:
+            # Bezel first so ring-only frames can skip it.
+            draw.apply_round_bezel(self.surface)
+            self._timeout_content_cache = self.surface.copy()
+            self._timeout_content_key = self._timeout_content_cache_key()
+            rot = rotation.rotation_degrees()
+            if rot == 0:
+                self._timeout_rot_base = self._timeout_content_cache
+            else:
+                self._timeout_rot_base = pygame.transform.rotate(
+                    self._timeout_content_cache, -rot
+                )
+            # Force the next ring tick to paint in display space (matches tip erase).
+            self._prev_timeout_ring_frac = None
+        except Exception:
+            self._invalidate_timeout_content_cache()
+
+    def _redraw_timeout_ring_only(self) -> None:
+        """Advance the countdown ring without re-rotating the full frame.
+
+        Blit the pre-rotated content+bezel base and redraw the arc each tick
+        (~3ms on the Pi). Tip-only erase looked choppy when dirty rects missed
+        the thick stroke; full blit stays within the frame budget.
+        """
+        base = self._timeout_rot_base
+        if base is None:
+            self._safe_draw()
+            return
+        remaining = self._timeout_remaining_fraction()
+        if remaining is None:
+            self._invalidate_timeout_content_cache()
+            self._safe_draw()
+            return
+        try:
+            display = self._display
+            rot = rotation.rotation_degrees()
+            if display.get_size() == base.get_size():
+                origin = (0, 0)
+                display.blit(base, (0, 0))
+            else:
+                origin = (
+                    (display.get_width() - base.get_width()) // 2,
+                    (display.get_height() - base.get_height()) // 2,
+                )
+                display.fill((0, 0, 0))
+                display.blit(base, origin)
+            cx = origin[0] + base.get_width() * 0.5
+            cy = origin[1] + base.get_height() * 0.5
+            if remaining > 0.001:
+                draw.draw_timeout_ring(
+                    display,
+                    remaining,
+                    rotation_deg=rot,
+                    origin=(cx, cy),
+                )
+            pygame.display.flip()
+            self._prev_timeout_ring_frac = remaining
+        except Exception:
+            self._invalidate_timeout_content_cache()
+            self._safe_draw()
+
     def _idle_clock_holds_screen(self) -> bool:
         """Auto-idle clock should keep clock up while no in-range aircraft."""
         return (
@@ -915,6 +1009,7 @@ class RoundTouchDisplay:
         if self._pan_commit_choice:
             self._cancel_pan_commit_choice()
         self._close_atc_picker()
+        self._invalidate_timeout_content_cache()
         previous = self.screen
         if self.screen == SCREEN_TRACKED:
             tracked.reset_marquee()
@@ -940,6 +1035,7 @@ class RoundTouchDisplay:
         self._chime_volume_slider_active = False
         self._system_confirm = None
         self._close_atc_picker()
+        self._invalidate_timeout_content_cache()
         if page != self.settings_page:
             self._scroll.reset()
             if page not in (
@@ -983,6 +1079,7 @@ class RoundTouchDisplay:
         # Reset secondary timeout window when entering any non-radar screen.
         # Without this, a stale timestamp can immediately bounce back to radar.
         self._note_activity()
+        self._invalidate_timeout_content_cache()
         self.screen = screen
         if screen == SCREEN_CLOCK:
             self._safe_draw()
@@ -1082,6 +1179,7 @@ class RoundTouchDisplay:
             from utilities import atc_audio
 
             atc_audio.apply_enabled(not settings.atc_enabled())
+            info.invalidate_atc_labels()
         elif action == "volume":
             return
         elif action == "quiet":
@@ -1105,12 +1203,16 @@ class RoundTouchDisplay:
             return
         if kind == "channel" and not settings.atc_airport():
             return
+        info.invalidate_atc_labels()
         self._atc_picker = kind
         self._atc_picker_scroll.reset()
+        self._atc_picker_drag_y = None
 
     def _close_atc_picker(self) -> None:
         self._atc_picker = None
         self._atc_picker_scroll.reset()
+        self._atc_picker_drag_y = None
+        info.invalidate_atc_labels()
 
     def _select_atc_airport(self, icao: str) -> None:
         from utilities import atc_audio
@@ -1126,6 +1228,7 @@ class RoundTouchDisplay:
         settings.set_atc_airport(nxt)
         feeds = atc_audio.feeds_for_airport(nxt)
         settings.set_atc_mount(atc_audio.default_tower_mount(feeds))
+        info.invalidate_atc_labels()
         if not was_playing:
             return
         # Keep audio on across airport changes. Prefer in-place retune so we
@@ -1152,6 +1255,7 @@ class RoundTouchDisplay:
             return
         was_playing = atc_audio.is_playing()
         settings.set_atc_mount(nxt)
+        info.invalidate_atc_labels()
         if not was_playing:
             return
         atc_audio.retune_if_playing(mount=nxt)
@@ -1166,6 +1270,7 @@ class RoundTouchDisplay:
         choice = str(value or "").strip()
         if choice == "usb":
             bluetooth_audio.use_usb_output(disconnect_bluetooth=True)
+            info.invalidate_atc_labels()
             return
         if not choice.startswith("bt:"):
             return
@@ -1196,6 +1301,7 @@ class RoundTouchDisplay:
                 )
 
         Thread(target=_apply, daemon=True, name="bt-output-select").start()
+        info.invalidate_atc_labels()
 
     def _handle_atc_picker_tap(self, x: int, y: int) -> None:
         hit = info.atc_picker_hit(x, y)
@@ -1423,8 +1529,10 @@ class RoundTouchDisplay:
             if not settings.atc_enabled():
                 atc_audio.apply_enabled(True)
             atc_audio.start(override=True)
+            info.invalidate_atc_labels()
         elif action == "stop":
             atc_audio.stop()
+            info.invalidate_atc_labels()
 
     def _toggle_radar_hud_atc(self) -> None:
         """HUD ATC icon: stop if playing, otherwise start (quiet-hours override)."""
@@ -1432,10 +1540,12 @@ class RoundTouchDisplay:
 
         if atc_audio.is_playing():
             atc_audio.stop()
+            info.invalidate_atc_labels()
             return
         if not settings.atc_enabled():
             atc_audio.apply_enabled(True)
         atc_audio.start(override=True)
+        info.invalidate_atc_labels()
 
     def _begin_facing_calibrate(self):
         """Enter radar facing-calibrate mode (circular drag = dial analogue)."""
@@ -1994,9 +2104,20 @@ class RoundTouchDisplay:
             and self.settings_page == info.PAGE_ATC
             and self._atc_picker
         ):
-            dy = self.input.consume_scroll_drag()
-            if dy:
-                self._apply_scroll_delta(-dy)
+            # input_handler only accumulates scroll_dy before the swipe
+            # threshold, then converts the rest to a swipe (which snapped the
+            # picker back). Track finger Y for the whole drag instead.
+            self.input.consume_scroll_drag()
+            if self.input.is_dragging():
+                pos = self.input.drag_pos()
+                if pos is not None:
+                    if self._atc_picker_drag_y is not None:
+                        dy = pos[1] - self._atc_picker_drag_y
+                        if dy:
+                            self._apply_scroll_delta(-dy)
+                    self._atc_picker_drag_y = pos[1]
+                    return
+            self._atc_picker_drag_y = None
             return
         if self.screen == SCREEN_SETTINGS and self.settings_page == info.PAGE_COLORS:
             if self._rgb_slider_channel is not None:
@@ -2401,8 +2522,14 @@ class RoundTouchDisplay:
             self._scroll.step(delta)
             self._safe_draw()
         elif swipe in (input_handler.SWIPE_UP, input_handler.SWIPE_DOWN) and self.screen == SCREEN_SETTINGS:
-            delta = -nav.scroll_step() if swipe == input_handler.SWIPE_UP else nav.scroll_step()
-            self._apply_scroll_delta(delta)
+            # ATC picker already scrolled via live drag; a follow-up swipe would
+            # jump the other direction and hide the rows just revealed.
+            if self._atc_picker:
+                self._atc_picker_drag_y = None
+                self._note_activity()
+            else:
+                delta = -nav.scroll_step() if swipe == input_handler.SWIPE_UP else nav.scroll_step()
+                self._apply_scroll_delta(delta)
         if tap and not theme.in_visible_circle(tap[0], tap[1]):
             tap = None
         if tap and nav.tap_breadcrumb(tap[0], tap[1]) and self.screen != SCREEN_RADAR:
@@ -3121,8 +3248,13 @@ class RoundTouchDisplay:
                         self._refresh_flights()
                         # Radar already redraws on the sweep cadence — forcing a
                         # draw here stacked on the just-finished grab and read as
-                        # a ~2s beam hitch. Static screens still need a refresh.
-                        if self.screen == SCREEN_TRACKED:
+                        # a ~2s beam hitch. Static screens still need a refresh,
+                        # but NOT while the timeout ring owns the framebuffer
+                        # (ATC/settings countdown) — that was the smooth→stuck→jump loop.
+                        ring_owns = self._timeout_remaining_fraction() is not None
+                        if ring_owns:
+                            pass
+                        elif self.screen == SCREEN_TRACKED:
                             self._safe_draw()
                             self._last_static_draw = now
                         elif self.screen != SCREEN_RADAR:
@@ -3138,7 +3270,13 @@ class RoundTouchDisplay:
                 if now - self._last_settings_reload >= 0.5:
                     _lt = time.perf_counter()
                     if settings.reload():
-                        self._apply_reloaded_settings()
+                        # ATC keepalive / volume RMW bumps the JSON mtime often.
+                        # A full re-apply (or even content invalidate) mid-countdown
+                        # freezes the ring — only pick up brightness while it crawls.
+                        if self._timeout_remaining_fraction() is not None:
+                            self._apply_brightness()
+                        else:
+                            self._apply_reloaded_settings()
                     self._loop_stage("loop_settings", _lt)
                     self._last_settings_reload = now
 
@@ -3251,14 +3389,28 @@ class RoundTouchDisplay:
                         self._safe_draw()
                         self._last_static_draw = now
                 elif self.screen in (SCREEN_FLIGHT, SCREEN_FIRE, SCREEN_SETTINGS, SCREEN_DETAILS):
-                    interval = (
-                        theme.SWEEP_FRAME_MS / 1000.0
-                        if self._timeout_remaining_fraction() is not None
-                        else 0.25
-                    )
-                    if (now - self._last_static_draw) >= interval:
-                        self._safe_draw()
-                        self._last_static_draw = now
+                    ring_on = self._timeout_remaining_fraction() is not None
+                    if ring_on:
+                        # Never timer-refresh content while the ring is crawling —
+                        # a full ATC layout blocks the UI thread and the tip jumps.
+                        need_content = (
+                            self._timeout_rot_base is None
+                            or self._timeout_content_key
+                            != self._timeout_content_cache_key()
+                        )
+                        ring_iv = theme.SWEEP_FRAME_MS / 1000.0
+                        if need_content:
+                            self._last_timeout_content_draw = now
+                            self._last_static_draw = now
+                            self._safe_draw()
+                        elif (now - self._last_static_draw) >= ring_iv:
+                            self._last_static_draw = now
+                            self._redraw_timeout_ring_only()
+                    else:
+                        self._invalidate_timeout_content_cache()
+                        if (now - self._last_static_draw) >= 0.25:
+                            self._safe_draw()
+                            self._last_static_draw = now
 
                 _lt = time.perf_counter()
                 self._tick_timeout()
@@ -3279,9 +3431,10 @@ class RoundTouchDisplay:
                             frame_debug.stage("loop_body", body)
                     except NameError:
                         pass
-                # Yield less while on radar so frames aren't padded to 10ms+.
+                # Yield less while on radar / countdown ring so frames aren't padded.
                 _sleep_t = time.perf_counter()
-                if self.screen == SCREEN_RADAR:
+                ring_animating = self._timeout_remaining_fraction() is not None
+                if self.screen == SCREEN_RADAR or ring_animating:
                     time.sleep(0.001)
                 else:
                     time.sleep(0.01)
@@ -3289,7 +3442,7 @@ class RoundTouchDisplay:
                     # Overrun beyond the requested sleep = GIL / OS preemption.
                     requested = (
                         0.001
-                        if self.screen == SCREEN_RADAR
+                        if self.screen == SCREEN_RADAR or ring_animating
                         else 0.01
                     )
                     slept = time.perf_counter() - _sleep_t
