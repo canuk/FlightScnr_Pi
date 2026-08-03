@@ -635,10 +635,15 @@
             <div id="export-status" class="status"></div>
             <hr style="border:none;border-top:1px solid var(--line, #333);margin:1rem 0">
             <p class="hint">Relaunch the app, or restart / power off this Raspberry Pi. Reboot and shutdown take the display and portal offline.</p>
-            <div class="track-row" style="margin-top:.55rem">
+            <div class="track-row" style="margin-top:.55rem" id="system-actions-row">
                 <button class="btn btn-primary" id="btn-restart-app" type="button">Relaunch app</button>
                 <button class="btn" id="btn-reboot" type="button">Reboot</button>
                 <button class="btn btn-danger" id="btn-shutdown" type="button">Shutdown</button>
+            </div>
+            <div class="track-row hidden" id="system-confirm-row" style="margin-top:.55rem;flex-wrap:wrap;gap:.5rem">
+                <span id="system-confirm-msg" class="hint" style="flex:1 1 100%;margin:0"></span>
+                <button class="btn btn-primary" id="btn-system-confirm-yes" type="button">Confirm</button>
+                <button class="btn" id="btn-system-confirm-no" type="button">Cancel</button>
             </div>
             <div id="system-status" class="status"></div>
         </div>
@@ -1568,17 +1573,52 @@ async function searchRoute() {
     }
 }
 
-async function requestSystemAction(action) {
-    const labels = { reboot: "reboot", shutdown: "shut down" };
-    const label = labels[action] || action;
-    if (!confirm(`Are you sure you want to ${label} this Raspberry Pi?`)) {
+let pendingSystemAction = null;
+
+function showSystemConfirm(show, action) {
+    $("system-confirm-row").classList.toggle("hidden", !show);
+    $("system-actions-row").classList.toggle("hidden", show);
+    if (!show) {
+        pendingSystemAction = null;
         return;
     }
+    pendingSystemAction = action;
+    const msg = $("system-confirm-msg");
+    const yes = $("btn-system-confirm-yes");
+    yes.classList.toggle("btn-danger", action === "shutdown");
+    yes.classList.toggle("btn-primary", action !== "shutdown");
+    if (action === "restart-app") {
+        msg.textContent = "Relaunch FlightScnr? The display and portal will reconnect in a few seconds.";
+        yes.textContent = "Relaunch";
+    } else if (action === "reboot") {
+        msg.textContent = "Are you sure you want to reboot this Raspberry Pi?";
+        yes.textContent = "Reboot";
+    } else {
+        msg.textContent = "Are you sure you want to shut down this Raspberry Pi?";
+        yes.textContent = "Shutdown";
+    }
+}
+
+function promptSystemAction(action) {
+    clearStatus("system-status");
+    showSystemConfirm(true, action);
+}
+
+async function confirmSystemAction() {
+    const action = pendingSystemAction;
+    if (!action) return;
+    showSystemConfirm(false);
     clearStatus("system-status");
     setSystemButtonsDisabled(true);
+    const labels = { reboot: "reboot", shutdown: "shut down", "restart-app": "relaunch" };
+    const label = labels[action] || action;
     try {
-        const data = await jsonFetch(`/system/${action}`, { method: "POST" });
-        showStatus("system-status", data.message || `${label} scheduled.`);
+        const path = action === "restart-app" ? "/system/restart-app" : `/system/${action}`;
+        const data = await jsonFetch(path, { method: "POST" });
+        const fallback = action === "restart-app"
+            ? "FlightScnr is restarting…"
+            : `${label} scheduled.`;
+        showStatus("system-status", data.message || fallback);
     } catch (e) {
         showStatus("system-status", e.message, true);
         setSystemButtonsDisabled(false);
@@ -1855,28 +1895,15 @@ function setSystemButtonsDisabled(disabled) {
     $("btn-shutdown").disabled = disabled;
 }
 
-async function requestAppRestart() {
-    if (!confirm("Relaunch FlightScnr? The display and portal will reconnect in a few seconds.")) {
-        return;
-    }
-    clearStatus("system-status");
-    setSystemButtonsDisabled(true);
-    try {
-        const data = await jsonFetch("/system/restart-app", { method: "POST" });
-        showStatus("system-status", data.message || "FlightScnr is restarting…");
-    } catch (e) {
-        showStatus("system-status", e.message, true);
-        setSystemButtonsDisabled(false);
-    }
-}
-
 $("btn-check-updates").addEventListener("click", checkUpdates);
 $("btn-update-now").addEventListener("click", applyUpdate);
 $("btn-update-confirm-yes").addEventListener("click", applyUpdateConfirmed);
 $("btn-update-confirm-no").addEventListener("click", () => showUpdateConfirm(false));
-$("btn-restart-app").addEventListener("click", requestAppRestart);
-$("btn-reboot").addEventListener("click", () => requestSystemAction("reboot"));
-$("btn-shutdown").addEventListener("click", () => requestSystemAction("shutdown"));
+$("btn-restart-app").addEventListener("click", () => promptSystemAction("restart-app"));
+$("btn-reboot").addEventListener("click", () => promptSystemAction("reboot"));
+$("btn-shutdown").addEventListener("click", () => promptSystemAction("shutdown"));
+$("btn-system-confirm-yes").addEventListener("click", confirmSystemAction);
+$("btn-system-confirm-no").addEventListener("click", () => showSystemConfirm(false));
 
 $("btn-export-settings").addEventListener("click", () => {
     showStatus("export-status", "Downloading settings…");
