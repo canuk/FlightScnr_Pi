@@ -125,6 +125,29 @@ FLIGHTAWARE_COST_PER_CALL = float(os.environ.get("FLIGHTAWARE_COST_PER_CALL", "0
 # API client under Account → API Client on opensky-network.org.
 OPENSKY_API_CLIENT_ID = os.environ.get("OPENSKY_API_CLIENT_ID", "")
 OPENSKY_API_CLIENT_SECRET = os.environ.get("OPENSKY_API_CLIENT_SECRET", "")
+
+# Order in which route-enrichment fallbacks are tried, as a comma-separated
+# list of: airlabs, flightaware, opensky. Omit an entry to disable it
+# entirely (e.g. ROUTE_SOURCE_ORDER=opensky for a fully free/open-source
+# route lookup with no paid API calls). Unknown/misspelled entries are
+# ignored. Empty or unset falls back to the historical default order.
+_ROUTE_SOURCE_DEFAULT_ORDER = ("airlabs", "flightaware", "opensky")
+_ROUTE_SOURCE_VALID = frozenset(_ROUTE_SOURCE_DEFAULT_ORDER)
+ 
+ 
+def _parse_route_source_order(raw: str) -> tuple[str, ...]:
+    if not (raw or "").strip():
+        return _ROUTE_SOURCE_DEFAULT_ORDER
+    seen: list[str] = []
+    for name in raw.split(","):
+        name = name.strip().lower()
+        if name and name in _ROUTE_SOURCE_VALID and name not in seen:
+            seen.append(name)
+    return tuple(seen) if seen else _ROUTE_SOURCE_DEFAULT_ORDER
+ 
+ 
+ROUTE_SOURCE_ORDER = _parse_route_source_order(os.environ.get("ROUTE_SOURCE_ORDER", ""))
+
 # NASA FIRMS free MAP_KEY for wildfire detections on the radar.
 # https://firms.modaps.eosdis.nasa.gov/api/map_key/
 FIRMS_MAP_KEY = os.environ.get("FIRMS_MAP_KEY", "")

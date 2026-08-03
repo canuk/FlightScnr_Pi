@@ -472,7 +472,7 @@
     <details class="card atc-card">
         <summary><span class="ico">&#9835;</span>ATC Audio<span class="sum">LiveATC</span><span class="chev">&#9656;</span></summary>
         <div class="body">
-            <p class="hint">Manual LiveATC stream to the Pi’s USB or Bluetooth speaker via <code>mpv</code> (<code>sudo apt install mpv</code>). Pair a Bluetooth speaker in the card below. Airport lists every large/medium field in radar range. Channel loads known streams immediately from the local seed/index, then auto-discovers more mounts in the background (same idea as plane-tracker ATC: probe <code>d.liveatc.net</code>, never wait on LiveATC HTML). If audio is already playing, changing airport (or moving the map) retunes to that airport’s Tower and keeps playing; if it was stopped, only the selection changes. Playback resumes after reboot/app restart when it was playing (Stop clears that). Quiet hours block auto-start and resume; Play still overrides until you Stop.</p>
+            <p class="hint">Manual LiveATC stream to the Pi’s USB or Bluetooth speaker via <code>mpv</code> (<code>sudo apt install mpv</code>). Pair a Bluetooth speaker in the card below. Airport lists every large/medium field in radar range. Channel loads local seed/index immediately, then auto-fetches the full LiveATC feed list in the background (Cloudflare-bypass search). If ATC is enabled and playback is active (or was left on via Play), changing airport or moving the map selects that area’s Tower and keeps playing; Stop clears that so a map move only updates the selection. Playback resumes after reboot/app restart when it was playing. Quiet hours block auto-start and resume; Play still overrides until you Stop.</p>
             <div class="chk">
                 <label for="atc_enabled">Enable ATC audio</label>
                 <span class="switch"><input id="atc_enabled" type="checkbox"><span class="track"></span></span>
@@ -612,6 +612,10 @@
                 <button class="btn" id="btn-check-updates" type="button">Check Updates</button>
                 <button class="btn btn-primary hidden" id="btn-update-now" type="button">Update Now</button>
             </div>
+            <div class="track-row hidden" id="update-confirm-row">
+                <button class="btn btn-primary" id="btn-update-confirm-yes" type="button">Install &amp; Restart</button>
+                <button class="btn" id="btn-update-confirm-no" type="button">Cancel</button>
+            </div>
             <div id="updates-status" class="status"></div>
         </div>
     </details>
@@ -631,10 +635,15 @@
             <div id="export-status" class="status"></div>
             <hr style="border:none;border-top:1px solid var(--line, #333);margin:1rem 0">
             <p class="hint">Relaunch the app, or restart / power off this Raspberry Pi. Reboot and shutdown take the display and portal offline.</p>
-            <div class="track-row" style="margin-top:.55rem">
+            <div class="track-row" style="margin-top:.55rem" id="system-actions-row">
                 <button class="btn btn-primary" id="btn-restart-app" type="button">Relaunch app</button>
                 <button class="btn" id="btn-reboot" type="button">Reboot</button>
                 <button class="btn btn-danger" id="btn-shutdown" type="button">Shutdown</button>
+            </div>
+            <div class="track-row hidden" id="system-confirm-row" style="margin-top:.55rem;flex-wrap:wrap;gap:.5rem">
+                <span id="system-confirm-msg" class="hint" style="flex:1 1 100%;margin:0"></span>
+                <button class="btn btn-primary" id="btn-system-confirm-yes" type="button">Confirm</button>
+                <button class="btn" id="btn-system-confirm-no" type="button">Cancel</button>
             </div>
             <div id="system-status" class="status"></div>
         </div>
@@ -869,11 +878,18 @@ function startUpdatePoll() {
     }, 4000);
 }
 
-async function applyUpdate() {
+function showUpdateConfirm(show) {
+    $("update-confirm-row").classList.toggle("hidden", !show);
+    $("btn-update-now").classList.toggle("hidden", show);
+}
+
+function applyUpdate() {
     clearStatus("updates-status");
-    if (!confirm("Install the latest update and restart FlightScnrPi? Your settings and API keys are preserved.")) {
-        return;
-    }
+    showUpdateConfirm(true);
+}
+
+async function applyUpdateConfirmed() {
+    showUpdateConfirm(false);
     $("btn-update-now").disabled = true;
     try {
         const data = await jsonFetch("/updates/apply", { method: "POST" });
@@ -1557,17 +1573,52 @@ async function searchRoute() {
     }
 }
 
-async function requestSystemAction(action) {
-    const labels = { reboot: "reboot", shutdown: "shut down" };
-    const label = labels[action] || action;
-    if (!confirm(`Are you sure you want to ${label} this Raspberry Pi?`)) {
+let pendingSystemAction = null;
+
+function showSystemConfirm(show, action) {
+    $("system-confirm-row").classList.toggle("hidden", !show);
+    $("system-actions-row").classList.toggle("hidden", show);
+    if (!show) {
+        pendingSystemAction = null;
         return;
     }
+    pendingSystemAction = action;
+    const msg = $("system-confirm-msg");
+    const yes = $("btn-system-confirm-yes");
+    yes.classList.toggle("btn-danger", action === "shutdown");
+    yes.classList.toggle("btn-primary", action !== "shutdown");
+    if (action === "restart-app") {
+        msg.textContent = "Relaunch FlightScnr? The display and portal will reconnect in a few seconds.";
+        yes.textContent = "Relaunch";
+    } else if (action === "reboot") {
+        msg.textContent = "Are you sure you want to reboot this Raspberry Pi?";
+        yes.textContent = "Reboot";
+    } else {
+        msg.textContent = "Are you sure you want to shut down this Raspberry Pi?";
+        yes.textContent = "Shutdown";
+    }
+}
+
+function promptSystemAction(action) {
+    clearStatus("system-status");
+    showSystemConfirm(true, action);
+}
+
+async function confirmSystemAction() {
+    const action = pendingSystemAction;
+    if (!action) return;
+    showSystemConfirm(false);
     clearStatus("system-status");
     setSystemButtonsDisabled(true);
+    const labels = { reboot: "reboot", shutdown: "shut down", "restart-app": "relaunch" };
+    const label = labels[action] || action;
     try {
-        const data = await jsonFetch(`/system/${action}`, { method: "POST" });
-        showStatus("system-status", data.message || `${label} scheduled.`);
+        const path = action === "restart-app" ? "/system/restart-app" : `/system/${action}`;
+        const data = await jsonFetch(path, { method: "POST" });
+        const fallback = action === "restart-app"
+            ? "FlightScnr is restarting…"
+            : `${label} scheduled.`;
+        showStatus("system-status", data.message || fallback);
     } catch (e) {
         showStatus("system-status", e.message, true);
         setSystemButtonsDisabled(false);
@@ -1737,8 +1788,8 @@ async function populateAtcChannels(airport, selectedMount) {
     loading.textContent = "Loading channels…";
     sel.appendChild(loading);
 
-    // Fast local list first. Discovery polling continues in the background so
-    // Save/retune is not blocked for up to ~30s.
+    // Fast local list first. Background LiveATC search continues so Save/retune
+    // is not blocked.
     let data = await jsonFetch(
         `/atc/channels?airport=${encodeURIComponent(airport)}`
     );
@@ -1748,8 +1799,8 @@ async function populateAtcChannels(airport, selectedMount) {
     if (!data.discovering) return;
     (async () => {
         let attempts = 0;
-        while (attempts < 20) {
-            await _sleep(1500);
+        while (attempts < 40) {
+            await _sleep(2000);
             if (token !== _atcChannelPollToken || $("atc_airport").value !== airport) return;
             data = await jsonFetch(
                 `/atc/channels?airport=${encodeURIComponent(airport)}`
@@ -1844,26 +1895,15 @@ function setSystemButtonsDisabled(disabled) {
     $("btn-shutdown").disabled = disabled;
 }
 
-async function requestAppRestart() {
-    if (!confirm("Relaunch FlightScnr? The display and portal will reconnect in a few seconds.")) {
-        return;
-    }
-    clearStatus("system-status");
-    setSystemButtonsDisabled(true);
-    try {
-        const data = await jsonFetch("/system/restart-app", { method: "POST" });
-        showStatus("system-status", data.message || "FlightScnr is restarting…");
-    } catch (e) {
-        showStatus("system-status", e.message, true);
-        setSystemButtonsDisabled(false);
-    }
-}
-
 $("btn-check-updates").addEventListener("click", checkUpdates);
 $("btn-update-now").addEventListener("click", applyUpdate);
-$("btn-restart-app").addEventListener("click", requestAppRestart);
-$("btn-reboot").addEventListener("click", () => requestSystemAction("reboot"));
-$("btn-shutdown").addEventListener("click", () => requestSystemAction("shutdown"));
+$("btn-update-confirm-yes").addEventListener("click", applyUpdateConfirmed);
+$("btn-update-confirm-no").addEventListener("click", () => showUpdateConfirm(false));
+$("btn-restart-app").addEventListener("click", () => promptSystemAction("restart-app"));
+$("btn-reboot").addEventListener("click", () => promptSystemAction("reboot"));
+$("btn-shutdown").addEventListener("click", () => promptSystemAction("shutdown"));
+$("btn-system-confirm-yes").addEventListener("click", confirmSystemAction);
+$("btn-system-confirm-no").addEventListener("click", () => showSystemConfirm(false));
 
 $("btn-export-settings").addEventListener("click", () => {
     showStatus("export-status", "Downloading settings…");

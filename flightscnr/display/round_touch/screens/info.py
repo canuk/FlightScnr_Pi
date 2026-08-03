@@ -10,6 +10,7 @@
 """Settings / info screens."""
 
 import socket
+import time
 
 import pygame
 
@@ -138,6 +139,18 @@ SYSTEM_ACTIONS = (
 )
 
 _atc_buttons: list[tuple[str, pygame.Rect]] = []
+# ATC status/bluetooth/feed lookups are too heavy for every timeout-ring frame.
+# Cache labels briefly so the perimeter countdown stays smooth like other pages.
+_ATC_LABEL_TTL_S = 0.4
+_atc_rows_cache: tuple[float, tuple[str, ...]] | None = None
+_atc_picker_cache: dict[str, tuple[float, tuple[tuple[str, str, bool], ...]]] = {}
+
+
+def invalidate_atc_labels() -> None:
+    """Drop ATC row/picker caches after a user change (play, airport, …)."""
+    global _atc_rows_cache
+    _atc_rows_cache = None
+    _atc_picker_cache.clear()
 # ATC airport / channel / output picker overlay hit targets: ("close"|"item", value).
 _atc_picker_hits: list[tuple[str, str, pygame.Rect]] = []
 _atc_picker_list_rect: pygame.Rect | None = None
@@ -298,10 +311,37 @@ def atc_picker_items(kind: str) -> list[dict]:
 
     Each item: ``{"id": str, "label": str, "selected": bool}``.
     Output ids: ``usb`` or ``bt:<MAC>``.
+
+    Cached until ``invalidate_atc_labels()`` so mid-scroll redraws (timeout ring)
+    cannot rebuild a shorter list and clamp the scroll offset back to zero.
     """
+    kind = str(kind or "").strip().lower()
+    if kind not in ("airport", "channel", "output"):
+        return []
+    cached = _atc_picker_cache.get(kind)
+    if cached is not None:
+        _ts, rows = cached
+        return [
+            {"id": i, "label": lab, "selected": sel} for i, lab, sel in rows
+        ]
+    items = _build_atc_picker_items(kind)
+    _atc_picker_cache[kind] = (
+        time.monotonic(),
+        tuple(
+            (
+                str(it.get("id") or ""),
+                str(it.get("label") or ""),
+                bool(it.get("selected")),
+            )
+            for it in items
+        ),
+    )
+    return items
+
+
+def _build_atc_picker_items(kind: str) -> list[dict]:
     from utilities import atc_audio
 
-    kind = str(kind or "").strip().lower()
     if kind == "airport":
         current = settings.atc_airport()
         out: list[dict] = []
@@ -1176,20 +1216,14 @@ def _atc_airport_label() -> str:
     return icao
 
 
-def _atc_channel_label() -> str:
+def _atc_channel_label_from_status(st: dict | None) -> str:
     from utilities import atc_audio
 
     icao = settings.atc_airport()
     mount = settings.atc_mount()
-    # Prefer the mount actually playing (IPC) so the device matches the portal
-    # even before a settings reload lands.
-    try:
-        st = atc_audio.status()
-        if st.get("playing") and st.get("playing_mount"):
-            mount = str(st.get("playing_mount") or mount)
-            icao = str(st.get("playing_airport") or icao).strip().upper() or icao
-    except Exception:
-        pass
+    if st and st.get("playing") and st.get("playing_mount"):
+        mount = str(st.get("playing_mount") or mount)
+        icao = str(st.get("playing_airport") or icao).strip().upper() or icao
     feeds = atc_audio.feeds_for_airport(icao) if icao else []
     if not feeds:
         return "No known feeds"
@@ -1199,17 +1233,13 @@ def _atc_channel_label() -> str:
     return str(feeds[0]["label"])
 
 
-def _atc_status_label() -> str:
-    try:
-        from utilities import atc_audio
-
-        st = atc_audio.status()
-        err = st.get("error")
-        if err and st.get("state") == "Error":
-            return f"Status: {err}"[:42]
-        return f"Status: {st.get('state') or 'Stopped'}"
-    except Exception:
+def _atc_status_label_from_status(st: dict | None) -> str:
+    if not st:
         return "Status: —"
+    err = st.get("error")
+    if err and st.get("state") == "Error":
+        return f"Status: {err}"[:42]
+    return f"Status: {st.get('state') or 'Stopped'}"
 
 
 def _atc_output_label() -> str:
@@ -1235,15 +1265,31 @@ def _atc_output_label() -> str:
 
 
 def _atc_row_labels() -> list[str]:
+    global _atc_rows_cache
+    now = time.monotonic()
+    if _atc_rows_cache is not None:
+        ts, rows = _atc_rows_cache
+        if now - ts < _ATC_LABEL_TTL_S:
+            return list(rows)
+
     enabled = "on" if settings.atc_enabled() else "off"
-    return [
+    st: dict | None = None
+    try:
+        from utilities import atc_audio
+
+        st = atc_audio.status()
+    except Exception:
+        st = None
+    rows = (
         f"ATC Audio: {enabled}",
         "",  # volume slider
         f"Airport › {_atc_airport_label()}",
-        f"Channel › {_atc_channel_label()}",
+        f"Channel › {_atc_channel_label_from_status(st)}",
         f"Output › {_atc_output_label()}",
-        _atc_status_label(),
-    ]
+        _atc_status_label_from_status(st),
+    )
+    _atc_rows_cache = (now, rows)
+    return list(rows)
 
 
 def _atc_quiet_row_labels() -> list[str]:

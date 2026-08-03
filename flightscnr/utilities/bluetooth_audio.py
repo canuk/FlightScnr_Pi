@@ -817,6 +817,12 @@ def use_usb_output(*, disconnect_bluetooth: bool = True) -> dict:
     if not _set_default_sink(sink):
         _set_error("Could not set USB / local audio as default")
         return status()
+    try:
+        from utilities import atc_audio
+
+        atc_audio.reassert_output_levels()
+    except Exception:
+        logger.debug("ATC volume reassert after USB switch failed", exc_info=True)
     _set_error("")
     _notify_speaker_change(connected=False)
     return status()
@@ -919,6 +925,14 @@ def connect(mac: str, *, pair_if_needed: bool = False) -> dict:
             _set_error("Connected, but could not set as default audio output")
             _notify_speaker_change()
             return status()
+        # Headsets often reconnect at a low AVRCP/PipeWire level — restore full
+        # sink + ATC softvol so quiet bone-conduction gear stays audible.
+        try:
+            from utilities import atc_audio
+
+            atc_audio.reassert_output_levels()
+        except Exception:
+            logger.debug("ATC volume reassert after BT connect failed", exc_info=True)
         _set_error("")
         _notify_speaker_change(connected=True)
         return status()

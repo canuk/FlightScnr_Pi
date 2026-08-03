@@ -333,24 +333,101 @@ def fill_background(surface: pygame.Surface):
     surface.fill(theme.BG)
 
 
-def draw_timeout_ring(surface: pygame.Surface, remaining_fraction: float) -> None:
-    """Countdown ring on the visible perimeter. 1.0 = full time left, 0.0 = expired."""
+def _timeout_ring_geom(
+    surface: pygame.Surface,
+    *,
+    rotation_deg: int = 0,
+    origin: tuple[float, float] | None = None,
+) -> tuple[float, float, float, int, float] | None:
+    """Return (cx, cy, radius, width, start_rad) for the timeout ring, or None."""
+    if origin is None:
+        cx = float(surface.get_width()) * 0.5
+        cy = float(surface.get_height()) * 0.5
+    else:
+        cx, cy = float(origin[0]), float(origin[1])
+    width = max(2, theme.s(3))
+    # Keep the same inset as the logical dial even on a rotated square.
+    side = min(surface.get_width(), surface.get_height())
+    if origin is not None:
+        # Display-space draw onto a possibly larger buffer; use theme dial size.
+        side = theme.SIZE
+    r = float(side // 2 - theme.BEZEL_INSET - width // 2 - theme.s(2))
+    if r <= 1:
+        return None
+    # Logical top (-pi/2) lands at this display angle after present()'s rotate.
+    start = -math.pi / 2 + math.radians(int(rotation_deg) % 360)
+    return cx, cy, r, width, start
+
+
+def timeout_ring_arc_rect(
+    surface: pygame.Surface,
+    frac_a: float,
+    frac_b: float,
+    *,
+    rotation_deg: int = 0,
+    origin: tuple[float, float] | None = None,
+    pad: int | None = None,
+) -> pygame.Rect | None:
+    """AABB covering the ring arc between two remaining fractions."""
+    geom = _timeout_ring_geom(surface, rotation_deg=rotation_deg, origin=origin)
+    if geom is None:
+        return None
+    cx, cy, r, width, start = geom
+    a = max(0.0, min(1.0, float(frac_a)))
+    b = max(0.0, min(1.0, float(frac_b)))
+    if a > b:
+        a, b = b, a
+    if b <= a:
+        b = min(1.0, a + 0.002)
+    sweep0 = 2 * math.pi * a
+    sweep1 = 2 * math.pi * b
+    steps = max(4, int(math.ceil(r * (sweep1 - sweep0) / 4.0)))
+    # Arc band only — do not include the dial centre (that made a pie-slice AABB).
+    xs: list[float] = []
+    ys: list[float] = []
+    for i in range(steps + 1):
+        ang = start + sweep0 + (sweep1 - sweep0) * i / steps
+        xs.append(cx + r * math.cos(ang))
+        ys.append(cy + r * math.sin(ang))
+    margin = pad if pad is not None else width + theme.s(4)
+    x0 = max(0, int(math.floor(min(xs))) - margin)
+    y0 = max(0, int(math.floor(min(ys))) - margin)
+    x1 = min(surface.get_width(), int(math.ceil(max(xs))) + margin)
+    y1 = min(surface.get_height(), int(math.ceil(max(ys))) + margin)
+    if x1 <= x0 or y1 <= y0:
+        return None
+    return pygame.Rect(x0, y0, x1 - x0, y1 - y0)
+
+
+def draw_timeout_ring(
+    surface: pygame.Surface,
+    remaining_fraction: float,
+    *,
+    rotation_deg: int = 0,
+    origin: tuple[float, float] | None = None,
+) -> None:
+    """Countdown ring on the visible perimeter. 1.0 = full time left, 0.0 = expired.
+
+    ``rotation_deg`` is the display rotation (same as ``rotation.rotation_degrees()``).
+    Use it when drawing onto an already-rotated physical framebuffer so the arc
+    still starts at logical top (matches ``present(..., rotate=-rotation)``).
+    """
     remaining_fraction = max(0.0, min(1.0, remaining_fraction))
     if remaining_fraction <= 0:
         return
 
-    cx, cy = float(theme.CENTER_X), float(theme.CENTER_Y)
-    width = max(2, theme.s(3))
-    r = float(theme.VISIBLE_RADIUS - width // 2 - theme.s(2))
+    geom = _timeout_ring_geom(surface, rotation_deg=rotation_deg, origin=origin)
+    if geom is None:
+        return
+    cx, cy, r, width, start = geom
 
     if remaining_fraction >= 0.999:
         pygame.draw.circle(surface, theme.SWEEP, (int(cx), int(cy)), int(round(r)), width)
         return
 
-    start = -math.pi / 2
     sweep = 2 * math.pi * remaining_fraction
-    # ~1 px along the arc so the tip crawls instead of stepping facet edges.
-    steps = max(48, int(math.ceil(r * sweep)))
+    # ~3 px along the arc — dense enough to look smooth, cheap on the Pi.
+    steps = max(32, int(math.ceil(r * sweep / 3.0)))
     points = [
         (
             cx + r * math.cos(start + sweep * i / steps),
@@ -360,7 +437,6 @@ def draw_timeout_ring(surface: pygame.Surface, remaining_fraction: float) -> Non
     ]
     if len(points) >= 2:
         pygame.draw.lines(surface, theme.SWEEP, False, points, width)
-
 
 _bezel_overlay = None
 _bezel_key = None
