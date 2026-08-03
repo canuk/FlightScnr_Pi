@@ -1587,6 +1587,10 @@ class Overhead:
                                 flight_number=sched_number,
                                 callsign=sched_cs,
                             )
+                            origin_code = sched.get("origin", "") or ""
+                            dest_code = sched.get("destination", "") or ""
+                            origin_coords = _airport_coords(origin_code)
+                            dest_coords = _airport_coords(dest_code)
                             tracked_data = {
                                 "callsign": sched_cs,
                                 "number": sched_number,
@@ -1594,10 +1598,11 @@ class Overhead:
                                 "airline_name": marketing_brand_name(sched_number) or "",
                                 "owner_icao": airline_icao,
                                 "airline_icao": airline_icao,
+                                "icao_hex": "",
                                 "is_live": False,
                                 "is_scheduled": True,
-                                "origin": sched.get("origin", ""),
-                                "destination": sched.get("destination", ""),
+                                "origin": origin_code,
+                                "destination": dest_code,
                                 "dep_time": sched.get("dep_time", ""),
                                 "arr_time": sched.get("arr_time", ""),
                                 "schedule_status": sched.get("status", ""),
@@ -1612,8 +1617,10 @@ class Overhead:
                                 "latitude": None,
                                 "longitude": None,
                                 "last_seen_ts": 0,
-                                "dest_lat": 0,
-                                "dest_lon": 0,
+                                "origin_lat": origin_coords.get("lat") or 0,
+                                "origin_lon": origin_coords.get("lon") or 0,
+                                "dest_lat": dest_coords.get("lat") or 0,
+                                "dest_lon": dest_coords.get("lon") or 0,
                             }
 
             # Keep schedule cache even after flight goes live — arr_time_utc
@@ -1839,6 +1846,24 @@ class Overhead:
             if brand:
                 airline_name = brand
 
+            icao_hex = ""
+            try:
+                from utilities.aircraft_photo import normalize_icao_hex
+
+                icao_hex = normalize_icao_hex(getattr(match, "icao_hex", None) or "")
+                if not icao_hex:
+                    raw_hex = self.safe_get(
+                        flight_details, "aircraft_info", "icao_address", default=""
+                    )
+                    icao_hex = normalize_icao_hex(raw_hex)
+            except Exception:
+                raw_hex = (
+                    self.safe_get(flight_details, "aircraft_info", "icao_address", default="")
+                    or getattr(match, "icao_hex", None)
+                    or ""
+                )
+                icao_hex = str(raw_hex).strip().upper().replace("0X", "")
+
             return {
                 "callsign": display_callsign,
                 "registration": registration,
@@ -1847,10 +1872,13 @@ class Overhead:
                 "airline_name": airline_name,
                 "owner_icao": owner_icao,
                 "airline_icao": airline_icao,
+                "icao_hex": icao_hex,
                 "is_live": True,
                 "has_landed": has_landed,
                 "origin": match.origin_airport_iata or "",
                 "destination": match.destination_airport_iata or "",
+                "origin_lat": origin_lat or 0,
+                "origin_lon": origin_lon or 0,
                 "dest_lat": dest_lat or 0,
                 "dest_lon": dest_lon or 0,
                 "aircraft_type": aircraft_type,

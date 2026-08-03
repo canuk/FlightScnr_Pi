@@ -39,6 +39,7 @@ from display.round_touch import (
     radar_hud,
     rainviewer_overlay,
     rotation,
+    route_map,
     scale,
     settings,
     theme,
@@ -691,6 +692,9 @@ class RoundTouchDisplay:
                 self.overhead.tracked_data,
                 self.flights,
             )
+            if display_data:
+                display_data = self._merge_tracked_aircraft_photo(display_data)
+                self._maybe_fetch_tracked_aircraft_photo(display_data)
             self._scroll.max_offset = tracked.draw_tracked(
                 self.surface,
                 display_data,
@@ -1918,6 +1922,76 @@ class RoundTouchDisplay:
         merged["photo_path"] = photo.get("path") or ""
         merged["photo_credit"] = photo_credit_line(photo)
         return merged
+
+    def _merge_tracked_aircraft_photo(self, flight: dict) -> dict:
+        """Like Flight Detail merge, but reject Commons *generic* type fallbacks."""
+        from utilities.aircraft_photo import normalize_icao_hex, photo_credit_line
+
+        hex_id = normalize_icao_hex(flight.get("icao_hex") or flight.get("hex"))
+        if not hex_id:
+            return flight
+        photo = self._aircraft_photos.get(hex_id)
+        # Accept airframe + airline_type; reject bare type (wrong livery).
+        if not photo or photo.get("match") == "type":
+            return flight
+        merged = dict(flight)
+        merged["photo_path"] = photo.get("path") or ""
+        merged["photo_credit"] = photo_credit_line(photo)
+        return merged
+
+    def _maybe_fetch_tracked_aircraft_photo(self, flight: dict) -> None:
+        """Fetch airframe or airline-matched photo — never generic type images."""
+        from utilities.aircraft_photo import (
+            fetch_aircraft_photo_for,
+            get_cached_aircraft_photo,
+            normalize_icao_hex,
+        )
+
+        hex_id = normalize_icao_hex(flight.get("icao_hex") or flight.get("hex"))
+        if not hex_id:
+            return
+        if hex_id in self._aircraft_photos:
+            # Drop a previously merged Commons type photo so Track can retry.
+            if self._aircraft_photos[hex_id].get("match") == "type":
+                del self._aircraft_photos[hex_id]
+            else:
+                return
+        if hex_id in self._aircraft_photo_miss:
+            return
+        if hex_id in self._aircraft_photo_inflight:
+            return
+
+        cached = get_cached_aircraft_photo(hex_id)
+        if cached and cached.get("match") != "type":
+            self._bound(self._aircraft_photos)
+            self._aircraft_photos[hex_id] = cached
+            self._aircraft_photo_redraw = True
+            return
+
+        self._aircraft_photo_inflight.add(hex_id)
+        snapshot = dict(flight)
+
+        def _work():
+            try:
+                photo = fetch_aircraft_photo_for(
+                    snapshot, allow_type_fallback=False
+                )
+                if photo and photo.get("path") and photo.get("match") != "type":
+                    self._bound(self._aircraft_photos)
+                    self._aircraft_photos[hex_id] = photo
+                    self._aircraft_photo_redraw = True
+                    logger.info(
+                        "[photo] track ready for %s (%s)",
+                        hex_id,
+                        photo.get("match") or "?",
+                    )
+                else:
+                    self._bound(self._aircraft_photo_miss)
+                    self._aircraft_photo_miss.add(hex_id)
+            finally:
+                self._aircraft_photo_inflight.discard(hex_id)
+
+        Thread(target=_work, daemon=True).start()
 
     def _merge_vessel_photo(self, vessel: dict) -> dict:
         from utilities.vessel_photo import vessel_photo_cache_key
@@ -3284,8 +3358,14 @@ class RoundTouchDisplay:
                     self._route_enrich_redraw = False
                     self._safe_draw()
 
-                if self._aircraft_photo_redraw and self.screen == SCREEN_FLIGHT:
+                if self._aircraft_photo_redraw and self.screen in (
+                    SCREEN_FLIGHT,
+                    SCREEN_TRACKED,
+                ):
                     self._aircraft_photo_redraw = False
+                    self._safe_draw()
+
+                if route_map.basemap_needs_redraw() and self.screen == SCREEN_TRACKED:
                     self._safe_draw()
 
                 if self._vessel_photo_redraw and self.screen == SCREEN_FLIGHT:

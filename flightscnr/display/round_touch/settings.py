@@ -1241,6 +1241,12 @@ def set_map_style(value: str) -> str:
         map_bg.prewarm_all_scales()
     except Exception:
         logger.debug("Map style invalidate/prewarm failed", exc_info=True)
+    try:
+        from display.round_touch import route_map
+
+        route_map.invalidate_basemap_cache()
+    except Exception:
+        logger.debug("Route map style invalidate failed", exc_info=True)
     return style
 
 

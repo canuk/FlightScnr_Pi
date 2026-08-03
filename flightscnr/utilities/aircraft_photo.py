@@ -206,10 +206,30 @@ def _save_meta() -> None:
 
 
 def normalize_icao_hex(value) -> str:
-    """Return a 6-char lowercase ICAO hex, or empty string."""
+    """Return a 6-char lowercase ICAO hex, or empty string.
+
+    FR24 sometimes returns Mode-S as a decimal int (e.g. ``11108925`` →
+    ``a9823d``). Digit-only strings longer than 6 chars are treated as decimal.
+    """
     if value is None:
         return ""
-    hex_id = re.sub(r"[^0-9a-fA-F]", "", str(value).strip())
+    if isinstance(value, int):
+        if 0 <= value <= 0xFFFFFF:
+            return f"{value:06x}"
+        return ""
+    raw = str(value).strip()
+    if not raw:
+        return ""
+    # Decimal Mode-S from FR24 details (int serialized as digits).
+    if raw.isdigit() and len(raw) > 6:
+        try:
+            n = int(raw, 10)
+        except ValueError:
+            n = -1
+        if 0 <= n <= 0xFFFFFF:
+            return f"{n:06x}"
+        return ""
+    hex_id = re.sub(r"[^0-9a-fA-F]", "", raw)
     if len(hex_id) < 6:
         return ""
     return hex_id[-6:].lower()
@@ -463,6 +483,7 @@ def _result_from_commons_hit(
     type_code: str,
     now: float,
     used_query: str,
+    cache_stem: str | None = None,
 ) -> dict | None:
     info = chosen["info"]
     page = chosen["page"]
@@ -487,7 +508,10 @@ def _result_from_commons_hit(
     elif "webp" in mime:
         ext = ".webp"
     # Shared file for a type so every C172 hex reuses one download.
-    dest = os.path.join(_CACHE_DIR, f"type_{type_code.lower()}{ext}")
+    # Airline-scoped stems avoid clobbering / permission-fighting type_*.jpg.
+    stem = (cache_stem or f"type_{type_code.lower()}").strip() or f"type_{type_code.lower()}"
+    stem = re.sub(r"[^a-zA-Z0-9_\-]+", "_", stem)[:48]
+    dest = os.path.join(_CACHE_DIR, f"{stem}{ext}")
     marker = dest + ".title"
 
     try:
@@ -537,6 +561,81 @@ def _result_from_commons_hit(
         type_code,
         title[:60],
     )
+    return result
+
+
+def _lookup_airline_type_commons(
+    type_code: str,
+    airline_name: str,
+    hex_id: str,
+    now: float,
+) -> dict | None:
+    """Commons photo matching airline + type (avoids random-livery type hits)."""
+    code = normalize_type_code(type_code)
+    airline = re.sub(r"\s+", " ", (airline_name or "").strip())
+    if not code or len(airline) < 3:
+        return None
+    # Skip vague / non-brand labels.
+    low = airline.lower()
+    if low in {"private", "blocked", "n/a", "unknown", "owner"}:
+        return None
+
+    try:
+        from utilities.icao_types import format_aircraft_type
+
+        type_label = format_aircraft_type(code) or code
+    except Exception:
+        type_label = code
+
+    queries = [
+        f"filetype:bitmap {airline} {type_label}",
+        f"filetype:bitmap {airline} {code}",
+    ]
+    # Shorter type tokens from the generic query list (e.g. "787-9 Dreamliner").
+    for q in _type_search_queries(code)[:2]:
+        token = q.replace("filetype:bitmap ", "").strip()
+        if token and token.lower() not in type_label.lower():
+            queries.append(f"filetype:bitmap {airline} {token}")
+
+    chosen = None
+    used_query = ""
+    for query in queries:
+        try:
+            logger.info("[photo] commons airline+type search %s %r", code, query)
+            hit = _search_commons_type(query, type_code=code)
+        except (requests.RequestException, ValueError, TypeError) as exc:
+            logger.warning("[photo] commons airline search failed: %s", exc)
+            continue
+        if not hit:
+            continue
+        title = ((hit.get("page") or {}).get("title") or "").lower()
+        # Prefer titles that mention a distinctive airline token.
+        token = airline.split()[0].lower()
+        if len(token) >= 4 and token not in title and airline.lower() not in title:
+            continue
+        chosen = hit
+        used_query = query
+        break
+    if not chosen:
+        return None
+
+    result = _result_from_commons_hit(
+        chosen,
+        hex_id=hex_id,
+        type_code=code,
+        now=now,
+        used_query=used_query,
+        cache_stem=f"airline_{re.sub(r'[^a-z0-9]+', '', airline.lower())[:20]}_{code.lower()}",
+    )
+    if result:
+        result["match"] = "airline_type"
+        # Persist match override
+        meta = _load_meta()
+        with _lock:
+            entry = meta.get(hex_id)
+            if entry and not entry.get("miss"):
+                entry["match"] = "airline_type"
+                _save_meta()
     return result
 
 
@@ -809,12 +908,19 @@ def lookup_aircraft_photo(
     aircraft_type: str = "",
     registration: str = "",
     force: bool = False,
+    allow_type_fallback: bool = True,
+    airline_name: str = "",
 ) -> dict | None:
     """
     Fetch/cache a photo for an ICAO hex.
 
-    Order: airframe pin → planespotters hex → planespotters reg → Commons type.
+    Order: airframe pin → planespotters hex → planespotters reg →
+    Commons airline+type → Commons generic type.
     Returns dict with path, photographer, page_url, source — or None on miss.
+
+    When ``allow_type_fallback`` is False (Track screen), skip Wikimedia Commons
+    generic type photos — those often show the wrong airline livery. Airline+type
+    Commons matches are still allowed.
     """
     hex_id = normalize_icao_hex(icao_hex)
     if not hex_id:
@@ -835,8 +941,15 @@ def lookup_aircraft_photo(
                 if entry.get("miss"):
                     # Misses cached before a type/airframe pin was added would stick;
                     # retry when we now have a pin for this type or airframe.
-                    if not pin and not (type_code and type_code in _TYPE_PINNED):
-                        return None
+                    if not pin and not (
+                        allow_type_fallback and type_code and type_code in _TYPE_PINNED
+                    ):
+                        # Still allow airline+type retry when brand is known.
+                        if not (airline_name and type_code):
+                            return None
+                elif entry.get("match") == "type" and not allow_type_fallback:
+                    # Stale generic type photo — fall through and try again.
+                    pass
                 else:
                     path = entry.get("path") or ""
                     if path and os.path.isfile(path):
@@ -907,8 +1020,16 @@ def lookup_aircraft_photo(
                 )
                 return result
 
-    # 3) Commons generic type photo
-    if type_code:
+    # 3) Commons airline + type (correct livery when airframe photo missing)
+    if type_code and airline_name:
+        airline_hit = _lookup_airline_type_commons(
+            type_code, airline_name, hex_id, now
+        )
+        if airline_hit:
+            return airline_hit
+
+    # 4) Commons generic type photo
+    if type_code and allow_type_fallback:
         commons = _lookup_type_commons(type_code, hex_id, now)
         if commons:
             return commons
@@ -937,7 +1058,12 @@ def get_cached_aircraft_photo(icao_hex: str) -> dict | None:
     return None
 
 
-def fetch_aircraft_photo_for(flight: dict, *, force: bool = False) -> dict | None:
+def fetch_aircraft_photo_for(
+    flight: dict,
+    *,
+    force: bool = False,
+    allow_type_fallback: bool = True,
+) -> dict | None:
     if not flight:
         return None
     hex_id = normalize_icao_hex(flight.get("icao_hex") or flight.get("hex"))
@@ -955,11 +1081,18 @@ def fetch_aircraft_photo_for(flight: dict, *, force: bool = False) -> dict | Non
         or flight.get("tail")
         or ""
     )
+    airline_name = (
+        flight.get("airline_name")
+        or flight.get("airline")
+        or ""
+    )
     return lookup_aircraft_photo(
         hex_id,
         aircraft_type=str(aircraft_type or ""),
         registration=str(registration or ""),
         force=force,
+        allow_type_fallback=allow_type_fallback,
+        airline_name=str(airline_name or ""),
     )
 
 
