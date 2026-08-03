@@ -832,6 +832,9 @@ class Overhead:
         self._tracked_was_live = False       # was the flight live last poll?
         self._tracked_miss_count = 0         # consecutive polls with no result
         self._TRACKED_MISS_THRESHOLD = 3     # fallback miss threshold (no ETA)
+        # Full FR24 find+details every DATA_REFRESH (~2s) starved radar prewarm;
+        # reuse last-good live data between polls.
+        self._TRACKED_POLL_MIN_S = 9.0
         self._tracked_last_callsign = ""     # last callsign we polled for
         self._tracked_last_eta = None        # last known estimated arrival (unix ts)
         self._tracked_last_data = None       # last known good tracked data
@@ -1719,8 +1722,20 @@ class Overhead:
         match = None
 
         try:
+            # Reuse recent live tracked data so every DATA_REFRESH does not pay
+            # for another find_by_callsign + FlightDetails round-trip (~1–2s).
+            # Callsign changes clear _tracked_last_data before we get here.
+            last = self._tracked_last_data
+            if last and last.get("is_live"):
+                try:
+                    age = time() - float(last.get("last_seen_ts") or 0)
+                except (TypeError, ValueError):
+                    age = self._TRACKED_POLL_MIN_S
+                if 0 <= age < self._TRACKED_POLL_MIN_S:
+                    return dict(last)
+
             # Prefer registration filter for tail numbers; callsign otherwise.
-            # Always fetch a fresh live position — the zone feed cache can be ~90s stale.
+            # Zone feed cache can be ~90s stale — still poll FR24, just less often.
             if looks_like_registration(original):
                 match = self._api.find_by_registration(original)
                 if not match:

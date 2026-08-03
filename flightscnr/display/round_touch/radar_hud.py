@@ -422,11 +422,18 @@ def _fill_alpha() -> int:
     return max(0, min(255, int(round(pct * 2.55))))
 
 
-def _load_icon(name: str, size: int) -> pygame.Surface | None:
-    key = (name, size)
+def _load_icon(name: str, size: int, *, light: bool = False) -> pygame.Surface | None:
+    key = (name, size, bool(light))
     cached = _icon_cache.get(key)
     if cached is not None:
         return cached
+    if light:
+        base = _load_icon(name, size, light=False)
+        if base is None:
+            return None
+        icon = _icon_as_light(base)
+        _icon_cache[key] = icon
+        return icon
     path = os.path.join(_ASSETS_DIR, f"{name}.png")
     if not os.path.isfile(path):
         return None
@@ -467,14 +474,33 @@ def _blit_icon(
     size: int,
     *,
     alpha: int = 255,
+    light: bool = False,
 ) -> None:
-    icon = _load_icon(name, size)
+    icon = _load_icon(name, size, light=light)
     if icon is None:
         return
     if alpha < 255:
         icon = icon.copy()
         icon.set_alpha(alpha)
     surface.blit(icon, icon.get_rect(center=center))
+
+
+def _icon_as_light(icon: pygame.Surface) -> pygame.Surface:
+    """Invert dark glyph RGB so icons read on a dark pill (preserve alpha)."""
+    out = icon.copy()
+    # pixels3d is RGB only; alpha stays on the surface.
+    rgb = pygame.surfarray.pixels3d(out)
+    rgb[:] = 255 - rgb
+    del rgb
+    return out
+
+
+def _hud_chrome() -> tuple[tuple[int, int, int], tuple[int, int, int, int]]:
+    """Return (glyph RGB, pill fill RGBA) for the current HUD style."""
+    alpha = _fill_alpha()
+    if settings.radar_hud_dark():
+        return (240, 242, 245), (28, 30, 34, alpha)
+    return (28, 30, 34), (255, 255, 255, alpha)
 
 
 def _wx_snapshot() -> dict | None:
@@ -857,7 +883,8 @@ def draw_hud(
         icon_px = int(g.get("icon_px") or max(12, g["icon_r"] * 2))
         wx_icon_px = int(g.get("wx_icon_px") or icon_px + theme.s(8))
         arrow_px = int(g.get("arrow_px") or icon_px)
-        color = (28, 30, 34)
+        color, fill_rgba = _hud_chrome()
+        light_icons = settings.radar_hud_dark()
         if alpha > 0:
             bounds = _draw_curved_white_pill(
                 surface,
@@ -866,7 +893,7 @@ def draw_hud(
                 g["r_mid"],
                 g["mid"],
                 g["band"],
-                (255, 255, 255, alpha),
+                fill_rgba,
                 half_span=g.get("half_span"),
                 arc_a0=g.get("arc_a0"),
                 arc_a1=g.get("arc_a1"),
@@ -897,9 +924,18 @@ def draw_hud(
         _draw_clock_cluster(surface, g["clock_c"], color)
 
         vol_name = "mute" if settings.atc_volume() <= 0 else "volume"
-        _blit_icon(surface, vol_name, g["speaker_c"], icon_px, alpha=255)
+        _blit_icon(
+            surface, vol_name, g["speaker_c"], icon_px, alpha=255, light=light_icons
+        )
         chime_alpha = 255 if settings.hourly_chime_enabled() else 110
-        _blit_icon(surface, "chime", g["chime_c"], icon_px, alpha=chime_alpha)
+        _blit_icon(
+            surface,
+            "chime",
+            g["chime_c"],
+            icon_px,
+            alpha=chime_alpha,
+            light=light_icons,
+        )
         # ATC play/stop — full opacity while playing, dimmed when stopped.
         atc_playing = False
         try:
@@ -914,6 +950,7 @@ def draw_hud(
             g["atc_c"],
             icon_px,
             alpha=255 if atc_playing else 120,
+            light=light_icons,
         )
         if settings.radar_hud_arrange():
             _draw_arrange_chrome(surface, g)
@@ -923,6 +960,7 @@ def draw_hud(
 
     _slider_track = pygame.Rect(0, 0, 0, 0)
     if include_popover and _volume_popover:
+        color, fill_rgba = _hud_chrome()
         track_w = theme.s(120)
         track_h = theme.s(10)
         _slider_track = pygame.Rect(0, 0, track_w, track_h)
@@ -937,19 +975,25 @@ def draw_hud(
         pop = pygame.Surface((back.w * 2, back.h * 2), pygame.SRCALPHA)
         pygame.draw.rect(
             pop,
-            (255, 255, 255, alpha),
+            fill_rgba,
             pop.get_rect(),
             border_radius=theme.s(16),
         )
+        border = (
+            (70, 74, 80, min(255, alpha))
+            if settings.radar_hud_dark()
+            else (180, 185, 190, min(255, alpha))
+        )
         pygame.draw.rect(
             pop,
-            (180, 185, 190, min(255, alpha)),
+            border,
             pop.get_rect(),
             max(2, theme.s(2)),
             border_radius=theme.s(16),
         )
         surface.blit(pygame.transform.smoothscale(pop, back.size), back.topleft)
-        pygame.draw.rect(surface, (200, 205, 210), _slider_track, border_radius=theme.s(4))
+        track_col = (70, 74, 80) if settings.radar_hud_dark() else (200, 205, 210)
+        pygame.draw.rect(surface, track_col, _slider_track, border_radius=theme.s(4))
         vol = settings.atc_volume()
         fill_w = int(_slider_track.w * max(0, min(100, vol)) / 100)
         if fill_w > 0:
@@ -957,7 +1001,7 @@ def draw_hud(
             pygame.draw.rect(surface, theme.SWEEP, fill, border_radius=theme.s(4))
         pygame.draw.circle(
             surface,
-            (28, 30, 34),
+            color,
             (_slider_track.x + fill_w, _slider_track.centery),
             theme.s(7),
         )

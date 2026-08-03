@@ -186,31 +186,26 @@ def _draw_dashed_polyline(
 
 
 def _route_bounds(data: dict) -> tuple[float, float, float, float, float] | None:
-    """Return (min_lat, max_lat, min_lon, max_lon, ref_lon) with padding, or None."""
+    """Return stable (min_lat, max_lat, min_lon, max_lon, ref_lon) for the route.
+
+    Framing uses origin → destination only (plus the great-circle samples).
+    Live plane position is *not* included so the basemap does not refetch on
+    every tracked-position update.
+    """
     if not route_coords_available(data):
         return None
     o_lat = float(data["origin_lat"])
     o_lon = float(data["origin_lon"])
     d_lat = float(data["dest_lat"])
     d_lon = float(data["dest_lon"])
-    p_lat = _as_float(data.get("latitude"))
-    p_lon = _as_float(data.get("longitude"))
-    has_plane = _valid_coord(p_lat, p_lon) and not data.get("is_scheduled")
 
     ref_lon = o_lon
     pts: list[tuple[float, float]] = [
         (o_lat, o_lon),
         (d_lat, _unwrap_lon(d_lon, ref_lon)),
     ]
-    if has_plane and p_lon is not None:
-        pts.append((p_lat, _unwrap_lon(p_lon, ref_lon)))
-        for lat, lon in great_circle_points([o_lat, o_lon], [p_lat, p_lon], 24):
-            pts.append((lat, _unwrap_lon(lon, ref_lon)))
-        for lat, lon in great_circle_points([p_lat, p_lon], [d_lat, d_lon], 24):
-            pts.append((lat, _unwrap_lon(lon, ref_lon)))
-    else:
-        for lat, lon in great_circle_points([o_lat, o_lon], [d_lat, d_lon], 32):
-            pts.append((lat, _unwrap_lon(lon, ref_lon)))
+    for lat, lon in great_circle_points([o_lat, o_lon], [d_lat, d_lon], 32):
+        pts.append((lat, _unwrap_lon(lon, ref_lon)))
 
     lats = [p[0] for p in pts]
     lons = [p[1] for p in pts]

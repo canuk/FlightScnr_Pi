@@ -56,8 +56,14 @@ _FRAME_LAYER_TTL_S = 0.2
 _layer_build_cost_s = 0.0
 
 
+# Dense AIS+ADS-B rebuilds can cost 50–150ms; without a ceiling, cost*3 would
+# push refresh toward multi-second freezes. Cap so markers still coast ≥2Hz.
+_FRAME_LAYER_TTL_MAX_S = 0.5
+
+
 def _layer_ttl_s() -> float:
     ttl = max(_FRAME_LAYER_TTL_S, _layer_build_cost_s * 3.0)
+    ttl = min(ttl, _FRAME_LAYER_TTL_MAX_S)
     # Rim pulse is ~2Hz; keep the baked stroke in sync without leaving the
     # fast dirty-rect present path.
     if aircraft_alert.rim_flash_active():

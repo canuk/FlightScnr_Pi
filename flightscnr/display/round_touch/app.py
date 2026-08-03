@@ -1172,6 +1172,9 @@ class RoundTouchDisplay:
         elif action == "hud_position":
             settings.toggle_radar_hud_position()
             radar.invalidate_frame_layer()
+        elif action == "hud_dark":
+            settings.toggle_radar_hud_dark()
+            radar.invalidate_frame_layer()
         elif action == "hud_opacity":
             return
         elif action == "hourly_chime":
@@ -3424,8 +3427,10 @@ class RoundTouchDisplay:
                         # Rebuild + pre-rotate the ~10Hz aircraft layer on a
                         # worker thread (same model as 9a130e7). Inline rebuilds
                         # on this loop made the sweep hitch every layer TTL.
-                        # Skip while _grab holds the GIL so prewarm and merge
-                        # don't stack into a multi-hundred-ms unmarked stall.
+                        # Prewarm even while _grab is in flight: most of that
+                        # work is network (GIL released). Blocking here froze
+                        # dead-reckoned markers for the whole tracked-poll HTTPS
+                        # window. Grabs still cannot stack (one processing lock).
                         # Always prewarm while on radar — show_sweep_line only
                         # controls the beam visual; without this the static
                         # layer never refreshes and traffic freezes.
@@ -3433,7 +3438,6 @@ class RoundTouchDisplay:
                             not self._calibrating_facing
                             and not self._panning_map
                             and not self._radar_modal_active()
-                            and not self.overhead.processing
                             and radar.frame_layer_due()
                             and (
                                 self._prewarm_thread is None
