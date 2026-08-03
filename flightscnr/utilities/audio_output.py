@@ -260,6 +260,14 @@ def _speaker_watch_loop() -> None:
             _maybe_resume_atc()
         elif not now and was:
             _stop_atc_for_missing_speaker()
+        elif now:
+            # NVS still wants playback but mpv may have exited (LiveATC/code 2).
+            try:
+                from utilities import atc_audio
+
+                atc_audio.maybe_keepalive()
+            except Exception:
+                logger.debug("ATC keepalive failed", exc_info=True)
         was = now
 
 

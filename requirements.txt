@@ -19,6 +19,7 @@ grpcio
 # Maps, images, HTTP utilities
 Pillow
 requests
+curl-cffi>=0.6.0
 qrcode[pil]>=7.4
 
 # AIS vessel feed (aisstream.io WebSocket)

@@ -78,23 +78,34 @@ class SeedFeedTests(unittest.TestCase):
         path.write_text(json.dumps(seed), encoding="utf-8")
         index_path = Path(self._tmpdir.name) / "index.json"
         index_path.write_text(json.dumps({"airports": {}}), encoding="utf-8")
+        discovered = Path(self._tmpdir.name) / "discovered.json"
         self._seed_patch = mock.patch.object(atc_audio, "SEED_PATH", path)
         self._index_patch = mock.patch.object(atc_audio, "INDEX_PATH", index_path)
+        self._disc_patch = mock.patch.object(
+            atc_audio, "DISCOVERED_CACHE_PATH", discovered
+        )
         self._cache_patch = mock.patch.object(
             atc_audio, "FEED_CACHE_DIR", Path(self._tmpdir.name) / "cache"
         )
         self._fetch_patch = mock.patch.object(
             atc_audio, "fetch_liveatc_feeds", return_value=[]
         )
+        self._enqueue_patch = mock.patch.object(
+            atc_audio, "enqueue_discovery", return_value=None
+        )
         self._seed_patch.start()
         self._index_patch.start()
+        self._disc_patch.start()
         self._cache_patch.start()
         self._fetch_patch.start()
+        self._enqueue_patch.start()
         atc_audio.reset_runtime_for_tests()
 
     def tearDown(self):
+        self._enqueue_patch.stop()
         self._fetch_patch.stop()
         self._cache_patch.stop()
+        self._disc_patch.stop()
         self._index_patch.stop()
         self._seed_patch.stop()
         self._tmpdir.cleanup()
@@ -131,6 +142,19 @@ class SeedFeedTests(unittest.TestCase):
         self.assertEqual(feeds[0]["kind"], "twr")
         self.assertEqual(feeds[1]["kind"], "gnd")
 
+    def test_parse_liveatc_mixed_html_keeps_all_mounts(self):
+        """Do not stop after the first regex that matches anything."""
+        from utilities import atc_audio
+
+        html = """
+        <a href="http://d.liveatc.net/kmke3_twr">KMKE Tower</a>
+        <a href="/play/kmke3_gnd.pls" title="Click here to listen to KMKE Ground with your own player">pls</a>
+        <a href="/play/kmke3_app_dep.pls" title="Click here to listen to KMKE Approach/Departure with your own player">pls</a>
+        """
+        feeds = atc_audio.parse_liveatc_mobile_html(html)
+        mounts = {f["mount"] for f in feeds}
+        self.assertEqual(mounts, {"kmke3_twr", "kmke3_gnd", "kmke3_app_dep"})
+
     def test_merge_live_over_seed(self):
         from utilities import atc_audio
 
@@ -139,13 +163,12 @@ class SeedFeedTests(unittest.TestCase):
             {"mount": "ksfo_twr", "label": "KSFO Tower (Live)", "kind": "twr"},
         ]
         with mock.patch.object(atc_audio, "fetch_liveatc_feeds", return_value=live) as fetch:
-            # Without refresh, local seed/index is enough — skip LiveATC.
+            # Without refresh, return local list immediately (discovery is async).
             feeds_fast = atc_audio.feeds_for_airport("KSFO")
-            fetch.assert_not_called()
             self.assertEqual([f["mount"] for f in feeds_fast], ["ksfo_twr", "ksfo_dep2"])
 
             feeds = atc_audio.feeds_for_airport("KSFO", refresh=True)
-            fetch.assert_called_once()
+            fetch.assert_any_call("KSFO", force=True)
         mounts = [f["mount"] for f in feeds]
         self.assertIn("ksfo_gnd", mounts)
         self.assertIn("ksfo_twr", mounts)
@@ -155,7 +178,7 @@ class SeedFeedTests(unittest.TestCase):
 
 
 class MountDiscoveryTests(unittest.TestCase):
-    """Background mount probing must never block feeds_for_airport (PR #48)."""
+    """Background LiveATC search must never block feeds_for_airport."""
 
     def setUp(self):
         from utilities import atc_audio
@@ -188,14 +211,7 @@ class MountDiscoveryTests(unittest.TestCase):
 
         atc_audio.reset_runtime_for_tests()
 
-    def test_numbered_bare_mounts_are_candidates(self):
-        from utilities import atc_audio
-
-        mounts = atc_audio._probe_mount_candidates("ESSB")
-        self.assertIn("essb2", mounts)
-        self.assertIn("essb_twr", mounts)
-
-    def test_stale_empty_discovery_retries_after_probe_ver_bump(self):
+    def test_stale_empty_discovery_retries_after_version_bump(self):
         import time
 
         from utilities import atc_audio
@@ -205,34 +221,97 @@ class MountDiscoveryTests(unittest.TestCase):
                 "icao": "ESSB",
                 "ts": time.time(),
                 "feeds": [],
-                "probe_ver": 1,
+                "discover_ver": 1,
+                "html_tried": True,
             }
         }
         atc_audio.DISCOVERED_CACHE_PATH.write_text(json.dumps(cache), encoding="utf-8")
         atc_audio._discovered = None
         self.assertTrue(atc_audio.needs_discovery("ESSB"))
 
-    def test_all_indeterminate_probes_are_incomplete(self):
+    def test_sparse_seed_still_needs_discovery(self):
         from utilities import atc_audio
 
-        with mock.patch.object(atc_audio, "probe_feed_mount", return_value=None):
-            feeds, complete = atc_audio._probe_airport_feeds("KXYZ")
-        self.assertEqual(feeds, [])
-        self.assertFalse(complete)
+        self.assertEqual(len(atc_audio._seed_feeds("KJFK")), 1)
+        self.assertTrue(atc_audio.needs_discovery("KJFK"))
 
-    def test_rich_seed_skips_discovery(self):
+    def test_two_seed_channels_still_need_liveatc_search(self):
+        """Curated seed size alone must not skip LiveATC HTML discovery."""
         from utilities import atc_audio
 
-        # Temporarily give KJFK a second feed so needs_discovery is false.
-        seed = json.loads(atc_audio.SEED_PATH.read_text(encoding="utf-8"))
-        seed["airports"]["KJFK"]["feeds"].append(
-            {"mount": "kjfk_app", "label": "Approach", "kind": "app"}
-        )
+        seed = {
+            "airports": {
+                "KHPN": {
+                    "name": "Westchester",
+                    "feeds": [
+                        {"mount": "khpn_twr", "label": "Tower", "kind": "twr"},
+                        {"mount": "khpn2", "label": "Approach", "kind": "app"},
+                    ],
+                }
+            }
+        }
         atc_audio.SEED_PATH.write_text(json.dumps(seed), encoding="utf-8")
         atc_audio.reset_runtime_for_tests()
-        with mock.patch.object(atc_audio, "probe_feed_mount", side_effect=AssertionError("probed")):
+        self.assertEqual(len(atc_audio._seed_feeds("KHPN")), 2)
+        self.assertTrue(atc_audio.needs_discovery("KHPN"))
+        self.assertFalse(atc_audio._discovery_pass_complete("KHPN"))
+
+    def test_html_search_completes_discovery(self):
+        import time
+
+        from utilities import atc_audio
+
+        live = [
+            {"mount": "kjfk_twr", "label": "Tower", "kind": "twr"},
+            {"mount": "kjfk_gnd", "label": "Ground", "kind": "gnd"},
+            {"mount": "kjfk_app", "label": "Approach", "kind": "app"},
+        ]
+
+        with mock.patch(
+            "utilities.liveatc_client.fetch_search_html", return_value="<html>ok</html>"
+        ), mock.patch(
+            "utilities.liveatc_client.parse_search_html", return_value=live
+        ):
+            payload = atc_audio.channels_payload("KJFK")
+            self.assertTrue(payload["discovering"])
+            for _ in range(50):
+                if not atc_audio.needs_discovery("KJFK"):
+                    break
+                time.sleep(0.1)
             feeds = atc_audio.feeds_for_airport("KJFK")
-        self.assertEqual(len(feeds), 2)
+        mounts = {f["mount"] for f in feeds}
+        self.assertEqual(mounts, {"kjfk_twr", "kjfk_gnd", "kjfk_app"})
+        self.assertFalse(atc_audio.needs_discovery("KJFK"))
+        entry = atc_audio._discovery_entry("KJFK")
+        self.assertTrue(entry.get("html_tried"))
+        self.assertEqual(entry.get("source"), "liveatc-search")
+
+    def test_completed_discovery_pass_skips_further_work(self):
+        import time
+
+        from utilities import atc_audio
+
+        cache = {
+            "KJFK": {
+                "icao": "KJFK",
+                "ts": time.time(),
+                "feeds": [
+                    {"mount": "kjfk_twr", "label": "Tower", "kind": "twr"},
+                    {"mount": "kjfk_gnd", "label": "Ground", "kind": "gnd"},
+                ],
+                "discover_ver": atc_audio._DISCOVER_SET_VERSION,
+                "html_tried": True,
+                "html_ok": True,
+            }
+        }
+        atc_audio.DISCOVERED_CACHE_PATH.write_text(json.dumps(cache), encoding="utf-8")
+        atc_audio._discovered = None
+        with mock.patch(
+            "utilities.liveatc_client.fetch_search_html",
+            side_effect=AssertionError("should not search again"),
+        ):
+            feeds = atc_audio.feeds_for_airport("KJFK")
+        self.assertGreaterEqual(len(feeds), 2)
         self.assertFalse(atc_audio.needs_discovery("KJFK"))
 
     def test_cache_miss_returns_immediately_and_worker_discovers(self):
@@ -240,18 +319,21 @@ class MountDiscoveryTests(unittest.TestCase):
 
         from utilities import atc_audio
 
+        live = [{"mount": "kxyz_twr", "label": "Tower", "kind": "twr"}]
         calls: list[str] = []
 
-        def fake_probe(mount, timeout=2.0):
-            calls.append(mount)
-            return mount == "kxyz_twr"
+        def fake_html(icao, timeout=30.0):
+            calls.append(icao)
+            return "<html>ok</html>"
 
-        with mock.patch.object(atc_audio, "probe_feed_mount", side_effect=fake_probe):
+        with mock.patch(
+            "utilities.liveatc_client.fetch_search_html", side_effect=fake_html
+        ), mock.patch(
+            "utilities.liveatc_client.parse_search_html", return_value=live
+        ):
             feeds = atc_audio.feeds_for_airport("KXYZ")
             self.assertEqual(feeds, [])
-            self.assertEqual(calls, [])  # no synchronous probe
-            payload = atc_audio.channels_payload("KXYZ")
-            self.assertTrue(payload["discovering"])
+            self.assertEqual(calls, [])  # no synchronous search
 
             for _ in range(50):
                 entry = atc_audio._discovery_entry("KXYZ")
@@ -272,9 +354,14 @@ class PackagedSeedTests(unittest.TestCase):
         self._fetch_patch = mock.patch.object(
             atc_audio, "fetch_liveatc_feeds", return_value=[]
         )
+        self._enqueue_patch = mock.patch.object(
+            atc_audio, "enqueue_discovery", return_value=None
+        )
         self._fetch_patch.start()
+        self._enqueue_patch.start()
 
     def tearDown(self):
+        self._enqueue_patch.stop()
         self._fetch_patch.stop()
         from utilities import atc_audio
 
@@ -448,7 +535,7 @@ class PlayerTests(unittest.TestCase):
         ) as ipc, mock.patch.object(atc_audio, "_ensure_system_output_volume"):
             atc_audio.start(override=True)
             atc_audio.set_volume(40)
-        ipc.assert_called_with(["set_property", "volume", 40.0])
+        ipc.assert_called_with(["set_property", "volume", 80.0])
         self.settings.set_atc_volume.assert_called()
 
     def test_set_volume_ipc_without_local_proc(self):
@@ -459,7 +546,7 @@ class PlayerTests(unittest.TestCase):
             atc_audio, "_send_ipc", return_value=True
         ) as ipc, mock.patch.object(atc_audio, "_ensure_system_output_volume"):
             atc_audio.set_volume(55)
-        ipc.assert_called_with(["set_property", "volume", 55.0])
+        ipc.assert_called_with(["set_property", "volume", 110.0])
 
     def test_status_playing_via_remote_ipc(self):
         """Portal status should show Playing when display-owned mpv IPC is up."""
@@ -593,6 +680,81 @@ class PlayerTests(unittest.TestCase):
         self.assertFalse(st["playing"])
         # Still in range — selection unchanged.
         self.settings.set_atc_airport.assert_not_called()
+
+    def test_on_radar_center_changed_starts_tower_when_want_playing(self):
+        """Enabled + want_playing (not currently streaming) still auto-starts Tower."""
+        from utilities import atc_audio
+
+        self.settings.atc_enabled.return_value = True
+        self.settings.atc_want_playing.return_value = True
+        self.settings.atc_airport.return_value = "KSFO"
+        proc = self._fake_proc()
+
+        def _feeds(icao, refresh=False):
+            code = (icao or "").upper()
+            if code == "KORD":
+                return [
+                    {"mount": "kord_app", "label": "Approach", "kind": "app"},
+                    {"mount": "kord_twr", "label": "Tower", "kind": "twr"},
+                ]
+            return [{"mount": "ksfo_twr", "label": "Tower", "kind": "twr"}]
+
+        with mock.patch.object(atc_audio, "in_quiet_hours", return_value=False), mock.patch(
+            "utilities.atc_audio.subprocess.Popen", return_value=proc
+        ) as popen, mock.patch("utilities.atc_audio.time.sleep"), mock.patch.object(
+            atc_audio,
+            "visible_airports",
+            return_value=[
+                {
+                    "ident": "KORD",
+                    "name": "Chicago O'Hare",
+                    "dist_km": 1.0,
+                    "has_feeds": True,
+                    "type": "large_airport",
+                }
+            ],
+        ), mock.patch.object(atc_audio, "feeds_for_airport", side_effect=_feeds), mock.patch.object(
+            atc_audio, "schedule_prefetch_visible_feeds"
+        ), mock.patch.object(atc_audio, "_ensure_system_output_volume"):
+            st = atc_audio.on_radar_center_changed()
+        self.assertTrue(st["playing"])
+        self.assertEqual(st.get("playing_mount"), "kord_twr")
+        self.settings.set_atc_airport.assert_called_with("KORD")
+        self.settings.set_atc_mount.assert_called_with("kord_twr")
+        popen.assert_called_once()
+
+    def test_on_radar_center_changed_no_autostart_when_stopped(self):
+        """Explicit Stop (want_playing cleared) only updates selection."""
+        from utilities import atc_audio
+
+        self.settings.atc_enabled.return_value = True
+        self.settings.atc_want_playing.return_value = False
+        self.settings.atc_airport.return_value = "KSFO"
+
+        with mock.patch.object(
+            atc_audio,
+            "visible_airports",
+            return_value=[
+                {
+                    "ident": "KORD",
+                    "name": "Chicago O'Hare",
+                    "dist_km": 1.0,
+                    "has_feeds": True,
+                    "type": "large_airport",
+                }
+            ],
+        ), mock.patch.object(
+            atc_audio,
+            "feeds_for_airport",
+            return_value=[{"mount": "kord_twr", "label": "Tower", "kind": "twr"}],
+        ), mock.patch.object(atc_audio, "schedule_prefetch_visible_feeds"), mock.patch(
+            "utilities.atc_audio.subprocess.Popen"
+        ) as popen:
+            st = atc_audio.on_radar_center_changed()
+        self.assertFalse(st["playing"])
+        self.settings.set_atc_airport.assert_called_with("KORD")
+        self.settings.set_atc_mount.assert_called_with("kord_twr")
+        popen.assert_not_called()
 
     def test_default_tower_mount(self):
         from utilities.atc_audio import default_tower_mount
