@@ -2835,8 +2835,10 @@ class RoundTouchDisplay:
 
             if not consume_manual_refresh_request():
                 return
-            weather_data.invalidate_cache()
-            weather_data.refresh(force=True)
+            # request_fetch_now clears temperature module caches + rate budget.
+            # invalidate_cache()+refresh(force) alone is not enough — grab_* still
+            # returns the 30m/1h in-process cache and the HUD never changes.
+            weather_data.request_fetch_now()
             radar_hud.rebuild_overlay()
             self._weather_redraw_pending = True
             if self.screen in (SCREEN_CLOCK, SCREEN_CLOCK_SETTINGS, SCREEN_FORECAST):

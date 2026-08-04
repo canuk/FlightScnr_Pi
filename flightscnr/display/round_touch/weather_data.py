@@ -130,10 +130,16 @@ def refresh(force: bool = False) -> dict | None:
     global _CACHE
     now = time.time()
     try:
-        from utilities.temperature import consume_manual_refresh_request
+        from utilities.temperature import (
+            allow_immediate_fetch,
+            consume_manual_refresh_request,
+            invalidate_caches,
+        )
 
         if consume_manual_refresh_request():
             force = True
+            allow_immediate_fetch()
+            invalidate_caches()
             invalidate_cache()
             logger.info("Manual weather refresh requested")
     except Exception:
@@ -178,8 +184,8 @@ def refresh(force: bool = False) -> dict | None:
                 pass
             return cached
 
-    temp_hum = grab_temperature_and_humidity()
-    intervals = grab_forecast("display")
+    temp_hum = grab_temperature_and_humidity(force=force)
+    intervals = grab_forecast("display", force=force)
     try:
         from utilities.temperature import current_weather_code
 
@@ -196,8 +202,11 @@ def refresh(force: bool = False) -> dict | None:
         )
     )
     if no_temp and not intervals:
-        # Avoid retry storms when provider is rate-limiting or temporarily unavailable.
-        payload = _CACHE.get("payload") or {
+        # Keep the last good reading when the provider is rate-limiting.
+        prev = _CACHE.get("payload")
+        if isinstance(prev, dict) and prev.get("ready"):
+            return prev
+        payload = {
             "temp": None,
             "humidity": None,
             "unit": unit_symbol(),
@@ -269,16 +278,26 @@ def unavailable_messages() -> tuple[str, str]:
 
 
 def request_fetch_now() -> dict | None:
-    """Manual refresh: unlock the rate budget and fetch immediately."""
+    """Manual refresh: unlock the rate budget and fetch immediately.
+
+    Does **not** wipe caches before the HTTP call — ``force=True`` already
+    bypasses TTL/rate gates. Clearing first left the HUD empty on 429.
+    """
     try:
-        from utilities.temperature import allow_immediate_fetch, invalidate_caches
+        from utilities.temperature import allow_immediate_fetch
 
         allow_immediate_fetch()
-        invalidate_caches()
     except Exception:
         logger.debug("Manual weather unlock failed", exc_info=True)
-    invalidate_cache()
-    return refresh(force=True)
+    # Prefer realtime-only on manual refresh (1 Tomorrow.io call). Forecast
+    # still refreshes on the :01 schedule — forcing both burns free-tier quota.
+    payload = refresh_current(force=True)
+    logger.info(
+        "Manual weather fetch done ready=%s temp=%s",
+        bool(payload and payload.get("ready")),
+        None if not payload else payload.get("temp"),
+    )
+    return payload
 
 
 def refresh_current(force: bool = False) -> dict | None:
@@ -332,7 +351,7 @@ def refresh_current(force: bool = False) -> dict | None:
             pass
         return cached
 
-    temp_hum = grab_temperature_and_humidity()
+    temp_hum = grab_temperature_and_humidity(force=force)
     temp, humidity = temp_hum if temp_hum else (None, None)
     try:
         realtime_code = current_weather_code()
@@ -344,6 +363,9 @@ def refresh_current(force: bool = False) -> dict | None:
         wind_speed, wind_direction, wind_unit = None, None, "m/s"
 
     base = cached if isinstance(cached, dict) else {}
+    # On rate-limit / failed fetch, keep the previous ready reading.
+    if temp is None and isinstance(base, dict) and base.get("ready") and base.get("temp") is not None:
+        return base
     days = list(base.get("days") or [])
     current_code = realtime_code or (days[0].get("weather_code") if days else None)
     payload = {
