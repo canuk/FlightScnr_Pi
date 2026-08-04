@@ -217,6 +217,11 @@ class TouchInput:
             return (int(self._drag_end[0]), int(self._drag_end[1]))
         return (int(self._start[0]), int(self._start[1]))
 
+    def inject_swipe(self, direction: int):
+        """Queue a swipe from a non-touch source (arcade stick / gamepad)."""
+        if direction != SWIPE_NONE:
+            self._pending_swipe = direction
+
     def cancel_gesture(self):
         """Drop in-progress single-touch tracking (e.g. when a pinch starts)."""
         self._start = None

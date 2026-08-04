@@ -1,0 +1,152 @@
+#!/usr/bin/env python3
+"""Turn the Picade cabinet joystick into a mouse plus a few keys.
+
+Creates two virtual devices through /dev/uinput:
+  - "Picade Virtual Mouse"    : pointer motion + left/right click
+  - "Picade Virtual Keyboard" : Enter, Tab, Space
+
+The stick is all-or-nothing (-127 / 0 / +127), so motion uses an acceleration
+ramp: slow at first for aiming, fast while the direction is held.
+
+No dependencies — standard library only.
+"""
+import fcntl, os, select, struct, sys, time
+
+# ----------------------------------------------------------------- constants
+EV_SYN, EV_KEY, EV_REL = 0x00, 0x01, 0x02
+SYN_REPORT = 0
+REL_X, REL_Y = 0x00, 0x01
+BTN_LEFT, BTN_RIGHT = 0x110, 0x111
+KEY_TAB, KEY_ENTER, KEY_SPACE = 15, 28, 57
+
+UI_SET_EVBIT, UI_SET_KEYBIT, UI_SET_RELBIT = 0x40045564, 0x40045565, 0x40045566
+UI_DEV_CREATE, UI_DEV_DESTROY = 0x5501, 0x5502
+
+EVENT_FMT = 'llHHi'                      # struct input_event
+EVENT_SZ = struct.calcsize(EVENT_FMT)
+UDEV_FMT = '=80sHHHHI256i'               # struct uinput_user_dev
+
+# -------------------------------------------------------------------- settings
+BY_ID = '/dev/input/by-id'
+# Stable paths: eventN numbers shift with USB enumeration order.
+SRC_P1 = f'{BY_ID}/usb-Pimoroni_Picade_Max_E6617C93E362262B-event-joystick'
+SRC_P2 = f'{BY_ID}/usb-Pimoroni_Picade_Max_E6617C93E362262B-if01-event-joystick'
+TICK = 0.015                             # refresh period (s)
+V_START = 1.5                            # initial speed    (px/tick)
+V_MAX = 22.0                             # top speed        (px/tick)
+RAMP = 0.7                               # time to reach top speed (s)
+DIAG = 0.7071                            # diagonal normalisation
+
+# source button -> action. key = (device, code)
+BUTTONS = {
+    (SRC_P1, 306): ('mouse', BTN_LEFT),
+    (SRC_P1, 307): ('mouse', BTN_RIGHT),
+    (SRC_P1, 309): ('kbd', KEY_ENTER),
+    (SRC_P1, 308): ('kbd', KEY_TAB),
+    (SRC_P2, 308): ('kbd', KEY_SPACE),
+}
+
+
+def make_device(name, keys, rel_axes=()):
+    """Create a uinput virtual device and return its file descriptor."""
+    fd = os.open('/dev/uinput', os.O_WRONLY | os.O_NONBLOCK)
+    fcntl.ioctl(fd, UI_SET_EVBIT, EV_KEY)
+    for k in keys:
+        fcntl.ioctl(fd, UI_SET_KEYBIT, k)
+    if rel_axes:
+        fcntl.ioctl(fd, UI_SET_EVBIT, EV_REL)
+        for a in rel_axes:
+            fcntl.ioctl(fd, UI_SET_RELBIT, a)
+    # bustype USB, arbitrary vendor/product
+    payload = struct.pack(UDEV_FMT, name.encode()[:79], 0x03, 0x1209, 0x0001, 1,
+                          0, *([0] * 256))
+    os.write(fd, payload)
+    fcntl.ioctl(fd, UI_DEV_CREATE)
+    return fd
+
+
+def emit(fd, etype, code, value, sync=True):
+    os.write(fd, struct.pack(EVENT_FMT, 0, 0, etype, code, value))
+    if sync:
+        os.write(fd, struct.pack(EVENT_FMT, 0, 0, EV_SYN, SYN_REPORT, 0))
+
+
+def main():
+    mouse = make_device('Picade Virtual Mouse', (BTN_LEFT, BTN_RIGHT),
+                        (REL_X, REL_Y))
+    kbd = make_device('Picade Virtual Keyboard', (KEY_TAB, KEY_ENTER, KEY_SPACE))
+    out = {'mouse': mouse, 'kbd': kbd}
+
+    sources = {}
+    for path in (SRC_P1, SRC_P2):
+        try:
+            sources[os.open(path, os.O_RDONLY | os.O_NONBLOCK)] = path
+        except OSError as exc:
+            print(f"warning: {path} unavailable ({exc})", file=sys.stderr)
+    if not sources:
+        print("no readable input source, giving up", file=sys.stderr)
+        return 1
+
+    dx = dy = 0                  # current direction, -1 / 0 / 1
+    moving_since = None          # when the motion started
+    acc_x = acc_y = 0.0          # fractional accumulators
+
+    try:
+        while True:
+            ready, _, _ = select.select(list(sources), [], [], TICK)
+            for fd in ready:
+                while True:
+                    try:
+                        data = os.read(fd, EVENT_SZ)
+                    except BlockingIOError:
+                        break
+                    if not data or len(data) < EVENT_SZ:
+                        break
+                    _, _, etype, code, value = struct.unpack(EVENT_FMT, data)
+                    path = sources[fd]
+                    if etype == EV_KEY:
+                        action = BUTTONS.get((path, code))
+                        if action:
+                            target, key = action
+                            emit(out[target], EV_KEY, key, 1 if value else 0)
+                    elif etype == 0x03 and path == SRC_P1:         # EV_ABS
+                        step = 0 if value == 0 else (1 if value > 0 else -1)
+                        if code == 0:
+                            dx = step
+                        elif code == 1:
+                            dy = step
+
+            # --- pointer motion ---------------------------------------------
+            if dx or dy:
+                now = time.monotonic()
+                if moving_since is None:
+                    moving_since = now
+                    acc_x = acc_y = 0.0
+                held = now - moving_since
+                speed = V_START + (V_MAX - V_START) * min(held / RAMP, 1.0)
+                if dx and dy:
+                    speed *= DIAG
+                acc_x += dx * speed
+                acc_y += dy * speed
+                mx, my = int(acc_x), int(acc_y)
+                acc_x -= mx
+                acc_y -= my
+                if mx:
+                    emit(mouse, EV_REL, REL_X, mx, sync=False)
+                if my:
+                    emit(mouse, EV_REL, REL_Y, my, sync=False)
+                if mx or my:
+                    emit(mouse, EV_SYN, SYN_REPORT, 0, sync=False)
+            else:
+                moving_since = None
+    except KeyboardInterrupt:
+        pass
+    finally:
+        for fd in (mouse, kbd):
+            fcntl.ioctl(fd, UI_DEV_DESTROY)
+            os.close(fd)
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())

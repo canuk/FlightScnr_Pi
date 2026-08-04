@@ -488,10 +488,10 @@ def apply_round_bezel(surface: pygame.Surface):
     """
     global _bezel_overlay, _bezel_key, _bezel_rects
     size = surface.get_size()
-    key = (size, theme.CENTER_X, theme.CENTER_Y, theme.VISIBLE_RADIUS, theme.BG)
+    key = (size, theme.CENTER_X, theme.CENTER_Y, theme.VISIBLE_RADIUS, theme.BEZEL_BG)
     if _bezel_overlay is None or _bezel_key != key:
         _bezel_overlay = pygame.Surface(size, pygame.SRCALPHA)
-        _bezel_overlay.fill((*theme.BG, 255))
+        _bezel_overlay.fill((*theme.BEZEL_BG, 255))
         pygame.draw.circle(
             _bezel_overlay,
             (0, 0, 0, 0),

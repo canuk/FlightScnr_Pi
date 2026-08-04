@@ -1,4 +1,11 @@
-# FlightScnr Pi
+# FlightScnr Pi (Picade version)
+
+> **Fork note** — this is the `feat/picade` branch, adapting FlightScnr Pi to a
+> [Pimoroni Picade](https://shop.pimoroni.com/products/picade-max) arcade cabinet:
+> a rectangular screen instead of the round panel, and panel buttons plus a
+> joystick-driven pointer instead of a touchscreen.
+> See **[docs/picade.md](docs/picade.md)** for the control mapping.
+> Everything below is the upstream documentation and still applies.
 
 A [round **4in touch display**](https://www.waveshare.com/4inch-dsi-lcd-c.htm?&aff_id=108718) flight tracker for Raspberry Pi. The on-device UI is modeled after my other project, [FlightScnr](https://github.com/yashmulgaonkar/FlightScnr): dark radar aesthetic, animated sweep, map tiles, and gesture navigation. A built-in **web portal** configures everything from your phone or laptop on the same network.
 
