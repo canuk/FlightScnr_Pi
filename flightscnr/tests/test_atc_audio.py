@@ -456,6 +456,8 @@ class PlayerTests(unittest.TestCase):
             mock.patch.object(atc_audio, "fetch_liveatc_feeds", return_value=[]),
             mock.patch.object(atc_audio, "_ensure_system_output_volume"),
             mock.patch.object(atc_audio, "_speaker_ready", return_value=True),
+            # Isolate from any host ATC mpv left running during development.
+            mock.patch.object(atc_audio, "_atc_mpv_pids", return_value=[]),
             mock.patch("utilities.audio_output.ensure_speaker_watch"),
         ]
         for p in self.patches:
@@ -523,6 +525,49 @@ class PlayerTests(unittest.TestCase):
             st = atc_audio.stop()
         self.assertFalse(st["playing"])
         killpg.assert_called()
+
+    def test_stop_reaps_orphan_mpv_without_local_proc(self):
+        """Portal Disable/Stop must kill mpv even when IPC socket is gone."""
+        import signal
+
+        from utilities import atc_audio
+
+        live = {"pids": [4242]}
+
+        def fake_pids():
+            return list(live["pids"])
+
+        def fake_kill(pids, *, sig=signal.SIGTERM):
+            live["pids"] = []
+
+        with mock.patch.object(atc_audio, "_send_ipc", return_value=False), mock.patch.object(
+            atc_audio, "_ipc_responsive", return_value=False
+        ), mock.patch.object(atc_audio, "_atc_mpv_pids", side_effect=fake_pids), mock.patch.object(
+            atc_audio, "_kill_pids", side_effect=fake_kill
+        ) as kill_pids, mock.patch("utilities.atc_audio.time.sleep"):
+            st = atc_audio.stop()
+        self.assertFalse(st["playing"])
+        kill_pids.assert_called()
+        self.assertEqual(kill_pids.call_args_list[0].args[0], [4242])
+
+    def test_mpv_alive_detects_orphan_without_ipc(self):
+        from utilities import atc_audio
+
+        with mock.patch.object(atc_audio, "_ipc_responsive", return_value=False), mock.patch.object(
+            atc_audio, "_atc_mpv_pids", return_value=[99]
+        ):
+            self.assertTrue(atc_audio._mpv_alive())
+
+    def test_reconcile_stops_when_disabled(self):
+        from utilities import atc_audio
+
+        self.settings.atc_enabled.return_value = False
+        self.settings.atc_want_playing.return_value = True
+        with mock.patch.object(atc_audio, "is_playing", return_value=True), mock.patch.object(
+            atc_audio, "stop", return_value={"playing": False}
+        ) as stop:
+            atc_audio.reconcile_enabled_state()
+        stop.assert_called_once_with(clear_override=False)
 
     def test_set_volume_uses_ipc_when_playing(self):
         from utilities import atc_audio

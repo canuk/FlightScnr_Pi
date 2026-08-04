@@ -50,6 +50,14 @@ class RadarHudSettingsTests(unittest.TestCase):
             self.assertEqual(settings.toggle_radar_hud_position(), "bottom")
             self.assertEqual(settings.toggle_radar_hud_position(), "top")
 
+    def test_dark_toggle(self):
+        from display.round_touch import settings
+
+        with mock.patch.object(settings, "_save"):
+            settings._state["radar_hud_dark"] = False
+            self.assertTrue(settings.toggle_radar_hud_dark())
+            self.assertFalse(settings.toggle_radar_hud_dark())
+
     def test_chime_toggle(self):
         from display.round_touch import settings
 

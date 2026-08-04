@@ -247,6 +247,7 @@ _defaults = {
     "radar_hud_enabled": True,
     "radar_hud_position": "top",
     "radar_hud_opacity": 72,
+    "radar_hud_dark": False,
     "radar_hud_arrange": False,  # legacy; arrange is gated by FLIGHTSCNR_HUD_ARRANGE
     "radar_hud_layout_top": copy_radar_hud_layout_top_default(),
     "radar_hud_layout_bottom": copy_radar_hud_layout_bottom_default(),
@@ -451,7 +452,9 @@ def _save(data, *, merge_atc_from_disk: bool = True):
                 for key in _ATC_PRESERVE_KEYS:
                     if key in disk:
                         out[key] = disk[key]
-                        _state[key] = disk[key]
+                        # Module load may call _save before _state is assigned.
+                        if "_state" in globals() and isinstance(_state, dict):
+                            _state[key] = disk[key]
         except (OSError, json.JSONDecodeError, TypeError):
             pass
     try:
@@ -674,6 +677,11 @@ def _load():
     except (TypeError, ValueError):
         state["radar_hud_opacity"] = 72
         migrated = True
+    if "radar_hud_dark" not in data:
+        state["radar_hud_dark"] = False
+        migrated = True
+    else:
+        state["radar_hud_dark"] = bool(state.get("radar_hud_dark"))
     if "radar_hud_arrange" not in data:
         state["radar_hud_arrange"] = False
         migrated = True
@@ -799,6 +807,7 @@ def _settings_snapshot(state: dict) -> tuple:
         bool(state.get("radar_hud_enabled", True)),
         str(state.get("radar_hud_position") or "top"),
         clamp_radar_hud_opacity(state.get("radar_hud_opacity", 72)),
+        bool(state.get("radar_hud_dark", False)),
         bool(radar_hud_arrange_debug_enabled()),
         tuple(
             sorted(
@@ -1241,6 +1250,12 @@ def set_map_style(value: str) -> str:
         map_bg.prewarm_all_scales()
     except Exception:
         logger.debug("Map style invalidate/prewarm failed", exc_info=True)
+    try:
+        from display.round_touch import route_map
+
+        route_map.invalidate_basemap_cache()
+    except Exception:
+        logger.debug("Route map style invalidate failed", exc_info=True)
     return style
 
 
@@ -1897,6 +1912,20 @@ def set_radar_hud_opacity(value: int, *, persist: bool = True) -> int:
     else:
         _disk_synced = False
     return pct
+
+
+def radar_hud_dark() -> bool:
+    return bool(_state.get("radar_hud_dark", False))
+
+
+def set_radar_hud_dark(enabled: bool) -> None:
+    _state["radar_hud_dark"] = bool(enabled)
+    _save(_state)
+
+
+def toggle_radar_hud_dark() -> bool:
+    set_radar_hud_dark(not radar_hud_dark())
+    return radar_hud_dark()
 
 
 def radar_hud_arrange() -> bool:

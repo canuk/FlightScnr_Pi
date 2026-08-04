@@ -972,7 +972,71 @@ def _mpv_alive() -> bool:
         _playing_mount = None
         _playing_airport = None
         _quiet_override = False
-    return _ipc_responsive()
+    if _ipc_responsive():
+        return True
+    # Orphan: socket was unlinked (or never reachable) but mpv still streams.
+    return bool(_atc_mpv_pids())
+
+
+def _atc_mpv_marker() -> str:
+    """Unique cmdline token for FlightScnr ATC mpv instances."""
+    return f"--input-ipc-server={IPC_PATH}"
+
+
+def _atc_mpv_pids() -> list[int]:
+    """PIDs of mpv processes started for ATC (matched by our IPC server path)."""
+    marker = _atc_mpv_marker()
+    found: list[int] = []
+    try:
+        proc_dirs = os.listdir("/proc")
+    except OSError:
+        return found
+    for name in proc_dirs:
+        if not name.isdigit():
+            continue
+        pid = int(name)
+        try:
+            with open(f"/proc/{pid}/cmdline", "rb") as fh:
+                raw = fh.read()
+        except OSError:
+            continue
+        if not raw:
+            continue
+        cmdline = raw.replace(b"\0", b" ").decode("utf-8", errors="replace")
+        if "mpv" not in cmdline or marker not in cmdline:
+            continue
+        found.append(pid)
+    return found
+
+
+def _kill_pids(pids: list[int], *, sig: int = signal.SIGTERM) -> None:
+    for pid in pids:
+        try:
+            os.kill(pid, sig)
+        except (ProcessLookupError, PermissionError, OSError):
+            try:
+                os.killpg(pid, sig)
+            except (ProcessLookupError, PermissionError, OSError):
+                pass
+
+
+def _reap_atc_mpv_orphans(*, wait_s: float = 1.5) -> None:
+    """Kill ATC mpv processes that outlived IPC / local Popen handles."""
+    pids = _atc_mpv_pids()
+    if not pids:
+        return
+    logger.info("ATC stopping orphan mpv pids=%s", pids)
+    _kill_pids(pids, sig=signal.SIGTERM)
+    deadline = time.time() + max(0.1, wait_s)
+    while time.time() < deadline:
+        remaining = _atc_mpv_pids()
+        if not remaining:
+            return
+        time.sleep(0.05)
+    remaining = _atc_mpv_pids()
+    if remaining:
+        logger.warning("ATC force-killing mpv pids=%s", remaining)
+        _kill_pids(remaining, sig=signal.SIGKILL)
 
 
 def _mpv_log_tail(max_chars: int = 400) -> str:
@@ -1157,6 +1221,10 @@ def stop(*, clear_override: bool = True) -> dict:
         deadline = time.time() + 1.5
         while time.time() < deadline and _ipc_responsive():
             time.sleep(0.05)
+    # Cross-process / failed-IPC path: never leave a LiveATC mpv streaming after
+    # Disable or Stop. A prior stop that unlinked the socket without killing mpv
+    # used to orphan playback while settings showed Disabled.
+    _reap_atc_mpv_orphans()
     try:
         if os.path.exists(IPC_PATH):
             os.unlink(IPC_PATH)
@@ -1362,6 +1430,27 @@ def maybe_resume_when_speaker_ready() -> dict:
     return start(override=bool(forced))
 
 
+def reconcile_enabled_state() -> dict:
+    """Stop leftover mpv when ATC is disabled or no longer intended to play.
+
+    The web portal and display are separate processes; Disable/Stop from the
+    portal may clear settings while the display-owned mpv keeps streaming
+    (especially if the IPC socket was already unlinked). Call from the speaker
+    watch and after settings reload so orphans cannot outlive the UI toggle.
+    """
+    settings = _settings()
+    if settings.atc_enabled() and settings.atc_want_playing():
+        return status()
+    if is_playing() or _atc_mpv_pids():
+        logger.info(
+            "ATC reconcile — stopping (enabled=%s want=%s)",
+            settings.atc_enabled(),
+            settings.atc_want_playing(),
+        )
+        return stop(clear_override=False)
+    return status()
+
+
 def maybe_keepalive() -> dict:
     """Restart mpv when NVS says we should be playing but the process died.
 
@@ -1373,7 +1462,7 @@ def maybe_keepalive() -> dict:
     settings = _settings()
     if not settings.atc_enabled() or not settings.atc_want_playing():
         _keepalive_failures = 0
-        return status()
+        return reconcile_enabled_state()
     if is_playing():
         _keepalive_failures = 0
         return status()
@@ -1434,7 +1523,8 @@ def maybe_resume_after_boot(
 
     settings = _settings()
     if not settings.atc_enabled() or not settings.atc_want_playing():
-        return status()
+        # Clear orphans left behind by a prior Disable/Stop that lost the IPC socket.
+        return reconcile_enabled_state()
     if not settings.atc_airport():
         return status()
 

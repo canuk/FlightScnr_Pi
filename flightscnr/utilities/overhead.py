@@ -832,6 +832,9 @@ class Overhead:
         self._tracked_was_live = False       # was the flight live last poll?
         self._tracked_miss_count = 0         # consecutive polls with no result
         self._TRACKED_MISS_THRESHOLD = 3     # fallback miss threshold (no ETA)
+        # Full FR24 find+details every DATA_REFRESH (~2s) starved radar prewarm;
+        # reuse last-good live data between polls.
+        self._TRACKED_POLL_MIN_S = 9.0
         self._tracked_last_callsign = ""     # last callsign we polled for
         self._tracked_last_eta = None        # last known estimated arrival (unix ts)
         self._tracked_last_data = None       # last known good tracked data
@@ -1587,6 +1590,10 @@ class Overhead:
                                 flight_number=sched_number,
                                 callsign=sched_cs,
                             )
+                            origin_code = sched.get("origin", "") or ""
+                            dest_code = sched.get("destination", "") or ""
+                            origin_coords = _airport_coords(origin_code)
+                            dest_coords = _airport_coords(dest_code)
                             tracked_data = {
                                 "callsign": sched_cs,
                                 "number": sched_number,
@@ -1594,10 +1601,11 @@ class Overhead:
                                 "airline_name": marketing_brand_name(sched_number) or "",
                                 "owner_icao": airline_icao,
                                 "airline_icao": airline_icao,
+                                "icao_hex": "",
                                 "is_live": False,
                                 "is_scheduled": True,
-                                "origin": sched.get("origin", ""),
-                                "destination": sched.get("destination", ""),
+                                "origin": origin_code,
+                                "destination": dest_code,
                                 "dep_time": sched.get("dep_time", ""),
                                 "arr_time": sched.get("arr_time", ""),
                                 "schedule_status": sched.get("status", ""),
@@ -1612,8 +1620,10 @@ class Overhead:
                                 "latitude": None,
                                 "longitude": None,
                                 "last_seen_ts": 0,
-                                "dest_lat": 0,
-                                "dest_lon": 0,
+                                "origin_lat": origin_coords.get("lat") or 0,
+                                "origin_lon": origin_coords.get("lon") or 0,
+                                "dest_lat": dest_coords.get("lat") or 0,
+                                "dest_lon": dest_coords.get("lon") or 0,
                             }
 
             # Keep schedule cache even after flight goes live — arr_time_utc
@@ -1712,8 +1722,20 @@ class Overhead:
         match = None
 
         try:
+            # Reuse recent live tracked data so every DATA_REFRESH does not pay
+            # for another find_by_callsign + FlightDetails round-trip (~1–2s).
+            # Callsign changes clear _tracked_last_data before we get here.
+            last = self._tracked_last_data
+            if last and last.get("is_live"):
+                try:
+                    age = time() - float(last.get("last_seen_ts") or 0)
+                except (TypeError, ValueError):
+                    age = self._TRACKED_POLL_MIN_S
+                if 0 <= age < self._TRACKED_POLL_MIN_S:
+                    return dict(last)
+
             # Prefer registration filter for tail numbers; callsign otherwise.
-            # Always fetch a fresh live position — the zone feed cache can be ~90s stale.
+            # Zone feed cache can be ~90s stale — still poll FR24, just less often.
             if looks_like_registration(original):
                 match = self._api.find_by_registration(original)
                 if not match:
@@ -1839,6 +1861,24 @@ class Overhead:
             if brand:
                 airline_name = brand
 
+            icao_hex = ""
+            try:
+                from utilities.aircraft_photo import normalize_icao_hex
+
+                icao_hex = normalize_icao_hex(getattr(match, "icao_hex", None) or "")
+                if not icao_hex:
+                    raw_hex = self.safe_get(
+                        flight_details, "aircraft_info", "icao_address", default=""
+                    )
+                    icao_hex = normalize_icao_hex(raw_hex)
+            except Exception:
+                raw_hex = (
+                    self.safe_get(flight_details, "aircraft_info", "icao_address", default="")
+                    or getattr(match, "icao_hex", None)
+                    or ""
+                )
+                icao_hex = str(raw_hex).strip().upper().replace("0X", "")
+
             return {
                 "callsign": display_callsign,
                 "registration": registration,
@@ -1847,10 +1887,13 @@ class Overhead:
                 "airline_name": airline_name,
                 "owner_icao": owner_icao,
                 "airline_icao": airline_icao,
+                "icao_hex": icao_hex,
                 "is_live": True,
                 "has_landed": has_landed,
                 "origin": match.origin_airport_iata or "",
                 "destination": match.destination_airport_iata or "",
+                "origin_lat": origin_lat or 0,
+                "origin_lon": origin_lon or 0,
                 "dest_lat": dest_lat or 0,
                 "dest_lon": dest_lon or 0,
                 "aircraft_type": aircraft_type,

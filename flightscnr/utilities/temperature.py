@@ -689,10 +689,13 @@ def _return_temperature():
     return _convert_temperature(temp, "metric"), humidity
 
 
-def grab_temperature_and_humidity():
+def grab_temperature_and_humidity(*, force: bool = False):
     """
     Fetch current temperature and humidity.
     Returns cached data if called within the cache TTL or rate limit window.
+
+    ``force=True`` skips the in-memory TTL and shared rate budget (manual
+    refresh / location change). Still subject to Tomorrow.io's real quotas.
     """
     global _cached_temp, _cached_temp_ts, _cached_temp_units, _cached_weather_code
 
@@ -712,12 +715,16 @@ def grab_temperature_and_humidity():
     units = _temperature_units()
 
     # Return cache if still fresh (convert if display units changed)
-    if _cached_temp and (time.time() - _cached_temp_ts) < _TEMP_CACHE_TTL:
+    if (
+        not force
+        and _cached_temp
+        and (time.time() - _cached_temp_ts) < _TEMP_CACHE_TTL
+    ):
         _ensure_wind()
         return _return_temperature()
 
     # Rate limit check
-    if _rate_limited("temp"):
+    if not force and _rate_limited("temp"):
         logger.debug("Rate limit: skipping temperature API call, using cache")
         if _cached_temp:
             _ensure_wind()
@@ -943,10 +950,12 @@ def _fetch_forecast_via_weather_endpoint(tag: str) -> list:
     return _store_forecast_intervals(intervals)
 
 
-def grab_forecast(tag="unknown"):
+def grab_forecast(tag="unknown", *, force: bool = False):
     """
     Fetch daily forecast data.
     Returns cached data if called within the cache TTL or rate limit window.
+
+    ``force=True`` skips the in-memory TTL and shared rate budget (manual refresh).
     """
     global _cached_forecast, _cached_forecast_ts, _cached_forecast_units
 
@@ -958,12 +967,16 @@ def grab_forecast(tag="unknown"):
         return []
 
     # Return cache if still fresh (convert if display units changed)
-    if _cached_forecast and (time.time() - _cached_forecast_ts) < _FORECAST_CACHE_TTL:
+    if (
+        not force
+        and _cached_forecast
+        and (time.time() - _cached_forecast_ts) < _FORECAST_CACHE_TTL
+    ):
         if _forecast_from_today(_cached_forecast):
             return _return_forecast()
 
     # Rate limit check
-    if _rate_limited("forecast"):
+    if not force and _rate_limited("forecast"):
         logger.debug(f"[Forecast:{tag}] Rate limit: skipping API call, using cache")
         if _cached_forecast:
             return _return_forecast()

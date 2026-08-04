@@ -87,6 +87,7 @@ DISPLAY_ACTIONS = (
 HUD_ACTIONS = (
     "radar_hud",
     "hud_position",
+    "hud_dark",
     "hud_opacity",
     "hourly_chime",
     "chime_volume",
@@ -1432,11 +1433,13 @@ def _display_row_labels() -> list[str]:
 def _hud_row_labels() -> list[str]:
     hud = "on" if settings.radar_hud_enabled() else "off"
     hud_pos = settings.radar_hud_position()
+    hud_style = "dark" if settings.radar_hud_dark() else "light"
     chime = "on" if settings.hourly_chime_enabled() else "off"
     # HUD opacity / chime volume are drawn as sliders; placeholders align rows.
     return [
         f"HUD: {hud}",
         f"Clock Position: {hud_pos}",
+        f"HUD Style: {hud_style}",
         "",  # HUD opacity slider
         f"Hourly Chime: {chime}",
         "",  # chime volume slider

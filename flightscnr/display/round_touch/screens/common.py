@@ -78,7 +78,9 @@ def draw_logo(
     if photo_path:
         from display.round_touch import aircraft_photos
 
-        max_h = theme.s(108) if logo_h is None else max(logo_h, theme.s(72))
+        # Honor an explicit logo_h so compact screens (Track) can leave room
+        # for other content; default stays tall for Flight Detail.
+        max_h = theme.s(108) if logo_h is None else max(1, int(logo_h))
         # Leave side margins on the round bezel so the photo isn't clipped.
         max_w = int(theme.VISIBLE_RADIUS * 1.45)
         photo = aircraft_photos.load_photo_surface(

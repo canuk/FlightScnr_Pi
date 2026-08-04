@@ -40,6 +40,7 @@ from display.round_touch import (
     radar_hud,
     rainviewer_overlay,
     rotation,
+    route_map,
     scale,
     settings,
     theme,
@@ -697,6 +698,9 @@ class RoundTouchDisplay:
                 self.overhead.tracked_data,
                 self.flights,
             )
+            if display_data:
+                display_data = self._merge_tracked_aircraft_photo(display_data)
+                self._maybe_fetch_tracked_aircraft_photo(display_data)
             self._scroll.max_offset = tracked.draw_tracked(
                 self.surface,
                 display_data,
@@ -1173,6 +1177,9 @@ class RoundTouchDisplay:
             radar.invalidate_frame_layer()
         elif action == "hud_position":
             settings.toggle_radar_hud_position()
+            radar.invalidate_frame_layer()
+        elif action == "hud_dark":
+            settings.toggle_radar_hud_dark()
             radar.invalidate_frame_layer()
         elif action == "hud_opacity":
             return
@@ -1943,6 +1950,76 @@ class RoundTouchDisplay:
         merged["photo_path"] = photo.get("path") or ""
         merged["photo_credit"] = photo_credit_line(photo)
         return merged
+
+    def _merge_tracked_aircraft_photo(self, flight: dict) -> dict:
+        """Like Flight Detail merge, but reject Commons *generic* type fallbacks."""
+        from utilities.aircraft_photo import normalize_icao_hex, photo_credit_line
+
+        hex_id = normalize_icao_hex(flight.get("icao_hex") or flight.get("hex"))
+        if not hex_id:
+            return flight
+        photo = self._aircraft_photos.get(hex_id)
+        # Accept airframe + airline_type; reject bare type (wrong livery).
+        if not photo or photo.get("match") == "type":
+            return flight
+        merged = dict(flight)
+        merged["photo_path"] = photo.get("path") or ""
+        merged["photo_credit"] = photo_credit_line(photo)
+        return merged
+
+    def _maybe_fetch_tracked_aircraft_photo(self, flight: dict) -> None:
+        """Fetch airframe or airline-matched photo — never generic type images."""
+        from utilities.aircraft_photo import (
+            fetch_aircraft_photo_for,
+            get_cached_aircraft_photo,
+            normalize_icao_hex,
+        )
+
+        hex_id = normalize_icao_hex(flight.get("icao_hex") or flight.get("hex"))
+        if not hex_id:
+            return
+        if hex_id in self._aircraft_photos:
+            # Drop a previously merged Commons type photo so Track can retry.
+            if self._aircraft_photos[hex_id].get("match") == "type":
+                del self._aircraft_photos[hex_id]
+            else:
+                return
+        if hex_id in self._aircraft_photo_miss:
+            return
+        if hex_id in self._aircraft_photo_inflight:
+            return
+
+        cached = get_cached_aircraft_photo(hex_id)
+        if cached and cached.get("match") != "type":
+            self._bound(self._aircraft_photos)
+            self._aircraft_photos[hex_id] = cached
+            self._aircraft_photo_redraw = True
+            return
+
+        self._aircraft_photo_inflight.add(hex_id)
+        snapshot = dict(flight)
+
+        def _work():
+            try:
+                photo = fetch_aircraft_photo_for(
+                    snapshot, allow_type_fallback=False
+                )
+                if photo and photo.get("path") and photo.get("match") != "type":
+                    self._bound(self._aircraft_photos)
+                    self._aircraft_photos[hex_id] = photo
+                    self._aircraft_photo_redraw = True
+                    logger.info(
+                        "[photo] track ready for %s (%s)",
+                        hex_id,
+                        photo.get("match") or "?",
+                    )
+                else:
+                    self._bound(self._aircraft_photo_miss)
+                    self._aircraft_photo_miss.add(hex_id)
+            finally:
+                self._aircraft_photo_inflight.discard(hex_id)
+
+        Thread(target=_work, daemon=True).start()
 
     def _merge_vessel_photo(self, vessel: dict) -> dict:
         from utilities.vessel_photo import vessel_photo_cache_key
@@ -2828,8 +2905,10 @@ class RoundTouchDisplay:
 
             if not consume_manual_refresh_request():
                 return
-            weather_data.invalidate_cache()
-            weather_data.refresh(force=True)
+            # request_fetch_now clears temperature module caches + rate budget.
+            # invalidate_cache()+refresh(force) alone is not enough — grab_* still
+            # returns the 30m/1h in-process cache and the HUD never changes.
+            weather_data.request_fetch_now()
             radar_hud.rebuild_overlay()
             self._weather_redraw_pending = True
             if self.screen in (SCREEN_CLOCK, SCREEN_CLOCK_SETTINGS, SCREEN_FORECAST):
@@ -2925,6 +3004,14 @@ class RoundTouchDisplay:
             self._weather_redraw_pending = True
         except Exception:
             logger.debug("Weather refresh after settings reload failed", exc_info=True)
+        # Portal Disable/Stop updates JSON in the web process; stop display-owned
+        # mpv here so audio cannot keep playing after ATC is turned off.
+        try:
+            from utilities import atc_audio
+
+            atc_audio.reconcile_enabled_state()
+        except Exception:
+            logger.debug("ATC reconcile after settings reload failed", exc_info=True)
         radar.invalidate_frame_layer()
         self._safe_draw()
 
@@ -3361,8 +3448,14 @@ class RoundTouchDisplay:
                     self._route_enrich_redraw = False
                     self._safe_draw()
 
-                if self._aircraft_photo_redraw and self.screen == SCREEN_FLIGHT:
+                if self._aircraft_photo_redraw and self.screen in (
+                    SCREEN_FLIGHT,
+                    SCREEN_TRACKED,
+                ):
                     self._aircraft_photo_redraw = False
+                    self._safe_draw()
+
+                if route_map.basemap_needs_redraw() and self.screen == SCREEN_TRACKED:
                     self._safe_draw()
 
                 if self._vessel_photo_redraw and self.screen == SCREEN_FLIGHT:
@@ -3421,8 +3514,10 @@ class RoundTouchDisplay:
                         # Rebuild + pre-rotate the ~10Hz aircraft layer on a
                         # worker thread (same model as 9a130e7). Inline rebuilds
                         # on this loop made the sweep hitch every layer TTL.
-                        # Skip while _grab holds the GIL so prewarm and merge
-                        # don't stack into a multi-hundred-ms unmarked stall.
+                        # Prewarm even while _grab is in flight: most of that
+                        # work is network (GIL released). Blocking here froze
+                        # dead-reckoned markers for the whole tracked-poll HTTPS
+                        # window. Grabs still cannot stack (one processing lock).
                         # Always prewarm while on radar — show_sweep_line only
                         # controls the beam visual; without this the static
                         # layer never refreshes and traffic freezes.
@@ -3430,7 +3525,6 @@ class RoundTouchDisplay:
                             not self._calibrating_facing
                             and not self._panning_map
                             and not self._radar_modal_active()
-                            and not self.overhead.processing
                             and radar.frame_layer_due()
                             and (
                                 self._prewarm_thread is None

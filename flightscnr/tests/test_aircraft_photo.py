@@ -28,6 +28,9 @@ class TestAircraftPhoto(unittest.TestCase):
         self.assertEqual(aircraft_photo.normalize_icao_hex("0x3C66B3"), "3c66b3")
         self.assertEqual(aircraft_photo.normalize_icao_hex(""), "")
         self.assertEqual(aircraft_photo.normalize_icao_hex("abc"), "")
+        # FR24 details often return Mode-S as a decimal int / digit string.
+        self.assertEqual(aircraft_photo.normalize_icao_hex(11108925), "a9823d")
+        self.assertEqual(aircraft_photo.normalize_icao_hex("11108925"), "a9823d")
 
     def test_normalize_type_code(self):
         self.assertEqual(aircraft_photo.normalize_type_code("EC45"), "EC45")

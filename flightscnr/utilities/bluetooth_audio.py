@@ -762,6 +762,9 @@ def set_as_default_sink(mac: str) -> bool:
     return _set_default_sink(sink)
 
 
+_USB_PULSE_SINK_NAME = "flightscnr_usb"
+
+
 def find_usb_sink() -> dict | None:
     """Prefer a non-Bluetooth sink (USB / local) for ATC and chime."""
     sinks = list_audio_sinks()
@@ -774,15 +777,102 @@ def find_usb_sink() -> dict | None:
         return None
     for sink in non_bt:
         blob = f"{sink.get('name', '')} {sink.get('description', '')}".lower()
-        if "usb" in blob:
+        if "usb" in blob or sink.get("name") == _USB_PULSE_SINK_NAME:
             return sink
     # Skip obvious HDMI/headphone placeholders when a better sink exists.
     for sink in non_bt:
         blob = f"{sink.get('name', '')} {sink.get('description', '')}".lower()
         if "hdmi" in blob or "headphones" in blob or "bcm2835" in blob:
             continue
+        if "mailbox" in blob or "built-in" in blob:
+            continue
         return sink
     return non_bt[0]
+
+
+def _alsa_usb_card_index() -> int | None:
+    try:
+        from utilities.audio_output import list_playback_devices
+
+        devices = list_playback_devices(usb_only=True)
+    except Exception:
+        return None
+    if not devices:
+        return None
+    try:
+        return int(devices[0]["card"])
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def ensure_usb_pulse_sink() -> dict | None:
+    """Ensure a Pulse/PipeWire sink exists for the USB speaker.
+
+    Cheap USB gadgets (e.g. Jieli UACDemo) often show up as an ALSA card with
+    WirePlumber profile stuck on ``off`` and *no* sink. ATC then plays to the
+    built-in bcm2835 Headphones sink silently. Load ``module-alsa-sink`` as a
+    fallback so ``use_usb_output`` can set a real default.
+    """
+    sink = find_usb_sink()
+    if sink is not None:
+        name = str(sink.get("name") or "")
+        blob = f"{name} {sink.get('description', '')}".lower()
+        # Prefer a real USB sink over the leftover built-in mailbox sink.
+        if "usb" in blob or name == _USB_PULSE_SINK_NAME:
+            return sink
+        if "mailbox" not in blob and "headphones" not in blob and "hdmi" not in blob:
+            return sink
+
+    card = _alsa_usb_card_index()
+    if card is None:
+        return find_usb_sink()
+
+    # Drop a previous FlightScnr ALSA sink module if present (by sink name).
+    for existing in list_audio_sinks():
+        if existing.get("name") == _USB_PULSE_SINK_NAME:
+            # Already loaded under our name — just return it.
+            return existing
+
+    proc = _run_as_audio_user(
+        [
+            "pactl",
+            "load-module",
+            "module-alsa-sink",
+            f"device=plughw:{card},0",
+            f"sink_name={_USB_PULSE_SINK_NAME}",
+            "sink_properties=device.description=FlightScnr_USB_Speaker",
+        ],
+        timeout=6.0,
+    )
+    if proc.returncode != 0:
+        logger.warning(
+            "Could not load USB ALSA sink for card %s: %s",
+            card,
+            (proc.stderr or proc.stdout or "").strip(),
+        )
+        return find_usb_sink()
+    time.sleep(0.35)
+    for sink in list_audio_sinks():
+        if sink.get("name") == _USB_PULSE_SINK_NAME:
+            return sink
+    return find_usb_sink()
+
+
+def _move_streams_to_sink(sink: dict) -> None:
+    """Move active sink-inputs (e.g. mpv) onto ``sink`` after a route change."""
+    target = str(sink.get("name") or sink.get("id") or "").strip()
+    if not target:
+        return
+    proc = _run_as_audio_user(["pactl", "list", "short", "sink-inputs"], timeout=4.0)
+    if proc.returncode != 0 or not (proc.stdout or "").strip():
+        return
+    for line in proc.stdout.splitlines():
+        parts = line.split()
+        if not parts:
+            continue
+        _run_as_audio_user(
+            ["pactl", "move-sink-input", parts[0], target], timeout=4.0
+        )
 
 
 def audio_route() -> str:
@@ -809,7 +899,7 @@ def use_usb_output(*, disconnect_bluetooth: bool = True) -> dict:
     if disconnect_bluetooth and preferred_mac() and is_connected():
         # Leave preferred MAC set so the user can switch back to Bluetooth.
         _bluetoothctl("disconnect", preferred_mac(), timeout=15.0)
-    sink = find_usb_sink()
+    sink = ensure_usb_pulse_sink()
     if sink is None:
         _set_error("No USB / local audio sink found")
         _notify_speaker_change(connected=False)
@@ -817,6 +907,7 @@ def use_usb_output(*, disconnect_bluetooth: bool = True) -> dict:
     if not _set_default_sink(sink):
         _set_error("Could not set USB / local audio as default")
         return status()
+    _move_streams_to_sink(sink)
     try:
         from utilities import atc_audio
 
@@ -1078,7 +1169,20 @@ def _watch_loop() -> None:
     ensure_adapter_powered()
     if audio_route() == "bluetooth":
         maybe_reconnect_preferred()
+    elif audio_route() == "usb":
+        try:
+            use_usb_output(disconnect_bluetooth=False)
+        except Exception:
+            logger.debug("USB audio ensure on watch start failed", exc_info=True)
     while not _watch_stop.wait(_RECONNECT_POLL_S):
+        if audio_route() == "usb":
+            try:
+                sink = ensure_usb_pulse_sink()
+                if sink is not None:
+                    _set_default_sink(sink)
+            except Exception:
+                logger.debug("USB audio watch tick failed", exc_info=True)
+            continue
         if audio_route() != "bluetooth":
             continue
         mac = preferred_mac()
@@ -1093,16 +1197,18 @@ def _watch_loop() -> None:
             logger.info("Bluetooth speaker %s offline — reconnecting", mac)
             maybe_reconnect_preferred()
         except Exception:
-            logger.debug("Bluetooth reconnect watch failed", exc_info=True)
+            logger.debug("Bluetooth watch tick failed", exc_info=True)
 
 
 def ensure_reconnect_watch() -> None:
-    """Start a daemon that re-connects the preferred Bluetooth speaker."""
-    if not available():
+    """Start a daemon that keeps Bluetooth reconnect / USB sink routing healthy."""
+    route = audio_route()
+    want_bt = route == "bluetooth" and available() and bool(preferred_mac())
+    want_usb = route == "usb"
+    if not want_bt and not want_usb:
         return
-    ensure_pair_agent()
-    if not preferred_mac():
-        return
+    if want_bt:
+        ensure_pair_agent()
     global _watch_thread
     with _watch_lock:
         if _watch_thread is not None and _watch_thread.is_alive():
