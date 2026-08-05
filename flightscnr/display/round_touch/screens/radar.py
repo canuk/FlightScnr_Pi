@@ -451,6 +451,9 @@ def draw_radar(
                     raise
             # Pill is no longer baked into the layer — draw full HUD + popover.
             radar_hud.draw_hud(surface, include_popover=True, draw_pill=True)
+            from display.round_touch import update_bubble
+
+            update_bubble.draw_bubble(surface)
             bezel_applied = True
         elif layer is not None:
             # Fast present composites from this layer directly; skip the unused
@@ -472,6 +475,9 @@ def draw_radar(
                     width=max(2, theme.s(2)),
                 )
             radar_hud.draw_hud(surface, include_popover=True)
+            from display.round_touch import update_bubble
+
+            update_bubble.draw_bubble(surface)
             if aircraft_alert.rim_flash_active():
                 _draw_alert_rim_flash(surface)
         # Sweep is composited in present() on the fast path so we can skip a
