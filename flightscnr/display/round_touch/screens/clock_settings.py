@@ -25,13 +25,13 @@ def tap_footer_action(x: int, y: int) -> str | None:
     return FOOTER_BUTTONS[idx]
 
 
-def _rows() -> list[tuple[str, str]]:
+def _rows() -> list[tuple[str, str | None]]:
+    """(label, value) per row; value None means the row draws a switch."""
     tz = time.tzname[0] if time.tzname else "Local"
-    auto = "on" if settings.auto_timezone_enabled() else "off"
     fmt = "12 hr" if settings.use_12hr_clock() else "24 hr"
     return [
         ("Time format", fmt),
-        ("Auto timezone", auto),
+        ("Auto timezone", None),
         ("Timezone", tz),
     ]
 
@@ -65,6 +65,21 @@ def apply_row(row: int) -> None:
                 pass
 
 
+def _draw_toggle_row(surface, label: str, y: int, font) -> None:
+    gap = theme.s(10)
+    switch_w, switch_h = draw.toggle_switch_size(font)
+    text_w, text_h = font.size(label)
+    left_x = theme.CENTER_X - (text_w + gap + switch_w) // 2
+    surface.blit(font.render(label, True, theme.MUTED), (left_x, y))
+    switch = pygame.Rect(
+        left_x + text_w + gap,
+        int(y + (text_h - switch_h) // 2),
+        switch_w,
+        switch_h,
+    )
+    draw.draw_toggle_switch(surface, switch, settings.auto_timezone_enabled())
+
+
 def draw_clock_settings(surface):
     draw.fill_background(surface)
     nav.draw_breadcrumb(surface, ["Radar", "Clock", "Settings"])
@@ -77,6 +92,8 @@ def draw_clock_settings(surface):
 
     row_h = body_font.get_height() + theme.s(10)
     for label, value in _rows():
-        line = f"{label}: {value}"
-        draw.draw_center_line(surface, line, y, body_font, theme.MUTED)
+        if value is None:
+            _draw_toggle_row(surface, label, y, body_font)
+        else:
+            draw.draw_center_line(surface, f"{label}: {value}", y, body_font, theme.MUTED)
         y += row_h
