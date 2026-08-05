@@ -46,6 +46,7 @@ from display.round_touch import (
     touch_debug,
     video,
     wildfire_overlay,
+    update_bubble,
 )
 from utilities import aircraft_alert
 from display.round_touch import alert_sounds
@@ -237,6 +238,31 @@ class RoundTouchDisplay:
         self._pending_wifi_setup = enter_setup
         self._apply_brightness()
         self._safe_draw()
+        Thread(
+            target=self._update_check_loop,
+            name="update-check",
+            daemon=True,
+        ).start()
+
+    def _update_check_loop(self) -> None:
+        """Force-check GitHub for updates about three times per day."""
+        from utilities import updater
+
+        # Let the boot splash finish before the first network check.
+        time.sleep(max(0.5, BOOT_SPLASH_S + 1.0))
+        while True:
+            try:
+                wait_s = float(updater.seconds_until_next_check())
+                if wait_s > 0:
+                    time.sleep(min(wait_s, updater.CHECK_INTERVAL_S))
+                    continue
+                updater.check_for_update(force=True)
+                update_bubble.invalidate_cache()
+            except Exception:
+                logger.debug("Periodic update check failed", exc_info=True)
+                time.sleep(300.0)
+                continue
+            time.sleep(updater.CHECK_INTERVAL_S)
 
     def _resume_atc_after_boot(self) -> None:
         try:
@@ -2724,19 +2750,25 @@ class RoundTouchDisplay:
                     self._note_activity()
                     self._safe_draw()
                 else:
-                    hud_action = radar_hud.handle_tap(tap[0], tap[1])
-                    if hud_action is not None:
+                    bubble_action = update_bubble.handle_tap(tap[0], tap[1])
+                    if bubble_action == "dismiss":
                         self._note_activity()
-                        if hud_action == "slider":
-                            self._apply_radar_hud_volume(tap[0], persist=True)
-                        elif hud_action == "atc":
-                            self._toggle_radar_hud_atc()
-                            radar.invalidate_frame_layer()
-                        elif hud_action in ("chime", "speaker", "dismiss"):
-                            radar.invalidate_frame_layer()
+                        radar.invalidate_frame_layer()
                         self._safe_draw()
-                    elif self._open_flight_or_fire_at(tap[0], tap[1]):
-                        self._safe_draw()
+                    else:
+                        hud_action = radar_hud.handle_tap(tap[0], tap[1])
+                        if hud_action is not None:
+                            self._note_activity()
+                            if hud_action == "slider":
+                                self._apply_radar_hud_volume(tap[0], persist=True)
+                            elif hud_action == "atc":
+                                self._toggle_radar_hud_atc()
+                                radar.invalidate_frame_layer()
+                            elif hud_action in ("chime", "speaker", "dismiss"):
+                                radar.invalidate_frame_layer()
+                            self._safe_draw()
+                        elif self._open_flight_or_fire_at(tap[0], tap[1]):
+                            self._safe_draw()
         elif tap and self.screen == SCREEN_FLIGHT:
             # Any tap (content or footer) restarts the idle countdown.
             self._note_activity()
