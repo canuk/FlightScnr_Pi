@@ -52,6 +52,7 @@ from display.round_touch.screens import (
     clock,
     clock_settings,
     details,
+    disclaimer,
     fire_detail,
     flight_detail,
     forecast,
@@ -74,6 +75,7 @@ SCREEN_CLOCK_SETTINGS = "clock_settings"
 SCREEN_FORECAST = "forecast"
 SCREEN_TRACKED = "tracked"
 SCREEN_WIFI_SETUP = "wifi_setup"
+SCREEN_DISCLAIMER = "disclaimer"
 
 SECONDARY_TIMEOUT_S = 45
 # FLIGHTSCNR_FRAME_DEBUG=1 logs draw cost and achieved frame interval every 2s.
@@ -122,13 +124,8 @@ class RoundTouchDisplay:
         settings.apply_theme_colors()
 
         self.overhead = Overhead()
-        self.overhead.grab_data()
-        try:
-            from utilities.ais_client import sync_ais_client
-
-            sync_ais_client()
-        except Exception:
-            logger.debug("AIS client startup sync skipped", exc_info=True)
+        # Defer FR24/AIS/ATC until the boot disclaimer is accepted.
+        self._session_unlocked = False
 
         self.input = input_handler.TouchInput()
         self.pinch = pinch_handler.PinchZoom()
@@ -151,6 +148,7 @@ class RoundTouchDisplay:
         self._secondary_activity = time.time()
         self._boot_until = time.time() + BOOT_SPLASH_S
         self._wifi_setup_mode = False
+        self._pending_wifi_setup = False
         self._last_wifi_setup_poll = 0.0
         self._wifi_setup_redraw = False
         self._wifi_try_saved_busy = False
@@ -232,25 +230,11 @@ class RoundTouchDisplay:
         except Exception:
             logger.exception("Wi-Fi setup probe failed")
             enter_setup = False
-        if enter_setup:
-            self._enter_wifi_setup(reason="boot")
-        else:
-            map_bg.request_background()
-            map_bg.prewarm_all_scales()
-            rainviewer_overlay.request_overlay()
-            wildfire_overlay.request_refresh(force=True)
+        # Require Accept every boot (not skipped after a prior accept).
+        # No FR24/AIS/ATC/chime/maps until _accept_safety_disclaimer().
+        self.screen = SCREEN_DISCLAIMER
+        self._pending_wifi_setup = enter_setup
         self._apply_brightness()
-        if settings.auto_timezone_enabled():
-            try:
-                from config import LOCATION_HOME, location_configured
-                from utilities.tz_lookup import maybe_apply_auto_timezone
-
-                if location_configured():
-                    maybe_apply_auto_timezone(LOCATION_HOME[0], LOCATION_HOME[1])
-            except ImportError:
-                pass
-        # Resume ATC after reboot/restart once networking is up (quiet hours gated).
-        Thread(target=self._resume_atc_after_boot, name="atc-resume", daemon=True).start()
         self._safe_draw()
 
     def _resume_atc_after_boot(self) -> None:
@@ -273,6 +257,32 @@ class RoundTouchDisplay:
             atc_audio.maybe_resume_after_boot()
         except Exception:
             logger.debug("ATC resume after boot failed", exc_info=True)
+
+    def _start_session_after_disclaimer(self) -> None:
+        """Kick off deferred boot work only after Accept."""
+        self._session_unlocked = True
+        try:
+            self.overhead.grab_data()
+        except Exception:
+            logger.debug("Post-disclaimer FR24 grab failed", exc_info=True)
+        try:
+            from utilities.ais_client import sync_ais_client
+
+            sync_ais_client()
+        except Exception:
+            logger.debug("Post-disclaimer AIS sync skipped", exc_info=True)
+        if settings.auto_timezone_enabled():
+            try:
+                from config import LOCATION_HOME, location_configured
+                from utilities.tz_lookup import maybe_apply_auto_timezone
+
+                if location_configured():
+                    maybe_apply_auto_timezone(LOCATION_HOME[0], LOCATION_HOME[1])
+            except ImportError:
+                pass
+            except Exception:
+                logger.debug("Post-disclaimer timezone lookup failed", exc_info=True)
+        Thread(target=self._resume_atc_after_boot, name="atc-resume", daemon=True).start()
 
     def _enter_wifi_setup(self, *, reason: str = "") -> None:
         """Show the QR screen and start the captive hotspot (idempotent)."""
@@ -346,6 +356,32 @@ class RoundTouchDisplay:
         wildfire_overlay.request_refresh(force=True)
         self._open_screen(SCREEN_RADAR)
 
+    def _accept_safety_disclaimer(self) -> None:
+        """Continue past the boot disclaimer for this session only."""
+        if self._session_unlocked:
+            return
+        # Record acceptance for diagnostics; boot still re-shows every start.
+        settings.set_safety_disclaimer_accepted(True)
+        logger.info("Safety disclaimer accepted for this session")
+        self._start_session_after_disclaimer()
+        want_wifi = self._pending_wifi_setup
+        self._pending_wifi_setup = False
+        if not want_wifi:
+            try:
+                want_wifi = bool(wifi_setup_util.should_enter_setup_at_boot())
+            except Exception:
+                logger.exception("Wi-Fi setup probe after disclaimer failed")
+                want_wifi = False
+        if want_wifi:
+            self._enter_wifi_setup(reason="post-disclaimer")
+        else:
+            map_bg.request_background()
+            map_bg.prewarm_all_scales()
+            rainviewer_overlay.request_overlay()
+            wildfire_overlay.request_refresh(force=True)
+            self._open_screen(SCREEN_RADAR)
+        self._safe_draw()
+
     def _start_try_saved_wifi(self) -> None:
         """Tear down the AP and retry saved client profiles (off the UI thread)."""
         if self._wifi_try_saved_busy or self._wifi_ap_starting:
@@ -368,7 +404,10 @@ class RoundTouchDisplay:
 
     def _tick_wifi_link(self) -> None:
         """If client Wi-Fi/ethernet stays down, reopen the setup hotspot after a grace."""
-        if self._wifi_setup_mode or self.screen == SCREEN_WIFI_SETUP:
+        if (
+            self._wifi_setup_mode
+            or self.screen in (SCREEN_WIFI_SETUP, SCREEN_DISCLAIMER)
+        ):
             return
         if wifi_setup_util.skip_requested():
             self._wifi_offline_since = None
@@ -627,7 +666,9 @@ class RoundTouchDisplay:
             return
 
         bezel_applied = False
-        if self.screen == SCREEN_WIFI_SETUP:
+        if self.screen == SCREEN_DISCLAIMER:
+            disclaimer.draw_disclaimer(self.surface)
+        elif self.screen == SCREEN_WIFI_SETUP:
             wifi_setup_screen.draw_wifi_setup(
                 self.surface, try_saved_busy=self._wifi_try_saved_busy
             )
@@ -724,7 +765,7 @@ class RoundTouchDisplay:
         """Active secondary-screen timeout in seconds, or None if no countdown."""
         if time.time() < self._boot_until:
             return None
-        if self.screen == SCREEN_WIFI_SETUP:
+        if self.screen in (SCREEN_WIFI_SETUP, SCREEN_DISCLAIMER):
             return None
         if self.screen in (SCREEN_RADAR, SCREEN_CLOCK, SCREEN_CLOCK_SETTINGS, SCREEN_FORECAST):
             return None
@@ -1005,6 +1046,8 @@ class RoundTouchDisplay:
         )
 
     def _return_to_radar(self):
+        if self.screen == SCREEN_DISCLAIMER:
+            return
         self._fatal_error = None
         if self._calibrating_facing:
             self._cancel_facing_calibrate()
@@ -2444,6 +2487,13 @@ class RoundTouchDisplay:
     def _handle_navigation(self):
         if time.time() < self._boot_until:
             return
+        if self.screen == SCREEN_DISCLAIMER:
+            gesture = self.input.consume_gesture()
+            if gesture and gesture[0] == "tap":
+                tap = gesture[1]
+                if disclaimer.hit_accept(tap[0], tap[1]):
+                    self._accept_safety_disclaimer()
+            return
         if self.screen == SCREEN_WIFI_SETUP:
             # Only the try-saved control is interactive; portal owns new joins.
             gesture = self.input.consume_gesture()
@@ -2780,7 +2830,7 @@ class RoundTouchDisplay:
     def _tick_timeout(self):
         if time.time() < self._boot_until:
             return
-        if self.screen == SCREEN_WIFI_SETUP:
+        if self.screen in (SCREEN_WIFI_SETUP, SCREEN_DISCLAIMER):
             return
         from display.round_touch import off_hours
 
@@ -2867,6 +2917,8 @@ class RoundTouchDisplay:
             return
         if time.time() < self._boot_until:
             return
+        if self.screen == SCREEN_DISCLAIMER:
+            return
         if self.screen == SCREEN_RADAR:
             if radar.visible_in_range_count(self.flights) == 0:
                 if time.time() - self._radar_visible_since >= AUTO_IDLE_MIN_RADAR_S:
@@ -2887,6 +2939,8 @@ class RoundTouchDisplay:
         from display.round_touch import off_hours
 
         if time.time() < self._boot_until:
+            return
+        if self.screen == SCREEN_DISCLAIMER:
             return
         force_now = off_hours.in_off_hours() and off_hours.force_clock_enabled()
         was_force = self._off_hours_force_clock_active
@@ -3295,7 +3349,7 @@ class RoundTouchDisplay:
 
                 now = time.time()
                 if (
-                    self.screen != SCREEN_WIFI_SETUP
+                    self.screen not in (SCREEN_WIFI_SETUP, SCREEN_DISCLAIMER)
                     and not self._radar_modal_active()
                     and now - last_data_poll >= DATA_REFRESH_SECONDS
                 ):
@@ -3311,7 +3365,7 @@ class RoundTouchDisplay:
                     last_data_poll = now
 
                 if (
-                    self.screen != SCREEN_WIFI_SETUP
+                    self.screen not in (SCREEN_WIFI_SETUP, SCREEN_DISCLAIMER)
                     and not self._radar_modal_active()
                     and now - self._last_ais_poll >= AIS_REFRESH_SECONDS
                 ):
@@ -3321,7 +3375,7 @@ class RoundTouchDisplay:
                     self._last_ais_poll = now
 
                 if (
-                    self.screen != SCREEN_WIFI_SETUP
+                    self.screen not in (SCREEN_WIFI_SETUP, SCREEN_DISCLAIMER)
                     and not self._radar_modal_active()
                     and now - self._last_firms_poll >= wildfire_overlay.POLL_TTL_S
                 ):
@@ -3350,13 +3404,14 @@ class RoundTouchDisplay:
 
                 if now - last_location_check >= 2.0:
                     _lt = time.perf_counter()
-                    self._maybe_reload_location()
+                    if self._session_unlocked:
+                        self._maybe_reload_location()
                     self._loop_stage("loop_location", _lt)
                     last_location_check = now
 
                 if now - self._last_settings_reload >= 0.5:
                     _lt = time.perf_counter()
-                    if settings.reload():
+                    if self._session_unlocked and settings.reload():
                         # ATC keepalive / volume RMW bumps the JSON mtime often.
                         # A full re-apply (or even content invalidate) mid-countdown
                         # freezes the ring — only pick up brightness while it crawls.
@@ -3415,6 +3470,11 @@ class RoundTouchDisplay:
 
                 if now < self._boot_until:
                     self._safe_draw()
+                    time.sleep(0.05)
+                elif self.screen == SCREEN_DISCLAIMER:
+                    if (now - self._last_static_draw) >= 1.0:
+                        self._safe_draw()
+                        self._last_static_draw = now
                     time.sleep(0.05)
                 elif self.screen == SCREEN_WIFI_SETUP:
                     self._tick_wifi_setup()
@@ -3507,15 +3567,17 @@ class RoundTouchDisplay:
                             self._last_static_draw = now
 
                 _lt = time.perf_counter()
-                self._tick_timeout()
-                self._tick_auto_idle_clock()
-                if radar_hud.tick_popover_timeout():
-                    radar.invalidate_frame_layer()
-                    self._safe_draw()
-                hourly_chime.tick()
-                self._tick_hourly_weather_refresh()
-                self._tick_manual_weather_refresh()
-                self._tick_off_hours_clock()
+                # Nothing operational until Accept — no chime, weather, idle, etc.
+                if self._session_unlocked:
+                    self._tick_timeout()
+                    self._tick_auto_idle_clock()
+                    if radar_hud.tick_popover_timeout():
+                        radar.invalidate_frame_layer()
+                        self._safe_draw()
+                    hourly_chime.tick()
+                    self._tick_hourly_weather_refresh()
+                    self._tick_manual_weather_refresh()
+                    self._tick_off_hours_clock()
                 self._apply_brightness()
                 self._loop_stage("loop_misc", _lt)
                 if FRAME_DEBUG:
