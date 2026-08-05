@@ -258,6 +258,8 @@ _defaults = {
     "bluetooth_speaker_name": "",
     # Active playback route for ATC / chime: "usb" | "bluetooth".
     "audio_route": "usb",
+    # First-run safety disclaimer (not for safety-critical / certified use).
+    "safety_disclaimer_accepted": False,
 }
 
 # Live preview while calibrating facing (not persisted until save).
@@ -743,6 +745,13 @@ def _load():
         state["audio_route"] = route
     if "audio_route" not in data:
         migrated = True
+    if "safety_disclaimer_accepted" not in data:
+        state["safety_disclaimer_accepted"] = False
+        migrated = True
+    else:
+        state["safety_disclaimer_accepted"] = bool(
+            state.get("safety_disclaimer_accepted")
+        )
     if color_presets.migrate_theme_index(state):
         migrated = True
     if migrated:
@@ -830,6 +839,7 @@ def _settings_snapshot(state: dict) -> tuple:
         str(state.get("bluetooth_speaker_mac") or "").strip().upper(),
         str(state.get("bluetooth_speaker_name") or "").strip(),
         str(state.get("audio_route") or "usb").strip().lower(),
+        bool(state.get("safety_disclaimer_accepted", False)),
     )
 
 
@@ -2080,6 +2090,17 @@ def set_audio_route(route: str) -> str:
         value = "usb"
     _rmw_save({"audio_route": value})
     return value
+
+
+def safety_disclaimer_accepted() -> bool:
+    """True if Accept was tapped at least once (diagnostic only; boot always shows)."""
+    return bool(_state.get("safety_disclaimer_accepted", False))
+
+
+def set_safety_disclaimer_accepted(accepted: bool) -> None:
+    """Record Accept for this session; does not skip the next boot disclaimer."""
+    _state["safety_disclaimer_accepted"] = bool(accepted)
+    _save(_state)
 
 
 def cycle_audio_route() -> str:
