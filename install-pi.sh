@@ -422,10 +422,12 @@ setup_env_file() {
 }
 
 suppress_desktop_bluetooth_popups() {
-    # Raspberry Pi OS panel plugin (lxplug-bluetooth / wfplug-bluetooth) shows a
-    # modal "Connection successful" dialog on every BlueZ connect. That steals
-    # focus from fullscreen FlightScnr. Pairing is done via the web portal, so
-    # remove the panel widget — BlueZ/PipeWire still work for ATC audio.
+    # Raspberry Pi OS panel plugins (lxplug-bluetooth / wfplug-bluetooth, and
+    # wfplug-volumepulse for BT audio) pop a "Connection successful" dialog or a
+    # "<device> Connected N%" notification on every BlueZ connect/disconnect.
+    # Those steal focus from fullscreen FlightScnr. Pairing is done via the web
+    # portal, so drop the panel widget and the panel notification server —
+    # BlueZ/PipeWire still work for ATC audio.
     log_step "Suppressing desktop Bluetooth pair/connect popups"
 
     local changed=0
@@ -439,7 +441,8 @@ suppress_desktop_bluetooth_popups() {
     for panel in "${panels[@]}"; do
         if [ -f "$panel" ] && grep -q 'type=bluetooth' "$panel"; then
             # Drop the Plugin { type=bluetooth ... } block (and a following blank line).
-            python3 - "$panel" <<'PY'
+            # A failure here must not abort the install (set -e), so keep it guarded.
+            if python3 - "$panel" <<'PY'
 import pathlib, re, sys
 path = pathlib.Path(sys.argv[1])
 text = path.read_text(encoding="utf-8")
@@ -448,41 +451,92 @@ new, n = re.subn(
     "",
     text,
 )
-if n:
-    path.write_text(new, encoding="utf-8")
-    print(n)
-else:
-    print(0)
+if not n:
+    sys.exit(1)
+path.write_text(new, encoding="utf-8")
 PY
-            changed=1
-            log_ok "Removed bluetooth plugin from $panel"
+            then
+                changed=1
+                log_ok "Removed bluetooth plugin from $panel"
+            else
+                log_warn "Could not strip bluetooth plugin from $panel (continuing)"
+            fi
         fi
     done
 
+    # wf-panel-pi (Wayland). An absent widgets_right falls back to the compiled
+    # default, which includes the bluetooth widget — so the key must be written
+    # explicitly, not just filtered. notify_enable=false also stops volumepulse
+    # from popping "Connected"/battery toasts over fullscreen FlightScnr.
     local wf_ini="${REPO_OWNER_HOME}/.config/wf-panel-pi.ini"
-    local default_right="tray power ejecter updater spacing2 connect spacing2 netman spacing2 volumepulse spacing2 clock spacing2 batt spacing2 squeek"
     mkdir -p "$(dirname "$wf_ini")"
-    if [ -f "$wf_ini" ]; then
-        if grep -qE '^[[:space:]]*widgets_right=' "$wf_ini"; then
-            if grep -qE '^[[:space:]]*widgets_right=.*bluetooth' "$wf_ini"; then
-                sed -i -E 's/(^[[:space:]]*widgets_right=.*)([[:space:]]+bluetooth|[[:space:]]+spacing2[[:space:]]+bluetooth|bluetooth[[:space:]]+spacing2)/\1/g; s/(^[[:space:]]*widgets_right=.*)bluetooth/\1/g' "$wf_ini"
-                # Collapse leftover double spaces in the widgets list.
-                sed -i -E 's/(^[[:space:]]*widgets_right=.*)/\1/; s/  +/ /g' "$wf_ini"
-                changed=1
-                log_ok "Removed bluetooth widget from $wf_ini"
-            fi
-        else
-            printf '\nwidgets_right=%s\n' "$default_right" >> "$wf_ini"
-            changed=1
-            log_ok "Set widgets_right without bluetooth in $wf_ini"
-        fi
-    else
-        printf '[panel]\nwidgets_right=%s\n' "$default_right" > "$wf_ini"
+    if python3 - "$wf_ini" <<'PY'
+import pathlib, re, sys
+
+FALLBACK_RIGHT = (
+    "tray power ejecter updater spacing2 connect spacing2 bluetooth spacing2 "
+    "netman spacing2 volumepulse spacing2 clock spacing2 batt spacing2 squeek"
+)
+METADATA = pathlib.Path("/usr/share/wf-panel-pi/metadata/panel-pi.xml")
+
+
+def packaged_default():
+    try:
+        meta = METADATA.read_text(encoding="utf-8")
+    except OSError:
+        return FALLBACK_RIGHT
+    m = re.search(
+        r'<option name="widgets_right".*?<default>(.*?)</default>',
+        meta,
+        re.S,
+    )
+    return m.group(1).strip() if m else FALLBACK_RIGHT
+
+
+def without_bluetooth(widgets):
+    kept = []
+    for token in widgets.split():
+        if token == "bluetooth":
+            continue
+        # Dropping a widget can leave two spacers side by side.
+        if re.fullmatch(r"spacing\d*", token) and kept and re.fullmatch(r"spacing\d*", kept[-1]):
+            continue
+        kept.append(token)
+    return " ".join(kept)
+
+
+def set_key(text, key, value):
+    pattern = re.compile(rf"(?m)^[ \t]*{key}[ \t]*=.*$")
+    if pattern.search(text):
+        return pattern.sub(f"{key}={value}", text, count=1)
+    return re.sub(r"(?m)^(\[panel\][ \t]*\n)", rf"\g<1>{key}={value}\n", text, count=1)
+
+
+path = pathlib.Path(sys.argv[1])
+original = path.read_text(encoding="utf-8") if path.exists() else "[panel]\n"
+text = original
+if not re.search(r"(?m)^\[panel\]", text):
+    text = "[panel]\n" + text
+
+current = re.search(r"(?m)^[ \t]*widgets_right[ \t]*=(.*)$", text)
+text = set_key(text, "widgets_right", without_bluetooth(current.group(1) if current else packaged_default()))
+text = set_key(text, "notify_enable", "false")
+
+if text == original:
+    sys.exit(2)
+path.write_text(text, encoding="utf-8")
+PY
+    then
         if [ -n "${REPO_OWNER:-}" ]; then
             chown "$REPO_OWNER:$REPO_OWNER" "$wf_ini" 2>/dev/null || true
         fi
         changed=1
-        log_ok "Created $wf_ini without bluetooth widget"
+        log_ok "Disabled bluetooth widget + panel notifications in $wf_ini"
+    else
+        case "$?" in
+            2) log_ok "wf-panel-pi already has bluetooth widget + notifications disabled" ;;
+            *) log_warn "Could not update $wf_ini (continuing)" ;;
+        esac
     fi
 
     if [ "$changed" -eq 1 ]; then
@@ -492,8 +546,10 @@ PY
             log_ok "Restarted lxpanel (will respawn with desktop session)"
         fi
         if pgrep -x wf-panel-pi >/dev/null 2>&1; then
+            # Nothing respawns it inside a running Wayland session; it comes back
+            # at next login, reading the config written above.
             killall -q wf-panel-pi 2>/dev/null || true
-            log_ok "Restarted wf-panel-pi"
+            log_ok "Stopped wf-panel-pi (returns on next boot without the popups)"
         fi
     else
         log_ok "Desktop Bluetooth panel plugin already disabled (or not present)"
