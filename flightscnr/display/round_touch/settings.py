@@ -80,6 +80,14 @@ RADAR_HUD_OPACITY_MAX = 100
 RADAR_HUD_POSITIONS = ("top", "bottom")
 HOURLY_CHIME_VOLUME_MIN = 0
 HOURLY_CHIME_VOLUME_MAX = 100
+# Shared 0–100 scale for tracked-enter / military alert SFX.
+SFX_VOLUME_MIN = 0
+SFX_VOLUME_MAX = 100
+# Master gain multiplies every HUD audio path (0–100%).
+MASTER_SOUND_VOLUME_MIN = 0
+MASTER_SOUND_VOLUME_MAX = 100
+# HUD volume-popover channel keys.
+HUD_VOLUME_CHANNELS = ("speaker", "chime", "alert", "atc")
 
 
 def clamp_brightness_percent(value: int) -> int:
@@ -107,14 +115,36 @@ def clamp_hourly_chime_volume(value) -> int:
         return 80
 
 
+def clamp_sfx_volume(value) -> int:
+    try:
+        return max(
+            SFX_VOLUME_MIN,
+            min(SFX_VOLUME_MAX, int(round(float(value)))),
+        )
+    except (TypeError, ValueError):
+        return 80
+
+
+def clamp_master_sound_volume(value) -> int:
+    try:
+        return max(
+            MASTER_SOUND_VOLUME_MIN,
+            min(MASTER_SOUND_VOLUME_MAX, int(round(float(value)))),
+        )
+    except (TypeError, ValueError):
+        return 100
+
+
 # Top-pill layout keys (pixel offsets from default centers).
 RADAR_HUD_LAYOUT_KEYS = (
     "wx_icon",
     "temp",
     "wind",
+    "aqi",
     "clock",
     "speaker",
     "chime",
+    "alert",
     "atc",
 )
 # Absolute px clamp so load works before display theme.s() is ready (~theme.s(48) @720).
@@ -125,17 +155,32 @@ RADAR_HUD_LAYOUT_TOP_DEFAULT = {
     "wx_icon": [-29, 31],
     "temp": [42, -29],
     "wind": [14, -6],
-    "chime": [10, 4],
-    "atc": [21, 14],
 }
 
 # Baked bottom-pill offsets (from device arrange pass, 2026-07-31).
 RADAR_HUD_LAYOUT_BOTTOM_DEFAULT = {
     "wx_icon": [2, -6],
     "wind": [4, 0],
-    "chime": [11, -5],
-    "atc": [18, -16],
 }
+
+# Offsets baked when the pill held three right-side icons. The HUD now spaces
+# volume/chime/alert/ATC evenly, so these stale nudges make spacing look uneven.
+_LEGACY_RIGHT_ICON_OFFSETS = {
+    "radar_hud_layout_top": {"chime": [10, 4], "atc": [21, 14]},
+    "radar_hud_layout_bottom": {"chime": [11, -5], "atc": [18, -16]},
+}
+
+
+def drop_legacy_right_icon_offsets(layout, state_key: str):
+    """Strip pre-alert-icon chime/ATC nudges so right icons space evenly."""
+    if not isinstance(layout, dict):
+        return layout
+    legacy = _LEGACY_RIGHT_ICON_OFFSETS.get(state_key, {})
+    out = dict(layout)
+    for key, value in legacy.items():
+        if key in out and list(out.get(key) or []) == value:
+            out.pop(key)
+    return out
 
 
 def clamp_radar_hud_layout_offset(value) -> int:
@@ -253,11 +298,23 @@ _defaults = {
     "radar_hud_layout_bottom": copy_radar_hud_layout_bottom_default(),
     "hourly_chime_enabled": False,
     "hourly_chime_volume": 80,
+    "traffic_sfx_enabled": True,
+    "traffic_sfx_volume": 80,
+    "military_sfx_enabled": True,
+    "military_sfx_volume": 80,
+    # Master mute for ATC / chime / alert SFX (radar HUD volume icon).
+    "master_sound_enabled": True,
+    # Master gain (0–100%); multiplies every HUD audio path when unmuted.
+    "master_sound_volume": 100,
+    # ATC mute without stopping the stream or wiping the saved ATC volume.
+    "atc_sound_enabled": True,
     # Preferred Bluetooth A2DP speaker (paired via web portal).
     "bluetooth_speaker_mac": "",
     "bluetooth_speaker_name": "",
     # Active playback route for ATC / chime: "usb" | "bluetooth".
     "audio_route": "usb",
+    # First-run safety disclaimer (not for safety-critical / certified use).
+    "safety_disclaimer_accepted": False,
 }
 
 # Live preview while calibrating facing (not persisted until save).
@@ -691,7 +748,11 @@ def _load():
         state["radar_hud_layout_top"] = copy_radar_hud_layout_top_default()
         migrated = True
     else:
-        layout = normalize_radar_hud_layout(state.get("radar_hud_layout_top"))
+        layout = normalize_radar_hud_layout(
+            drop_legacy_right_icon_offsets(
+                state.get("radar_hud_layout_top"), "radar_hud_layout_top"
+            )
+        )
         if state.get("radar_hud_layout_top") != layout:
             state["radar_hud_layout_top"] = layout
             migrated = True
@@ -699,7 +760,11 @@ def _load():
         state["radar_hud_layout_bottom"] = copy_radar_hud_layout_bottom_default()
         migrated = True
     else:
-        layout_b = normalize_radar_hud_layout(state.get("radar_hud_layout_bottom"))
+        layout_b = normalize_radar_hud_layout(
+            drop_legacy_right_icon_offsets(
+                state.get("radar_hud_layout_bottom"), "radar_hud_layout_bottom"
+            )
+        )
         if state.get("radar_hud_layout_bottom") != layout_b:
             state["radar_hud_layout_bottom"] = layout_b
             migrated = True
@@ -718,6 +783,38 @@ def _load():
             )
     except (TypeError, ValueError):
         state["hourly_chime_volume"] = 80
+        migrated = True
+    for _sfx_en_key, _sfx_en_default in (
+        ("traffic_sfx_enabled", True),
+        ("military_sfx_enabled", True),
+        ("master_sound_enabled", True),
+        ("atc_sound_enabled", True),
+    ):
+        if _sfx_en_key not in data:
+            state[_sfx_en_key] = _sfx_en_default
+            migrated = True
+        else:
+            state[_sfx_en_key] = bool(state.get(_sfx_en_key))
+    for _sfx_vol_key in ("traffic_sfx_volume", "military_sfx_volume"):
+        try:
+            if _sfx_vol_key not in data:
+                state[_sfx_vol_key] = 80
+                migrated = True
+            else:
+                state[_sfx_vol_key] = clamp_sfx_volume(state.get(_sfx_vol_key, 80))
+        except (TypeError, ValueError):
+            state[_sfx_vol_key] = 80
+            migrated = True
+    try:
+        if "master_sound_volume" not in data:
+            state["master_sound_volume"] = 100
+            migrated = True
+        else:
+            state["master_sound_volume"] = clamp_master_sound_volume(
+                state.get("master_sound_volume", 100)
+            )
+    except (TypeError, ValueError):
+        state["master_sound_volume"] = 100
         migrated = True
     if "bluetooth_speaker_mac" not in data:
         state["bluetooth_speaker_mac"] = ""
@@ -743,6 +840,13 @@ def _load():
         state["audio_route"] = route
     if "audio_route" not in data:
         migrated = True
+    if "safety_disclaimer_accepted" not in data:
+        state["safety_disclaimer_accepted"] = False
+        migrated = True
+    else:
+        state["safety_disclaimer_accepted"] = bool(
+            state.get("safety_disclaimer_accepted")
+        )
     if color_presets.migrate_theme_index(state):
         migrated = True
     if migrated:
@@ -827,9 +931,17 @@ def _settings_snapshot(state: dict) -> tuple:
         ),
         bool(state.get("hourly_chime_enabled", False)),
         clamp_hourly_chime_volume(state.get("hourly_chime_volume", 80)),
+        bool(state.get("traffic_sfx_enabled", True)),
+        clamp_sfx_volume(state.get("traffic_sfx_volume", 80)),
+        bool(state.get("military_sfx_enabled", True)),
+        clamp_sfx_volume(state.get("military_sfx_volume", 80)),
+        bool(state.get("master_sound_enabled", True)),
+        clamp_master_sound_volume(state.get("master_sound_volume", 100)),
+        bool(state.get("atc_sound_enabled", True)),
         str(state.get("bluetooth_speaker_mac") or "").strip().upper(),
         str(state.get("bluetooth_speaker_name") or "").strip(),
         str(state.get("audio_route") or "usb").strip().lower(),
+        bool(state.get("safety_disclaimer_accepted", False)),
     )
 
 
@@ -2048,6 +2160,217 @@ def set_hourly_chime_volume(value: int, *, persist: bool = True) -> int:
     return vol
 
 
+def traffic_sfx_enabled() -> bool:
+    return bool(_state.get("traffic_sfx_enabled", True))
+
+
+def set_traffic_sfx_enabled(enabled: bool) -> None:
+    _state["traffic_sfx_enabled"] = bool(enabled)
+    _save(_state)
+
+
+def toggle_traffic_sfx_enabled() -> bool:
+    set_traffic_sfx_enabled(not traffic_sfx_enabled())
+    return traffic_sfx_enabled()
+
+
+def traffic_sfx_volume() -> int:
+    return clamp_sfx_volume(_state.get("traffic_sfx_volume", 80))
+
+
+def set_traffic_sfx_volume(value: int, *, persist: bool = True) -> int:
+    global _disk_synced
+    vol = clamp_sfx_volume(value)
+    _state["traffic_sfx_volume"] = vol
+    if persist:
+        _rmw_save({"traffic_sfx_volume": vol})
+    else:
+        _disk_synced = False
+    return vol
+
+
+def military_sfx_enabled() -> bool:
+    return bool(_state.get("military_sfx_enabled", True))
+
+
+def set_military_sfx_enabled(enabled: bool) -> None:
+    _state["military_sfx_enabled"] = bool(enabled)
+    _save(_state)
+
+
+def toggle_military_sfx_enabled() -> bool:
+    set_military_sfx_enabled(not military_sfx_enabled())
+    return military_sfx_enabled()
+
+
+def military_sfx_volume() -> int:
+    return clamp_sfx_volume(_state.get("military_sfx_volume", 80))
+
+
+def set_military_sfx_volume(value: int, *, persist: bool = True) -> int:
+    global _disk_synced
+    vol = clamp_sfx_volume(value)
+    _state["military_sfx_volume"] = vol
+    if persist:
+        _rmw_save({"military_sfx_volume": vol})
+    else:
+        _disk_synced = False
+    return vol
+
+
+def alert_sfx_enabled() -> bool:
+    """True when either tracked-enter or military alert SFX is enabled."""
+    return traffic_sfx_enabled() or military_sfx_enabled()
+
+
+def set_alert_sfx_enabled(enabled: bool) -> None:
+    """Enable/disable both aircraft alert SFX together (HUD alert icon)."""
+    on = bool(enabled)
+    _state["traffic_sfx_enabled"] = on
+    _state["military_sfx_enabled"] = on
+    _rmw_save({"traffic_sfx_enabled": on, "military_sfx_enabled": on})
+
+
+def toggle_alert_sfx_enabled() -> bool:
+    set_alert_sfx_enabled(not alert_sfx_enabled())
+    return alert_sfx_enabled()
+
+
+def alert_sfx_volume() -> int:
+    """Linked HUD alert volume (max of traffic / military when they differ)."""
+    return max(traffic_sfx_volume(), military_sfx_volume())
+
+
+def set_alert_sfx_volume(value: int, *, persist: bool = True) -> int:
+    """Set traffic and military SFX volumes together from the HUD alert slider."""
+    global _disk_synced
+    vol = clamp_sfx_volume(value)
+    _state["traffic_sfx_volume"] = vol
+    _state["military_sfx_volume"] = vol
+    if persist:
+        _rmw_save({"traffic_sfx_volume": vol, "military_sfx_volume": vol})
+    else:
+        _disk_synced = False
+    return vol
+
+
+def master_sound_enabled() -> bool:
+    return bool(_state.get("master_sound_enabled", True))
+
+
+def set_master_sound_enabled(enabled: bool) -> None:
+    _state["master_sound_enabled"] = bool(enabled)
+    _save(_state)
+
+
+def toggle_master_sound_enabled() -> bool:
+    set_master_sound_enabled(not master_sound_enabled())
+    return master_sound_enabled()
+
+
+def master_sound_volume() -> int:
+    return clamp_master_sound_volume(_state.get("master_sound_volume", 100))
+
+
+def set_master_sound_volume(value: int, *, persist: bool = True) -> int:
+    global _disk_synced
+    vol = clamp_master_sound_volume(value)
+    _state["master_sound_volume"] = vol
+    if persist:
+        _rmw_save({"master_sound_volume": vol})
+    else:
+        _disk_synced = False
+    return vol
+
+
+def master_gain_factor() -> float:
+    """0.0 when master-muted; otherwise master volume as 0–1."""
+    if not master_sound_enabled():
+        return 0.0
+    return max(0.0, min(1.0, master_sound_volume() / 100.0))
+
+
+def apply_master_gain(volume_pct: int | float) -> int:
+    """Scale a channel volume by the master gain (0 if master muted)."""
+    try:
+        base = float(volume_pct)
+    except (TypeError, ValueError):
+        base = 0.0
+    return max(0, min(100, int(round(base * master_gain_factor()))))
+
+
+def atc_sound_enabled() -> bool:
+    return bool(_state.get("atc_sound_enabled", True))
+
+
+def set_atc_sound_enabled(enabled: bool) -> None:
+    _state["atc_sound_enabled"] = bool(enabled)
+    _save(_state)
+
+
+def toggle_atc_sound_enabled() -> bool:
+    set_atc_sound_enabled(not atc_sound_enabled())
+    return atc_sound_enabled()
+
+
+def hud_channel_volume(channel: str) -> int:
+    """Persisted UI volume for a HUD slider channel (ignores mute flags)."""
+    key = str(channel or "").strip().lower()
+    if key == "speaker":
+        return master_sound_volume()
+    if key == "chime":
+        return hourly_chime_volume()
+    if key == "alert":
+        return alert_sfx_volume()
+    if key == "atc":
+        return atc_volume()
+    return 0
+
+
+def set_hud_channel_volume(
+    channel: str, value: int, *, persist: bool = True
+) -> int:
+    """Write a HUD slider channel volume without changing mute flags."""
+    key = str(channel or "").strip().lower()
+    if key == "speaker":
+        return set_master_sound_volume(value, persist=persist)
+    if key == "chime":
+        return set_hourly_chime_volume(value, persist=persist)
+    if key == "alert":
+        return set_alert_sfx_volume(value, persist=persist)
+    if key == "atc":
+        return set_atc_volume(value, persist=persist)
+    return 0
+
+
+def hud_channel_muted(channel: str) -> bool:
+    """True when the channel's mute/enable flag is off (volume may still be >0)."""
+    key = str(channel or "").strip().lower()
+    if key == "speaker":
+        return not master_sound_enabled()
+    if key == "chime":
+        return not hourly_chime_enabled()
+    if key == "alert":
+        return not alert_sfx_enabled()
+    if key == "atc":
+        return not atc_sound_enabled() or atc_volume() <= 0
+    return True
+
+
+def toggle_hud_channel_mute(channel: str) -> bool:
+    """Toggle the mute/enable flag for a HUD channel. Returns True when unmuted."""
+    key = str(channel or "").strip().lower()
+    if key == "speaker":
+        return toggle_master_sound_enabled()
+    if key == "chime":
+        return toggle_hourly_chime_enabled()
+    if key == "alert":
+        return toggle_alert_sfx_enabled()
+    if key == "atc":
+        return toggle_atc_sound_enabled()
+    return False
+
+
 def bluetooth_speaker_mac() -> str:
     return str(_state.get("bluetooth_speaker_mac") or "").strip().upper()
 
@@ -2080,6 +2403,17 @@ def set_audio_route(route: str) -> str:
         value = "usb"
     _rmw_save({"audio_route": value})
     return value
+
+
+def safety_disclaimer_accepted() -> bool:
+    """True if Accept was tapped at least once (diagnostic only; boot always shows)."""
+    return bool(_state.get("safety_disclaimer_accepted", False))
+
+
+def set_safety_disclaimer_accepted(accepted: bool) -> None:
+    """Record Accept for this session; does not skip the next boot disclaimer."""
+    _state["safety_disclaimer_accepted"] = bool(accepted)
+    _save(_state)
 
 
 def cycle_audio_route() -> str:

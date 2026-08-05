@@ -315,32 +315,32 @@
     </details>
 
     <details class="card">
-        <summary><span class="ico">&#9888;</span>Alerts<span class="sum">aircraft filters</span><span class="chev">&#9656;</span></summary>
+        <summary><span class="ico">&#9888;</span>Alerts<span class="sum">flight #, type, registration</span><span class="chev">&#9656;</span></summary>
         <div class="body">
             <div class="chk"><label for="alert-mil">Alert on military aircraft</label><span class="switch"><input id="alert-mil" type="checkbox"><span class="track"></span></span></div>
             <div class="chk"><label for="alert-emrg">Alert on emergency squawk (7700/7600/7500)</label><span class="switch"><input id="alert-emrg" type="checkbox"><span class="track"></span></span></div>
             <div class="chk"><label for="alert-hide">Hide non-alerted aircraft on radar</label><span class="switch"><input id="alert-hide" type="checkbox"><span class="track"></span></span></div>
-            <label for="alert-watch">Watch list (callsigns / registrations)</label>
-            <input id="alert-watch" type="text" autocomplete="off" placeholder="UAL123, D-AIML, N2136U">
-            <p class="hint">Many flights to highlight on the local radar when they appear in range — not a dedicated follow. Callsigns (UAL123) or tails (D-AIML, N2136U).</p>
+            <label for="alert-watch">Watch list (flight numbers / registrations)</label>
+            <input id="alert-watch" type="text" autocomplete="off" placeholder="UAL1083, N2136U, D-AIML">
+            <p class="hint">Highlight many aircraft on the <strong>local radar</strong> when they enter range — not a worldwide follow (use Tracking for that). Enter ICAO flight numbers (UAL1083) and/or registrations / tail numbers (N2136U, D-AIML), comma-separated. Clear and Save to remove.</p>
             <label for="alert-watch-types">Watch list (aircraft types)</label>
-            <input id="alert-watch-types" type="text" autocomplete="off" placeholder="A337, B748, A330-743">
-            <p class="hint">Comma-separated ICAO type codes or designations (e.g. A337, B738, A330-743). Matches every aircraft of that type on radar. Clear either field and Save to remove those watches.</p>
+            <input id="alert-watch-types" type="text" autocomplete="off" placeholder="B738, A337, A330-743">
+            <p class="hint">Alert on every aircraft of a given type on local radar. Use ICAO type codes (B738, A337) or designations (A330-743), comma-separated. Clear and Save to remove.</p>
             <button class="btn btn-primary" id="btn-alerts" style="margin-top:.7rem" type="button">Save alerts</button>
             <div id="alert-status" class="status"></div>
         </div>
     </details>
 
     <details class="card">
-        <summary><span class="ico">&#9992;</span>Tracking<span class="sum">follow one flight worldwide</span><span class="chev">&#9656;</span></summary>
+        <summary><span class="ico">&#9992;</span>Tracking<span class="sum">one flight # or tail worldwide</span><span class="chev">&#9656;</span></summary>
         <div class="body">
-            <label for="callsign-input">Track callsign or registration</label>
+            <label for="callsign-input">Track flight number or registration</label>
             <div class="track-row">
-                <input type="text" id="callsign-input" placeholder="UAL1134 / N2136U / CS-TPQ" maxlength="12">
+                <input type="text" id="callsign-input" placeholder="UAL1083 / N2136U / CS-TPQ" maxlength="12">
                 <button class="btn btn-primary" id="btn-track" type="button">Track</button>
                 <button class="btn" id="btn-clear-track" type="button">Clear</button>
             </div>
-            <p class="hint">Follow <strong>one</strong> flight worldwide on the Tracked screen (route, ETA, pin) — even outside radar range. Callsign (UAL1134 / DLH3Y) or tail (D-AIML, N2136U).</p>
+            <p class="hint">Follow <strong>one</strong> aircraft worldwide on the Tracked screen (route, ETA, pin) — even outside radar range. Enter an ICAO flight number (UAL1083) or a registration / tail number (N2136U, CS-TPQ). For many flights or types on local radar only, use Alerts instead.</p>
             <p class="hint" id="current-tracked">Loading tracked flight...</p>
             <div id="track-status" class="status"></div>
             <div class="track-row hidden" id="confirm-row">
@@ -423,6 +423,22 @@
             <label for="hourly_chime_volume">Hourly chime volume <span id="hourly_chime_volume_label">80%</span></label>
             <input id="hourly_chime_volume" type="range" min="0" max="100" step="1" value="80">
             <p class="hint">Independent of ATC audio volume.</p>
+            <div class="chk">
+                <label for="traffic_sfx">Tracked enter-range sound</label>
+                <button class="btn btn-sm" id="btn-traffic-sfx-preview" type="button">Preview</button>
+                <span class="switch"><input id="traffic_sfx" type="checkbox" checked><span class="track"></span></span>
+            </div>
+            <label for="traffic_sfx_volume">Tracked enter volume <span id="traffic_sfx_volume_label">80%</span></label>
+            <input id="traffic_sfx_volume" type="range" min="0" max="100" step="1" value="80">
+            <p class="hint">Plays when a live tracked flight crosses into radar range.</p>
+            <div class="chk">
+                <label for="military_sfx">Military aircraft sound</label>
+                <button class="btn btn-sm" id="btn-military-sfx-preview" type="button">Preview</button>
+                <span class="switch"><input id="military_sfx" type="checkbox" checked><span class="track"></span></span>
+            </div>
+            <label for="military_sfx_volume">Military sound volume <span id="military_sfx_volume_label">80%</span></label>
+            <input id="military_sfx_volume" type="range" min="0" max="100" step="1" value="80">
+            <p class="hint">Plays once when a new military aircraft appears in radar range.</p>
             <button class="btn btn-primary" id="btn-save-reload" style="margin-top:.7rem" type="button">Save &amp; reload on display</button>
             <div id="display-status" class="status"></div>
         </div>
@@ -968,6 +984,15 @@ async function loadAll() {
             $("hourly_chime_volume").value = String(d.hourly_chime_volume ?? 80);
             syncChimeVolumeLabel();
         }
+        if ($("traffic_sfx")) $("traffic_sfx").checked = d.traffic_sfx_enabled !== false;
+        if ($("traffic_sfx_volume")) {
+            $("traffic_sfx_volume").value = String(d.traffic_sfx_volume ?? 80);
+        }
+        if ($("military_sfx")) $("military_sfx").checked = d.military_sfx_enabled !== false;
+        if ($("military_sfx_volume")) {
+            $("military_sfx_volume").value = String(d.military_sfx_volume ?? 80);
+        }
+        syncChimeVolumeLabel();
     } catch (_) {}
 
     try {
@@ -1062,6 +1087,10 @@ function syncHudOpacityLabel() {
 function syncChimeVolumeLabel() {
     const el = $("hourly_chime_volume_label");
     if (el && $("hourly_chime_volume")) el.textContent = `${$("hourly_chime_volume").value}%`;
+    const tel = $("traffic_sfx_volume_label");
+    if (tel && $("traffic_sfx_volume")) tel.textContent = `${$("traffic_sfx_volume").value}%`;
+    const mel = $("military_sfx_volume_label");
+    if (mel && $("military_sfx_volume")) mel.textContent = `${$("military_sfx_volume").value}%`;
 }
 
 function syncVfrOpacityLabel() {
@@ -1237,6 +1266,10 @@ async function saveAndReloadSettings() {
                 radar_hud_opacity: $("radar_hud_opacity") ? Number($("radar_hud_opacity").value) : 72,
                 hourly_chime_enabled: $("hourly_chime") ? $("hourly_chime").checked : false,
                 hourly_chime_volume: $("hourly_chime_volume") ? Number($("hourly_chime_volume").value) : 80,
+                traffic_sfx_enabled: $("traffic_sfx") ? $("traffic_sfx").checked : true,
+                traffic_sfx_volume: $("traffic_sfx_volume") ? Number($("traffic_sfx_volume").value) : 80,
+                military_sfx_enabled: $("military_sfx") ? $("military_sfx").checked : true,
+                military_sfx_volume: $("military_sfx_volume") ? Number($("military_sfx_volume").value) : 80,
             }),
         });
         const loc = ($("radar_center").value || "").trim();
@@ -1985,6 +2018,8 @@ $("bright_pct").addEventListener("input", syncBrightLabel);
 $("night_dim").addEventListener("input", syncNightDimLabel);
 if ($("radar_hud_opacity")) $("radar_hud_opacity").addEventListener("input", syncHudOpacityLabel);
 if ($("hourly_chime_volume")) $("hourly_chime_volume").addEventListener("input", syncChimeVolumeLabel);
+if ($("traffic_sfx_volume")) $("traffic_sfx_volume").addEventListener("input", syncChimeVolumeLabel);
+if ($("military_sfx_volume")) $("military_sfx_volume").addEventListener("input", syncChimeVolumeLabel);
 if ($("btn-chime-preview")) {
     $("btn-chime-preview").addEventListener("click", async () => {
         clearStatus("display-status");
@@ -1998,6 +2033,42 @@ if ($("btn-chime-preview")) {
                 body: JSON.stringify({ hourly_chime_volume: volume }),
             });
             showStatus("display-status", data.message || "Playing chime preview.");
+        } catch (err) {
+            showStatus("display-status", err.message || String(err), true);
+        }
+    });
+}
+if ($("btn-traffic-sfx-preview")) {
+    $("btn-traffic-sfx-preview").addEventListener("click", async () => {
+        clearStatus("display-status");
+        try {
+            const volume = $("traffic_sfx_volume")
+                ? Number($("traffic_sfx_volume").value)
+                : 80;
+            const data = await jsonFetch("/display/traffic-sfx-preview", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ traffic_sfx_volume: volume }),
+            });
+            showStatus("display-status", data.message || "Playing tracked sound preview.");
+        } catch (err) {
+            showStatus("display-status", err.message || String(err), true);
+        }
+    });
+}
+if ($("btn-military-sfx-preview")) {
+    $("btn-military-sfx-preview").addEventListener("click", async () => {
+        clearStatus("display-status");
+        try {
+            const volume = $("military_sfx_volume")
+                ? Number($("military_sfx_volume").value)
+                : 80;
+            const data = await jsonFetch("/display/military-sfx-preview", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ military_sfx_volume: volume }),
+            });
+            showStatus("display-status", data.message || "Playing military sound preview.");
         } catch (err) {
             showStatus("display-status", err.message || String(err), true);
         }

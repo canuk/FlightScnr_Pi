@@ -19,10 +19,9 @@ import pygame
 from display.round_touch import draw, nav, theme
 from version import APP_VERSION
 
-FOOTER_BUTTONS = ("radar",)
-# Compact radar control tucked toward the rim so it clears the version line.
-_FOOTER_Y_OFFSET = theme.s(28)
-_FOOTER_BUTTON_SIZE = theme.s(28)
+FOOTER_BUTTONS = ("next", "radar")
+# Nudge below the live version line; use default footer slot size (same as Settings).
+_FOOTER_Y_OFFSET = theme.s(16)
 
 _BOOT_DIR = os.path.normpath(
     os.path.join(
@@ -50,7 +49,6 @@ def tap_footer_action(x: int, y: int) -> str | None:
         y,
         len(FOOTER_BUTTONS),
         y_offset=_FOOTER_Y_OFFSET,
-        button_size=_FOOTER_BUTTON_SIZE,
     )
     if idx is None:
         return None
@@ -96,7 +94,7 @@ def _blit_brand(surface, brand: pygame.Surface) -> None:
     surface.blit(brand, (0, 0))
 
 
-def _draw_version_overlay(surface) -> None:
+def _draw_version_overlay(surface) -> tuple[int, int, pygame.font.Font]:
     layout = _load_layout()
     src_size = float(layout.get("size") or 720)
     scale = theme.SIZE / src_size
@@ -110,7 +108,53 @@ def _draw_version_overlay(surface) -> None:
     clear = pygame.Surface((theme.SIZE, band_h))
     clear.fill((0, 0, 0))
     surface.blit(clear, (0, max(0, top - theme.s(2))))
-    draw.draw_center_line(surface, label, top, font, theme.SWEEP)
+    # When an update is available, version + notice are drawn as one centered row.
+    if not _draw_version_with_update(surface, top, font, label):
+        draw.draw_center_line(surface, label, top, font, theme.SWEEP)
+    return top, band_h, font
+
+
+def _update_notice_text() -> str | None:
+    """Return 'Update available vX.Y…' or None when the banner is hidden."""
+    try:
+        from utilities.updater import remote_release_label, should_show_update_banner
+
+        if not should_show_update_banner():
+            return None
+        remote = remote_release_label()
+    except Exception:
+        return None
+    if remote:
+        return f"Update available v{remote}"
+    return "Update available"
+
+
+def _draw_version_with_update(
+    surface, top: int, font: pygame.font.Font, ver_label: str
+) -> bool:
+    """Draw ``vCURRENT`` + yellow update notice on one centered row. True if drawn."""
+    notice = _update_notice_text()
+    if not notice:
+        return False
+    msg_font = draw.load_font(max(11, theme.s(12)), bold=True)
+    ver = font.render(ver_label, True, theme.SWEEP)
+    msg = msg_font.render(notice, True, theme.TAG_TYPE)
+    gap = theme.s(10)
+    total_w = ver.get_width() + gap + msg.get_width()
+    half = draw.circle_half_width_at_row(top, max(ver.get_height(), msg.get_height()))
+    max_w = max(theme.s(40), half * 2 - theme.s(8))
+    if total_w > max_w:
+        # Shrink notice first so the pair still fits near the rim.
+        while notice and total_w > max_w and len(notice) > 12:
+            notice = notice[:-1]
+            msg = msg_font.render(notice.rstrip() + "…", True, theme.TAG_TYPE)
+            total_w = ver.get_width() + gap + msg.get_width()
+    left = theme.CENTER_X - total_w // 2
+    ver_y = top
+    msg_y = top + max(0, (ver.get_height() - msg.get_height()) // 2)
+    surface.blit(ver, (left, ver_y))
+    surface.blit(msg, (left + ver.get_width() + gap, msg_y))
+    return True
 
 
 def draw_details(surface, boot_splash=False, scroll_offset: int = 0) -> int:
@@ -122,7 +166,8 @@ def draw_details(surface, boot_splash=False, scroll_offset: int = 0) -> int:
         font = draw.load_font(theme.FONT_BODY, bold=True)
         y = theme.CENTER_Y - theme.s(20)
         y = draw.draw_center_line(surface, "FlightScnr Pi", y, font, theme.LABEL)
-        draw.draw_center_line(surface, f"v{APP_VERSION}", y, font, theme.SWEEP)
+        if not _draw_version_with_update(surface, y, font, f"v{APP_VERSION}"):
+            draw.draw_center_line(surface, f"v{APP_VERSION}", y, font, theme.SWEEP)
     else:
         _blit_brand(surface, brand)
         _draw_version_overlay(surface)
@@ -135,6 +180,5 @@ def draw_details(surface, boot_splash=False, scroll_offset: int = 0) -> int:
         surface,
         list(FOOTER_BUTTONS),
         y_offset=_FOOTER_Y_OFFSET,
-        button_size=_FOOTER_BUTTON_SIZE,
     )
     return 0

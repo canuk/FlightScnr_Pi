@@ -15,6 +15,11 @@ Environment=FLIGHTSCNR_DATA_DIR=/var/lib/flightscnr
 Environment=DISPLAY=:0
 Environment=XAUTHORITY=__XAUTHORITY__
 Environment=XDG_RUNTIME_DIR=__XDG_RUNTIME_DIR__
+# The service is root but the audio server belongs to the desktop user, and
+# libpulse refuses to auto-discover a runtime dir it does not own. Without these
+# SDL and mpv fall back to raw ALSA and underrun continuously.
+Environment=PULSE_SERVER=unix:__XDG_RUNTIME_DIR__/pulse/native
+Environment=PULSE_COOKIE=__PULSE_COOKIE__
 Environment=SDL_VIDEODRIVER=x11
 
 # Wait for the desktop X session before launching pygame (up to 90s after boot).

@@ -33,6 +33,9 @@ GITHUB_TIMEOUT_S = 12
 _REMOTE_CACHE_PATH = os.path.join(DATA_DIR, "github-remote-cache.json")
 _REMOTE_CACHE_TTL_S = 30 * 60
 _REMOTE_CACHE_STALE_S = 24 * 3600
+NOTIFY_PATH = os.path.join(DATA_DIR, "update-notify.json")
+# Three checks per day from the display process.
+CHECK_INTERVAL_S = 8 * 3600
 
 
 def repo_root() -> str:
@@ -388,6 +391,136 @@ def update_running() -> bool:
     return status.get("state") == "running"
 
 
+def _remote_id(remote: dict) -> str:
+    """Stable id for the remote tip (release tag + commit)."""
+    tag = str(remote.get("release_tag") or "").strip()
+    commit = str(remote.get("commit") or "").strip()
+    short = commit[:7] if commit else ""
+    if tag and short:
+        return f"{tag}@{short}"
+    return tag or short or ""
+
+
+def _default_notify() -> dict:
+    return {
+        "update_available": False,
+        "remote_id": "",
+        "remote_release": "",
+        "last_check_ts": 0.0,
+        "dismissed_for": "",
+    }
+
+
+def _read_notify() -> dict:
+    state = _default_notify()
+    try:
+        with open(NOTIFY_PATH, encoding="utf-8") as fh:
+            data = json.load(fh)
+        if not isinstance(data, dict):
+            return state
+        state["update_available"] = bool(data.get("update_available"))
+        state["remote_id"] = str(data.get("remote_id") or "")
+        state["remote_release"] = str(data.get("remote_release") or "")
+        if not state["remote_release"] and state["remote_id"]:
+            # Older notify files: "tag@commit" → tag
+            state["remote_release"] = state["remote_id"].split("@", 1)[0]
+        try:
+            state["last_check_ts"] = float(data.get("last_check_ts") or 0.0)
+        except (TypeError, ValueError):
+            state["last_check_ts"] = 0.0
+        state["dismissed_for"] = str(data.get("dismissed_for") or "")
+        return state
+    except (OSError, json.JSONDecodeError, TypeError):
+        return state
+
+
+def _write_notify(state: dict) -> None:
+    try:
+        os.makedirs(DATA_DIR, exist_ok=True)
+        tmp = NOTIFY_PATH + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(state, fh, indent=2)
+        os.replace(tmp, NOTIFY_PATH)
+    except OSError as exc:
+        logger.warning("Could not write update notify state: %s", exc)
+
+
+def refresh_notify_from_check(result: dict) -> dict:
+    """Persist availability from a check_for_update() result; keep dismiss for same remote."""
+    prev = _read_notify()
+    remote = result.get("remote") if isinstance(result.get("remote"), dict) else {}
+    remote_id = _remote_id(remote)
+    available = bool(result.get("update_available")) and not bool(
+        result.get("update_running")
+    )
+    dismissed_for = str(prev.get("dismissed_for") or "")
+    if not available:
+        dismissed_for = ""
+    elif dismissed_for and dismissed_for != remote_id:
+        # Newer remote tip — show banner again.
+        dismissed_for = ""
+    state = {
+        "update_available": available,
+        "remote_id": remote_id if available else "",
+        "remote_release": (
+            str(remote.get("release_tag") or "").strip() if available else ""
+        ),
+        "last_check_ts": time.time(),
+        "dismissed_for": dismissed_for if available else "",
+    }
+    if available and not state["remote_release"] and remote_id:
+        state["remote_release"] = remote_id.split("@", 1)[0]
+    _write_notify(state)
+    return state
+
+
+def notify_state() -> dict:
+    """Current on-disk notify payload (no network)."""
+    return _read_notify()
+
+
+def remote_release_label() -> str:
+    """Remote release tag for UI copy (empty if unknown / not showing)."""
+    if not should_show_update_banner():
+        return ""
+    tag = str(_read_notify().get("remote_release") or "").strip().lstrip("vV")
+    return tag
+
+
+def should_show_update_banner() -> bool:
+    """True when an undismissed update should appear on splash/radar."""
+    if update_running():
+        return False
+    state = _read_notify()
+    if not state.get("update_available"):
+        return False
+    remote_id = str(state.get("remote_id") or "")
+    dismissed = str(state.get("dismissed_for") or "")
+    if remote_id and dismissed == remote_id:
+        return False
+    return True
+
+
+def dismiss_update_banner() -> dict:
+    """Hide banner for the current remote tip until a newer tip appears."""
+    state = _read_notify()
+    remote_id = str(state.get("remote_id") or "")
+    if remote_id and state.get("update_available"):
+        state["dismissed_for"] = remote_id
+        _write_notify(state)
+    return state
+
+
+def seconds_until_next_check() -> float:
+    """Seconds until the next scheduled force check (0 = due now)."""
+    state = _read_notify()
+    last = float(state.get("last_check_ts") or 0.0)
+    if last <= 0:
+        return 0.0
+    due = last + CHECK_INTERVAL_S
+    return max(0.0, due - time.time())
+
+
 def check_for_update(*, force: bool = False) -> dict:
     from version import compare_versions, normalize_version
 
@@ -423,7 +556,7 @@ def check_for_update(*, force: bool = False) -> dict:
     if running:
         message = "Update in progress…"
 
-    return {
+    result = {
         "ok": True,
         "update_available": update_available and not running,
         "update_running": running,
@@ -432,6 +565,8 @@ def check_for_update(*, force: bool = False) -> dict:
         "remote": remote,
         "status": status,
     }
+    refresh_notify_from_check(result)
+    return result
 
 
 def mark_update_running() -> None:

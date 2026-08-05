@@ -1,6 +1,6 @@
 # FlightScnr Pi — Picade cabinet version
 
-This branch (`feat/picade`) adapts FlightScnr Pi to an arcade cabinet: a large
+This branch (`community/picade`) adapts FlightScnr Pi to an arcade cabinet: a large
 rectangular screen instead of the round 4in panel, and a joystick with panel
 buttons instead of a touchscreen.
 
