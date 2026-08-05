@@ -1,6 +1,6 @@
 # FlightScnr Pi (Picade version)
 
-> **Fork note** — this is the `feat/picade` branch, adapting FlightScnr Pi to a
+> **Branch note** — this is the `community/picade` branch, adapting FlightScnr Pi to a
 > [Pimoroni Picade](https://shop.pimoroni.com/products/picade-max) arcade cabinet:
 > a rectangular screen instead of the round panel, and panel buttons plus a
 > joystick-driven pointer instead of a touchscreen.
