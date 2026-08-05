@@ -3850,20 +3850,17 @@ class RoundTouchDisplay:
                             frame_debug.stage("loop_body", body)
                     except NameError:
                         pass
-                # Yield less while on radar / countdown ring so frames aren't padded.
+                # Yield less while on radar / countdown ring so frames aren't
+                # padded. 1ms spun ~1000 iterations/s between the ~30fps draws;
+                # 4ms still polls input at 250Hz for a quarter of the spin.
                 _sleep_t = time.perf_counter()
                 ring_animating = self._timeout_remaining_fraction() is not None
-                if self.screen == SCREEN_RADAR or ring_animating:
-                    time.sleep(0.001)
-                else:
-                    time.sleep(0.01)
+                requested = (
+                    0.004 if self.screen == SCREEN_RADAR or ring_animating else 0.01
+                )
+                time.sleep(requested)
                 if FRAME_DEBUG:
                     # Overrun beyond the requested sleep = GIL / OS preemption.
-                    requested = (
-                        0.001
-                        if self.screen == SCREEN_RADAR or ring_animating
-                        else 0.01
-                    )
                     slept = time.perf_counter() - _sleep_t
                     if slept > requested + 0.005:
                         frame_debug.stage("loop_sleep_overrun", slept - requested)

@@ -504,6 +504,7 @@ install_systemd_service() {
     local service_src="$SETUP_DIR/flightscnr.service"
     local xauthority="${REPO_OWNER_HOME}/.Xauthority"
     local runtime_dir="/run/user/${REPO_OWNER_UID}"
+    local pulse_cookie="${REPO_OWNER_HOME}/.config/pulse/cookie"
 
     log_step "Installing systemd service (persists across reboot)"
     mkdir -p /etc/NetworkManager/dnsmasq-shared.d
@@ -511,6 +512,7 @@ install_systemd_service() {
         -e "s|__REPO_DIR__|$REPO_ROOT|g" \
         -e "s|__XAUTHORITY__|$xauthority|g" \
         -e "s|__XDG_RUNTIME_DIR__|$runtime_dir|g" \
+        -e "s|__PULSE_COOKIE__|$pulse_cookie|g" \
         "$service_src" > "$SERVICE_DEST"
     chmod 0644 "$SERVICE_DEST"
     systemctl daemon-reload

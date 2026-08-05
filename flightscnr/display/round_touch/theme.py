@@ -121,8 +121,11 @@ ALERT_WATCH = ALERT_OTHER
 SCALE_LABEL_BEARING_DEG = 245.5
 RING_COUNT = 3
 SWEEP_PERIOD_MS = 6000
-# Target ~60fps for the sweep; achieved FPS may be lower on Pi full redraws.
-SWEEP_FRAME_MS = 16
+# Target ~30fps. Presenting a frame (rotate + flip) costs ~10ms on the Pi 3
+# regardless of what changed, so this constant sets the CPU floor; compositing
+# the radar itself is <2ms. The sweep is time-based (tick_sweep), so a lower
+# cadence keeps 60°/s and only coarsens the step to ~2°/frame.
+SWEEP_FRAME_MS = 33
 
 
 def in_visible_circle(x: float, y: float, margin: float = 0) -> bool:
