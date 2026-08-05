@@ -80,6 +80,9 @@ RADAR_HUD_OPACITY_MAX = 100
 RADAR_HUD_POSITIONS = ("top", "bottom")
 HOURLY_CHIME_VOLUME_MIN = 0
 HOURLY_CHIME_VOLUME_MAX = 100
+# Shared 0–100 scale for tracked-enter / military alert SFX.
+SFX_VOLUME_MIN = 0
+SFX_VOLUME_MAX = 100
 
 
 def clamp_brightness_percent(value: int) -> int:
@@ -102,6 +105,16 @@ def clamp_hourly_chime_volume(value) -> int:
         return max(
             HOURLY_CHIME_VOLUME_MIN,
             min(HOURLY_CHIME_VOLUME_MAX, int(round(float(value)))),
+        )
+    except (TypeError, ValueError):
+        return 80
+
+
+def clamp_sfx_volume(value) -> int:
+    try:
+        return max(
+            SFX_VOLUME_MIN,
+            min(SFX_VOLUME_MAX, int(round(float(value)))),
         )
     except (TypeError, ValueError):
         return 80
@@ -253,6 +266,10 @@ _defaults = {
     "radar_hud_layout_bottom": copy_radar_hud_layout_bottom_default(),
     "hourly_chime_enabled": False,
     "hourly_chime_volume": 80,
+    "traffic_sfx_enabled": True,
+    "traffic_sfx_volume": 80,
+    "military_sfx_enabled": True,
+    "military_sfx_volume": 80,
     # Preferred Bluetooth A2DP speaker (paired via web portal).
     "bluetooth_speaker_mac": "",
     "bluetooth_speaker_name": "",
@@ -721,6 +738,25 @@ def _load():
     except (TypeError, ValueError):
         state["hourly_chime_volume"] = 80
         migrated = True
+    for _sfx_en_key, _sfx_en_default in (
+        ("traffic_sfx_enabled", True),
+        ("military_sfx_enabled", True),
+    ):
+        if _sfx_en_key not in data:
+            state[_sfx_en_key] = _sfx_en_default
+            migrated = True
+        else:
+            state[_sfx_en_key] = bool(state.get(_sfx_en_key))
+    for _sfx_vol_key in ("traffic_sfx_volume", "military_sfx_volume"):
+        try:
+            if _sfx_vol_key not in data:
+                state[_sfx_vol_key] = 80
+                migrated = True
+            else:
+                state[_sfx_vol_key] = clamp_sfx_volume(state.get(_sfx_vol_key, 80))
+        except (TypeError, ValueError):
+            state[_sfx_vol_key] = 80
+            migrated = True
     if "bluetooth_speaker_mac" not in data:
         state["bluetooth_speaker_mac"] = ""
         migrated = True
@@ -836,6 +872,10 @@ def _settings_snapshot(state: dict) -> tuple:
         ),
         bool(state.get("hourly_chime_enabled", False)),
         clamp_hourly_chime_volume(state.get("hourly_chime_volume", 80)),
+        bool(state.get("traffic_sfx_enabled", True)),
+        clamp_sfx_volume(state.get("traffic_sfx_volume", 80)),
+        bool(state.get("military_sfx_enabled", True)),
+        clamp_sfx_volume(state.get("military_sfx_volume", 80)),
         str(state.get("bluetooth_speaker_mac") or "").strip().upper(),
         str(state.get("bluetooth_speaker_name") or "").strip(),
         str(state.get("audio_route") or "usb").strip().lower(),
@@ -2053,6 +2093,64 @@ def set_hourly_chime_volume(value: int, *, persist: bool = True) -> int:
     _state["hourly_chime_volume"] = vol
     if persist:
         _rmw_save({"hourly_chime_volume": vol})
+    else:
+        _disk_synced = False
+    return vol
+
+
+def traffic_sfx_enabled() -> bool:
+    return bool(_state.get("traffic_sfx_enabled", True))
+
+
+def set_traffic_sfx_enabled(enabled: bool) -> None:
+    _state["traffic_sfx_enabled"] = bool(enabled)
+    _save(_state)
+
+
+def toggle_traffic_sfx_enabled() -> bool:
+    set_traffic_sfx_enabled(not traffic_sfx_enabled())
+    return traffic_sfx_enabled()
+
+
+def traffic_sfx_volume() -> int:
+    return clamp_sfx_volume(_state.get("traffic_sfx_volume", 80))
+
+
+def set_traffic_sfx_volume(value: int, *, persist: bool = True) -> int:
+    global _disk_synced
+    vol = clamp_sfx_volume(value)
+    _state["traffic_sfx_volume"] = vol
+    if persist:
+        _rmw_save({"traffic_sfx_volume": vol})
+    else:
+        _disk_synced = False
+    return vol
+
+
+def military_sfx_enabled() -> bool:
+    return bool(_state.get("military_sfx_enabled", True))
+
+
+def set_military_sfx_enabled(enabled: bool) -> None:
+    _state["military_sfx_enabled"] = bool(enabled)
+    _save(_state)
+
+
+def toggle_military_sfx_enabled() -> bool:
+    set_military_sfx_enabled(not military_sfx_enabled())
+    return military_sfx_enabled()
+
+
+def military_sfx_volume() -> int:
+    return clamp_sfx_volume(_state.get("military_sfx_volume", 80))
+
+
+def set_military_sfx_volume(value: int, *, persist: bool = True) -> int:
+    global _disk_synced
+    vol = clamp_sfx_volume(value)
+    _state["military_sfx_volume"] = vol
+    if persist:
+        _rmw_save({"military_sfx_volume": vol})
     else:
         _disk_synced = False
     return vol

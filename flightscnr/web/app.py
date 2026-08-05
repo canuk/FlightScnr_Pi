@@ -851,6 +851,10 @@ def display_json():
             "radar_hud_dark": settings.radar_hud_dark(),
             "hourly_chime_enabled": settings.hourly_chime_enabled(),
             "hourly_chime_volume": settings.hourly_chime_volume(),
+            "traffic_sfx_enabled": settings.traffic_sfx_enabled(),
+            "traffic_sfx_volume": settings.traffic_sfx_volume(),
+            "military_sfx_enabled": settings.military_sfx_enabled(),
+            "military_sfx_volume": settings.military_sfx_volume(),
         }
     )
 
@@ -893,6 +897,20 @@ def display_save():
             settings.set_hourly_chime_volume(int(data.get("hourly_chime_volume")))
         except (TypeError, ValueError):
             return jsonify({"message": "hourly_chime_volume must be a number"}), 400
+    if "traffic_sfx_enabled" in data:
+        settings.set_traffic_sfx_enabled(bool(data.get("traffic_sfx_enabled")))
+    if "traffic_sfx_volume" in data:
+        try:
+            settings.set_traffic_sfx_volume(int(data.get("traffic_sfx_volume")))
+        except (TypeError, ValueError):
+            return jsonify({"message": "traffic_sfx_volume must be a number"}), 400
+    if "military_sfx_enabled" in data:
+        settings.set_military_sfx_enabled(bool(data.get("military_sfx_enabled")))
+    if "military_sfx_volume" in data:
+        try:
+            settings.set_military_sfx_volume(int(data.get("military_sfx_volume")))
+        except (TypeError, ValueError):
+            return jsonify({"message": "military_sfx_volume must be a number"}), 400
     return jsonify(
         {
             "ok": True,
@@ -908,6 +926,10 @@ def display_save():
             "radar_hud_dark": settings.radar_hud_dark(),
             "hourly_chime_enabled": settings.hourly_chime_enabled(),
             "hourly_chime_volume": settings.hourly_chime_volume(),
+            "traffic_sfx_enabled": settings.traffic_sfx_enabled(),
+            "traffic_sfx_volume": settings.traffic_sfx_volume(),
+            "military_sfx_enabled": settings.military_sfx_enabled(),
+            "military_sfx_volume": settings.military_sfx_volume(),
             "message": "Display settings saved.",
         }
     )
@@ -930,6 +952,48 @@ def display_chime_preview():
             "ok": True,
             "hourly_chime_volume": settings.hourly_chime_volume(),
             "message": "Playing chime preview.",
+        }
+    )
+
+
+@app.post("/display/traffic-sfx-preview")
+def display_traffic_sfx_preview():
+    """Play the tracked enter-range sound once."""
+    from display.round_touch import alert_sounds, settings
+
+    data = request.get_json(silent=True) or {}
+    if "traffic_sfx_volume" in data:
+        try:
+            settings.set_traffic_sfx_volume(int(data.get("traffic_sfx_volume")))
+        except (TypeError, ValueError):
+            return jsonify({"message": "traffic_sfx_volume must be a number"}), 400
+    alert_sounds.play_traffic_preview()
+    return jsonify(
+        {
+            "ok": True,
+            "traffic_sfx_volume": settings.traffic_sfx_volume(),
+            "message": "Playing tracked enter-range preview.",
+        }
+    )
+
+
+@app.post("/display/military-sfx-preview")
+def display_military_sfx_preview():
+    """Play the military sighting sound once."""
+    from display.round_touch import alert_sounds, settings
+
+    data = request.get_json(silent=True) or {}
+    if "military_sfx_volume" in data:
+        try:
+            settings.set_military_sfx_volume(int(data.get("military_sfx_volume")))
+        except (TypeError, ValueError):
+            return jsonify({"message": "military_sfx_volume must be a number"}), 400
+    alert_sounds.play_military_preview()
+    return jsonify(
+        {
+            "ok": True,
+            "military_sfx_volume": settings.military_sfx_volume(),
+            "message": "Playing military sound preview.",
         }
     )
 

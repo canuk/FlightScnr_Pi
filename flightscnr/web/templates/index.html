@@ -423,6 +423,22 @@
             <label for="hourly_chime_volume">Hourly chime volume <span id="hourly_chime_volume_label">80%</span></label>
             <input id="hourly_chime_volume" type="range" min="0" max="100" step="1" value="80">
             <p class="hint">Independent of ATC audio volume.</p>
+            <div class="chk">
+                <label for="traffic_sfx">Tracked enter-range sound</label>
+                <button class="btn btn-sm" id="btn-traffic-sfx-preview" type="button">Preview</button>
+                <span class="switch"><input id="traffic_sfx" type="checkbox" checked><span class="track"></span></span>
+            </div>
+            <label for="traffic_sfx_volume">Tracked enter volume <span id="traffic_sfx_volume_label">80%</span></label>
+            <input id="traffic_sfx_volume" type="range" min="0" max="100" step="1" value="80">
+            <p class="hint">Plays when a live tracked flight crosses into radar range.</p>
+            <div class="chk">
+                <label for="military_sfx">Military aircraft sound</label>
+                <button class="btn btn-sm" id="btn-military-sfx-preview" type="button">Preview</button>
+                <span class="switch"><input id="military_sfx" type="checkbox" checked><span class="track"></span></span>
+            </div>
+            <label for="military_sfx_volume">Military sound volume <span id="military_sfx_volume_label">80%</span></label>
+            <input id="military_sfx_volume" type="range" min="0" max="100" step="1" value="80">
+            <p class="hint">Plays once when a new military aircraft appears in radar range.</p>
             <button class="btn btn-primary" id="btn-save-reload" style="margin-top:.7rem" type="button">Save &amp; reload on display</button>
             <div id="display-status" class="status"></div>
         </div>
@@ -968,6 +984,15 @@ async function loadAll() {
             $("hourly_chime_volume").value = String(d.hourly_chime_volume ?? 80);
             syncChimeVolumeLabel();
         }
+        if ($("traffic_sfx")) $("traffic_sfx").checked = d.traffic_sfx_enabled !== false;
+        if ($("traffic_sfx_volume")) {
+            $("traffic_sfx_volume").value = String(d.traffic_sfx_volume ?? 80);
+        }
+        if ($("military_sfx")) $("military_sfx").checked = d.military_sfx_enabled !== false;
+        if ($("military_sfx_volume")) {
+            $("military_sfx_volume").value = String(d.military_sfx_volume ?? 80);
+        }
+        syncChimeVolumeLabel();
     } catch (_) {}
 
     try {
@@ -1062,6 +1087,10 @@ function syncHudOpacityLabel() {
 function syncChimeVolumeLabel() {
     const el = $("hourly_chime_volume_label");
     if (el && $("hourly_chime_volume")) el.textContent = `${$("hourly_chime_volume").value}%`;
+    const tel = $("traffic_sfx_volume_label");
+    if (tel && $("traffic_sfx_volume")) tel.textContent = `${$("traffic_sfx_volume").value}%`;
+    const mel = $("military_sfx_volume_label");
+    if (mel && $("military_sfx_volume")) mel.textContent = `${$("military_sfx_volume").value}%`;
 }
 
 function syncVfrOpacityLabel() {
@@ -1237,6 +1266,10 @@ async function saveAndReloadSettings() {
                 radar_hud_opacity: $("radar_hud_opacity") ? Number($("radar_hud_opacity").value) : 72,
                 hourly_chime_enabled: $("hourly_chime") ? $("hourly_chime").checked : false,
                 hourly_chime_volume: $("hourly_chime_volume") ? Number($("hourly_chime_volume").value) : 80,
+                traffic_sfx_enabled: $("traffic_sfx") ? $("traffic_sfx").checked : true,
+                traffic_sfx_volume: $("traffic_sfx_volume") ? Number($("traffic_sfx_volume").value) : 80,
+                military_sfx_enabled: $("military_sfx") ? $("military_sfx").checked : true,
+                military_sfx_volume: $("military_sfx_volume") ? Number($("military_sfx_volume").value) : 80,
             }),
         });
         const loc = ($("radar_center").value || "").trim();
@@ -1985,6 +2018,8 @@ $("bright_pct").addEventListener("input", syncBrightLabel);
 $("night_dim").addEventListener("input", syncNightDimLabel);
 if ($("radar_hud_opacity")) $("radar_hud_opacity").addEventListener("input", syncHudOpacityLabel);
 if ($("hourly_chime_volume")) $("hourly_chime_volume").addEventListener("input", syncChimeVolumeLabel);
+if ($("traffic_sfx_volume")) $("traffic_sfx_volume").addEventListener("input", syncChimeVolumeLabel);
+if ($("military_sfx_volume")) $("military_sfx_volume").addEventListener("input", syncChimeVolumeLabel);
 if ($("btn-chime-preview")) {
     $("btn-chime-preview").addEventListener("click", async () => {
         clearStatus("display-status");
@@ -1998,6 +2033,42 @@ if ($("btn-chime-preview")) {
                 body: JSON.stringify({ hourly_chime_volume: volume }),
             });
             showStatus("display-status", data.message || "Playing chime preview.");
+        } catch (err) {
+            showStatus("display-status", err.message || String(err), true);
+        }
+    });
+}
+if ($("btn-traffic-sfx-preview")) {
+    $("btn-traffic-sfx-preview").addEventListener("click", async () => {
+        clearStatus("display-status");
+        try {
+            const volume = $("traffic_sfx_volume")
+                ? Number($("traffic_sfx_volume").value)
+                : 80;
+            const data = await jsonFetch("/display/traffic-sfx-preview", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ traffic_sfx_volume: volume }),
+            });
+            showStatus("display-status", data.message || "Playing tracked sound preview.");
+        } catch (err) {
+            showStatus("display-status", err.message || String(err), true);
+        }
+    });
+}
+if ($("btn-military-sfx-preview")) {
+    $("btn-military-sfx-preview").addEventListener("click", async () => {
+        clearStatus("display-status");
+        try {
+            const volume = $("military_sfx_volume")
+                ? Number($("military_sfx_volume").value)
+                : 80;
+            const data = await jsonFetch("/display/military-sfx-preview", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ military_sfx_volume: volume }),
+            });
+            showStatus("display-status", data.message || "Playing military sound preview.");
         } catch (err) {
             showStatus("display-status", err.message || String(err), true);
         }
