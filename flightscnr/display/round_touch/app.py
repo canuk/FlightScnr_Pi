@@ -175,6 +175,9 @@ class RoundTouchDisplay:
         self._atc_picker_scroll = nav.ScrollState()
         # Finger Y while dragging inside the ATC picker (continuous scroll).
         self._atc_picker_drag_y: int | None = None
+        # Same for settings pages, plus whether that drag already scrolled.
+        self._settings_drag_y: int | None = None
+        self._settings_drag_scrolled = False
         self._fatal_error = None
         self._scroll = nav.ScrollState()
         self._last_grab_seq = 0
@@ -1112,6 +1115,8 @@ class RoundTouchDisplay:
         self._radar_hud_layout_drag = False
         self._hud_opacity_slider_active = False
         self._hud_volume_slider_kind = None
+        self._settings_drag_y = None
+        self._settings_drag_scrolled = False
         self._system_confirm = None
         self._close_atc_picker()
         self._invalidate_timeout_content_cache()
@@ -1149,6 +1154,8 @@ class RoundTouchDisplay:
             if self.screen == SCREEN_TRACKED:
                 tracked.reset_marquee()
             self._scroll.reset()
+            self._settings_drag_y = None
+            self._settings_drag_scrolled = False
         if screen == SCREEN_RADAR:
             self._radar_visible_since = time.time()
             self._auto_idle_clock = False
@@ -1252,18 +1259,12 @@ class RoundTouchDisplay:
             radar.invalidate_frame_layer()
         elif action == "hud_opacity":
             return
-        elif action == "hourly_chime":
-            settings.toggle_hourly_chime_enabled()
-            radar.invalidate_frame_layer()
-        elif action == "chime_volume":
-            return
-        elif action == "traffic_sfx":
-            settings.toggle_traffic_sfx_enabled()
-        elif action == "traffic_sfx_volume":
-            return
-        elif action == "military_sfx":
-            settings.toggle_military_sfx_enabled()
-        elif action == "military_sfx_volume":
+        elif action in (
+            "chime_volume",
+            "traffic_sfx_volume",
+            "military_sfx_volume",
+        ):
+            # Switch and slider are hit-tested directly on the row.
             return
         elif action == "enabled":
             from utilities import atc_audio
@@ -1570,6 +1571,25 @@ class RoundTouchDisplay:
 
     def _apply_chime_volume_slider(self, x: int, *, persist: bool = True) -> bool:
         return self._apply_hud_volume_slider("chime_volume", x, persist=persist)
+
+    def _apply_hud_sound_toggle(self, action: str) -> bool:
+        """Switch at the head of a HUD volume row turns that sound on or off."""
+        volume_action = {
+            "hourly_chime": "chime_volume",
+            "traffic_sfx": "traffic_sfx_volume",
+            "military_sfx": "military_sfx_volume",
+        }.get(action)
+        if volume_action is None:
+            return False
+        if action == "hourly_chime":
+            settings.toggle_hourly_chime_enabled()
+            radar.invalidate_frame_layer()
+        elif action == "traffic_sfx":
+            settings.toggle_traffic_sfx_enabled()
+        else:
+            settings.toggle_military_sfx_enabled()
+        self._display_focus = info.hud_volume_row_index(volume_action)
+        return True
 
     def _apply_hud_volume_slider(
         self, action: str, x: int, *, persist: bool = True
@@ -2410,6 +2430,46 @@ class RoundTouchDisplay:
                 if pos and info.vfr_opacity_slider_at(pos[0], pos[1], self._scroll.offset):
                     self.input.consume_scroll_drag()
                     return
+        if self.screen == SCREEN_SETTINGS and self.settings_page == info.PAGE_HUD:
+            if self._hud_opacity_slider_active or self._hud_volume_slider_kind:
+                self.input.consume_scroll_drag()
+                return
+            if self.input.is_dragging():
+                pos = self.input.drag_pos()
+                if pos and (
+                    info.hud_opacity_slider_at(pos[0], pos[1], self._scroll.offset)
+                    or info.hud_volume_slider_at(pos[0], pos[1], self._scroll.offset)
+                ):
+                    self.input.consume_scroll_drag()
+                    return
+        if self.screen == SCREEN_SETTINGS and self.settings_page == info.PAGE_ATC:
+            if self._atc_volume_slider_active:
+                self.input.consume_scroll_drag()
+                return
+            if self.input.is_dragging():
+                pos = self.input.drag_pos()
+                if pos and info.atc_volume_slider_at(pos[0], pos[1], self._scroll.offset):
+                    self.input.consume_scroll_drag()
+                    return
+        if self.screen == SCREEN_SETTINGS:
+            # Same trap as the ATC picker: scroll_dy stops accumulating once the
+            # drag passes the swipe threshold, and the release swipe then scrolled
+            # back the other way. Follow the finger for the whole drag instead.
+            self.input.consume_scroll_drag()
+            if self.input.is_dragging():
+                pos = self.input.drag_pos()
+                if pos is not None:
+                    if self._settings_drag_y is None:
+                        self._settings_drag_scrolled = False
+                    else:
+                        dy = pos[1] - self._settings_drag_y
+                        if dy:
+                            self._settings_drag_scrolled = True
+                            self._apply_scroll_delta(-dy)
+                    self._settings_drag_y = pos[1]
+                    return
+            self._settings_drag_y = None
+            return
         dy = self.input.consume_scroll_drag()
         if not dy:
             return
@@ -2418,8 +2478,6 @@ class RoundTouchDisplay:
         elif self.screen == SCREEN_FIRE:
             self._apply_scroll_delta(-dy)
         elif self.screen == SCREEN_DETAILS:
-            self._apply_scroll_delta(-dy)
-        elif self.screen == SCREEN_SETTINGS:
             self._apply_scroll_delta(-dy)
 
     def _apply_theme_slider(
@@ -2576,6 +2634,9 @@ class RoundTouchDisplay:
                 self._apply_hud_opacity_slider(x, persist=True)
                 return
             if self.settings_page == info.PAGE_HUD:
+                hit_toggle = info.hud_sound_toggle_at(x, y, self._scroll.offset)
+                if hit_toggle and self._apply_hud_sound_toggle(hit_toggle):
+                    return
                 hit_vol = info.hud_volume_slider_at(x, y, self._scroll.offset)
                 if hit_vol:
                     self._apply_hud_volume_slider(hit_vol, x, persist=True)
@@ -2802,13 +2863,18 @@ class RoundTouchDisplay:
             self._scroll.step(delta)
             self._safe_draw()
         elif swipe in (input_handler.SWIPE_UP, input_handler.SWIPE_DOWN) and self.screen == SCREEN_SETTINGS:
-            # ATC picker already scrolled via live drag; a follow-up swipe would
+            # The list already scrolled with the finger; a follow-up swipe would
             # jump the other direction and hide the rows just revealed.
             if self._atc_picker:
                 self._atc_picker_drag_y = None
                 self._note_activity()
+            elif self._settings_drag_scrolled:
+                self._settings_drag_scrolled = False
+                self._note_activity()
             else:
-                delta = -nav.scroll_step() if swipe == input_handler.SWIPE_UP else nav.scroll_step()
+                # Flick with no tracked motion: swipe up reveals lower rows, matching
+                # the direction a finger drag moves the list.
+                delta = nav.scroll_step() if swipe == input_handler.SWIPE_UP else -nav.scroll_step()
                 self._apply_scroll_delta(delta)
         if tap and not theme.in_visible_circle(tap[0], tap[1]):
             tap = None

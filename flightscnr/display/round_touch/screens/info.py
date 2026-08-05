@@ -81,17 +81,15 @@ DISPLAY_ACTIONS = (
     "rotate",
     "brightness",
 )
-# Radar clock HUD + hourly chime + enter-range / military SFX.
+# Radar clock HUD + hourly chime + enter-range / military SFX. Each sound is one
+# row: an on/off switch beside its volume slider.
 HUD_ACTIONS = (
     "radar_hud",
     "hud_position",
     "hud_dark",
     "hud_opacity",
-    "hourly_chime",
     "chime_volume",
-    "traffic_sfx",
     "traffic_sfx_volume",
-    "military_sfx",
     "military_sfx_volume",
 )
 # Filter / map controls — kept short so rows fit the round viewport.
@@ -891,6 +889,11 @@ def _display_layout(page: int, scroll_offset: int = 0) -> tuple[int, int, int]:
     return row_y, row_h, len(_row_actions(page))
 
 
+def _in_settings_body(y: int) -> bool:
+    """True when y sits inside the scrolling body band rows are clipped to."""
+    return nav.content_top_y(has_dots=True) <= y <= nav.content_bottom_y()
+
+
 def display_row_at(x: int, y: int, page: int, scroll_offset: int = 0) -> int | None:
     if not _settings_row_page(page):
         return None
@@ -900,7 +903,13 @@ def display_row_at(x: int, y: int, page: int, scroll_offset: int = 0) -> int | N
     bottom = nav.content_bottom_y()
     actions = _row_actions(page)
     for i in range(count):
-        if actions[i] in ("brightness", "vfr_opacity", "volume", "status", "hud_opacity"):
+        if actions[i] in (
+            "brightness",
+            "vfr_opacity",
+            "volume",
+            "status",
+            "hud_opacity",
+        ) or actions[i] in _HUD_VOLUME_ACTIONS:
             continue
         ry = row_y + i * row_h
         if ry + body_font.get_height() < top or ry > bottom:
@@ -959,7 +968,7 @@ def _brightness_slider_geometry(scroll_offset: int = 0) -> tuple[pygame.Rect, in
 
 def brightness_slider_at(x: int, y: int, scroll_offset: int = 0) -> bool:
     geom = _brightness_slider_geometry(scroll_offset)
-    if geom is None:
+    if geom is None or not _in_settings_body(y):
         return False
     hit, _, _ = geom
     return hit.collidepoint(x, y)
@@ -1011,7 +1020,7 @@ def _hud_opacity_slider_geometry(scroll_offset: int = 0) -> tuple[pygame.Rect, i
 
 def hud_opacity_slider_at(x: int, y: int, scroll_offset: int = 0) -> bool:
     geom = _hud_opacity_slider_geometry(scroll_offset)
-    if geom is None:
+    if geom is None or not _in_settings_body(y):
         return False
     return geom[0].collidepoint(x, y)
 
@@ -1036,12 +1045,19 @@ def _chime_volume_slider_metrics() -> tuple[int, int, int, int]:
         for lbl in ("Chime volume", "Tracked volume", "Military volume")
     )
     value_w = body_font.size("100%")[0]
-    track_w = theme.s(100)
+    # Shorter than the other sliders — each row also carries an on/off switch.
+    track_w = theme.s(68)
     row_h = body_font.get_height() + theme.s(8)
     return track_w, row_h, label_w, value_w
 
 
 _HUD_VOLUME_ACTIONS = ("chime_volume", "traffic_sfx_volume", "military_sfx_volume")
+# Volume row -> the sound toggle drawn as a switch at the head of that row.
+_HUD_VOLUME_TOGGLES = {
+    "chime_volume": "hourly_chime",
+    "traffic_sfx_volume": "traffic_sfx",
+    "military_sfx_volume": "military_sfx",
+}
 
 
 def _hud_volume_meta(action: str):
@@ -1067,6 +1083,17 @@ def _hud_volume_meta(action: str):
     return None
 
 
+def hud_sound_enabled(action: str) -> bool:
+    """On/off state of the sound whose switch shares this volume row."""
+    if action == "chime_volume":
+        return settings.hourly_chime_enabled()
+    if action == "traffic_sfx_volume":
+        return settings.traffic_sfx_enabled()
+    if action == "military_sfx_volume":
+        return settings.military_sfx_enabled()
+    return True
+
+
 def hud_volume_row_index(action: str) -> int:
     try:
         return HUD_ACTIONS.index(action)
@@ -1078,22 +1105,61 @@ def chime_volume_row_index() -> int:
     return hud_volume_row_index("chime_volume")
 
 
-def _hud_volume_slider_geometry(
-    action: str, scroll_offset: int = 0
-) -> tuple[pygame.Rect, int, int] | None:
+def _hud_slider_knob_radius() -> int:
+    return max(5, theme.s(6))
+
+
+def _hud_switch_size() -> tuple[int, int]:
+    return draw.toggle_switch_size(_display_font())
+
+
+def _hud_volume_row_columns() -> tuple[int, int, int, int, int]:
+    """x of the switch, label, track and value columns, plus the row height."""
+    body_font = _display_font()
+    track_w, slider_h, label_w, value_w = _chime_volume_slider_metrics()
+    switch_w, _switch_h = _hud_switch_size()
+    gap = theme.s(8)
+    height = max(slider_h, body_font.get_height() + theme.s(6))
+    block_w = switch_w + gap + label_w + gap + track_w + gap + value_w
+    switch_x = theme.CENTER_X - block_w // 2
+    label_x = switch_x + switch_w + gap
+    track_x = label_x + label_w + gap
+    value_x = track_x + track_w + gap
+    return switch_x, label_x, track_x, value_x, height
+
+
+def _hud_volume_row_y(action: str, scroll_offset: int = 0) -> int | None:
     if action not in HUD_ACTIONS or _hud_volume_meta(action) is None:
         return None
-    track_w, slider_h, label_w, value_w = _chime_volume_slider_metrics()
-    gap = theme.s(8)
     idx = hud_volume_row_index(action)
     if idx < 0:
         return None
     row_y, row_h, _ = _display_layout(PAGE_HUD, scroll_offset)
-    ry = row_y + idx * row_h
-    block_w = label_w + gap + track_w + gap + value_w
-    left_x = theme.CENTER_X - block_w // 2
-    track_x = left_x + label_w + gap
-    hit = pygame.Rect(left_x, ry - theme.s(4), block_w, max(slider_h, row_h) + theme.s(8))
+    return row_y + idx * row_h
+
+
+def _hud_switch_rect(action: str, ry: int) -> pygame.Rect:
+    switch_x, _label_x, _track_x, _value_x, height = _hud_volume_row_columns()
+    switch_w, switch_h = _hud_switch_size()
+    return pygame.Rect(switch_x, int(ry + (height - switch_h) // 2), switch_w, switch_h)
+
+
+def _hud_volume_slider_geometry(
+    action: str, scroll_offset: int = 0
+) -> tuple[pygame.Rect, int, int] | None:
+    ry = _hud_volume_row_y(action, scroll_offset)
+    if ry is None:
+        return None
+    track_w, _slider_h, _label_w, _value_w = _chime_volume_slider_metrics()
+    _switch_x, _label_x, track_x, _value_x, height = _hud_volume_row_columns()
+    # Track only (plus knob overhang): the switch and label share this row.
+    knob_r = _hud_slider_knob_radius()
+    hit = pygame.Rect(
+        track_x - knob_r,
+        ry - theme.s(4),
+        track_w + knob_r * 2,
+        height + theme.s(8),
+    )
     return hit, track_x, track_w
 
 
@@ -1103,10 +1169,26 @@ def _chime_volume_slider_geometry(scroll_offset: int = 0) -> tuple[pygame.Rect, 
 
 def hud_volume_slider_at(x: int, y: int, scroll_offset: int = 0) -> str | None:
     """Return which HUD volume action was hit, or None."""
+    if not _in_settings_body(y):
+        return None
     for action in _HUD_VOLUME_ACTIONS:
         geom = _hud_volume_slider_geometry(action, scroll_offset)
         if geom is not None and geom[0].collidepoint(x, y):
             return action
+    return None
+
+
+def hud_sound_toggle_at(x: int, y: int, scroll_offset: int = 0) -> str | None:
+    """Return the sound toggle action whose switch was hit, or None."""
+    if not _in_settings_body(y):
+        return None
+    pad = theme.s(6)
+    for action in _HUD_VOLUME_ACTIONS:
+        ry = _hud_volume_row_y(action, scroll_offset)
+        if ry is None:
+            continue
+        if _hud_switch_rect(action, ry).inflate(pad * 2, pad * 2).collidepoint(x, y):
+            return _HUD_VOLUME_TOGGLES[action]
     return None
 
 
@@ -1178,7 +1260,7 @@ def _vfr_opacity_slider_geometry(scroll_offset: int = 0) -> tuple[pygame.Rect, i
 
 def vfr_opacity_slider_at(x: int, y: int, scroll_offset: int = 0) -> bool:
     geom = _vfr_opacity_slider_geometry(scroll_offset)
-    if geom is None:
+    if geom is None or not _in_settings_body(y):
         return False
     hit, _, _ = geom
     return hit.collidepoint(x, y)
@@ -1330,7 +1412,6 @@ def _atc_row_labels() -> list[str]:
         if now - ts < _ATC_LABEL_TTL_S:
             return list(rows)
 
-    enabled = "on" if settings.atc_enabled() else "off"
     st: dict | None = None
     try:
         from utilities import atc_audio
@@ -1339,7 +1420,7 @@ def _atc_row_labels() -> list[str]:
     except Exception:
         st = None
     rows = (
-        f"ATC Audio: {enabled}",
+        "ATC Audio",
         "",  # volume slider
         f"Airport › {_atc_airport_label()}",
         f"Channel › {_atc_channel_label_from_status(st)}",
@@ -1351,9 +1432,8 @@ def _atc_row_labels() -> list[str]:
 
 
 def _atc_quiet_row_labels() -> list[str]:
-    quiet = "on" if settings.atc_quiet_hours_enabled() else "off"
     return [
-        f"Quiet hours: {quiet}",
+        "Quiet hours",
         f"Quiet start: {settings.atc_quiet_start_label()}",
         f"Quiet end: {settings.atc_quiet_end_label()}",
     ]
@@ -1456,6 +1536,7 @@ def _draw_atc_page(surface, scroll_offset: int, display_focus: int, top: int, bo
         display_focus,
         top,
         rows_bottom,
+        actions=ATC_ACTIONS,
         draw_atc_volume_slider=True,
     )
     total_w = btn_w * 2 + gap
@@ -1469,17 +1550,15 @@ def _draw_atc_page(surface, scroll_offset: int, display_focus: int, top: int, bo
 
 
 def _display_row_labels() -> list[str]:
-    rose = "on" if settings.show_compass_rose() else "off"
-    rings = "on" if settings.show_range_rings() else "off"
     facing = settings.facing_label()
-    sweep = "on" if settings.show_sweep_line() else "off"
     # Brightness is drawn as a slider; placeholder keeps row count aligned.
+    # On/off rows carry a switch, so they are label-only here.
     return [
         f"Change Compass Heading: {facing}",
         "Click to Set Radar Center",
-        f"Compass Rose: {rose}",
-        f"Radar Range Rings: {rings}",
-        f"Radar Sweep Line: {sweep}",
+        "Compass Rose",
+        "Radar Range Rings",
+        "Radar Sweep Line",
         f"Units: {settings.unit_preset_label()}",
         f"Radar Range: {settings.scale_label()}",
         f"Rotate Screen: {settings.display_rotation()}°",
@@ -1488,24 +1567,17 @@ def _display_row_labels() -> list[str]:
 
 
 def _hud_row_labels() -> list[str]:
-    hud = "on" if settings.radar_hud_enabled() else "off"
     hud_pos = settings.radar_hud_position()
     hud_style = "dark" if settings.radar_hud_dark() else "light"
-    chime = "on" if settings.hourly_chime_enabled() else "off"
-    traffic = "on" if settings.traffic_sfx_enabled() else "off"
-    military = "on" if settings.military_sfx_enabled() else "off"
     # Opacity / volume rows are drawn as sliders; placeholders align actions.
     return [
-        f"HUD: {hud}",
+        "HUD",
         f"Clock Position: {hud_pos}",
         f"HUD Style: {hud_style}",
         "",  # HUD opacity slider
-        f"Hourly Chime: {chime}",
-        "",  # chime volume slider
-        f"Tracked Enter Sound: {traffic}",
-        "",  # traffic volume slider
-        f"Military Sound: {military}",
-        "",  # military volume slider
+        "",  # chime switch + volume slider
+        "",  # traffic switch + volume slider
+        "",  # military switch + volume slider
     ]
 
 
@@ -1526,21 +1598,64 @@ def _options_row_labels() -> list[str]:
 
 
 def _layers_row_labels() -> list[str]:
-    precip = "on" if settings.show_precipitation() else "off"
-    wildfires = "on" if settings.show_wildfires() else "off"
-    centerlines = "on" if settings.show_airport_centerlines() else "off"
-    icons = "on" if settings.show_airport_icons() else "off"
-    ground_veh = "on" if settings.show_ground_vehicles() else "off"
-    idle = "on" if settings.auto_idle_clock_enabled() else "off"
+    # Every overlay row but the traffic selector is a switch (label only here).
     return [
         f"Select Traffic: {settings.traffic_mode_label()}",
-        f"Show Precipitation: {precip}",
-        f"Show Wildfires: {wildfires}",
-        f"Show Airport Centerlines: {centerlines}",
-        f"Show Airport Icons: {icons}",
-        f"Show Ground Vehicles: {ground_veh}",
-        f"Auto Idle Clock: {idle}",
+        "Show Precipitation",
+        "Show Wildfires",
+        "Show Airport Centerlines",
+        "Show Airport Icons",
+        "Show Ground Vehicles",
+        "Auto Idle Clock",
     ]
+
+
+# Rows drawn as "label + pill switch". The whole row stays tappable, so the
+# switch is a state readout rather than a separate hit target.
+_TOGGLE_ROW_STATE = {
+    "compass": settings.show_compass_rose,
+    "range_rings": settings.show_range_rings,
+    "sweep": settings.show_sweep_line,
+    "radar_hud": settings.radar_hud_enabled,
+    "precipitation": settings.show_precipitation,
+    "wildfires": settings.show_wildfires,
+    "airport_centerlines": settings.show_airport_centerlines,
+    "airport_icons": settings.show_airport_icons,
+    "ground_vehicles": settings.show_ground_vehicles,
+    "idle_clock": settings.auto_idle_clock_enabled,
+    "enabled": settings.atc_enabled,
+    "quiet": settings.atc_quiet_hours_enabled,
+}
+
+
+def _draw_toggle_row(surface, label: str, ry: int, focused: bool, on: bool) -> None:
+    body_font = _display_font()
+    gap = theme.s(10)
+    switch_w, switch_h = draw.toggle_switch_size(body_font)
+    text_h = body_font.get_height()
+    max_w = draw.circle_half_width_at_row(ry, text_h) * 2 - switch_w - gap
+    text = draw.fit_text(label, body_font, max_w)
+    text_w = body_font.size(text)[0]
+    block_w = text_w + gap + switch_w
+    left_x = theme.CENTER_X - block_w // 2
+    if focused:
+        pad_x = theme.s(10)
+        pad_y = theme.s(3)
+        rect = pygame.Rect(
+            left_x - pad_x,
+            ry - pad_y,
+            block_w + pad_x * 2,
+            text_h + pad_y * 2,
+        )
+        pygame.draw.rect(surface, theme.GRID, rect, max(1, theme.s(1)))
+    surface.blit(body_font.render(text, True, theme.MUTED), (left_x, ry))
+    switch = pygame.Rect(
+        left_x + text_w + gap,
+        int(ry + (text_h - switch_h) // 2),
+        switch_w,
+        switch_h,
+    )
+    draw.draw_toggle_switch(surface, switch, on)
 
 
 def _draw_settings_rows(
@@ -1551,6 +1666,7 @@ def _draw_settings_rows(
     top: int,
     bottom: int,
     *,
+    actions: tuple[str, ...] = (),
     draw_brightness_slider: bool = False,
     draw_hud_opacity_slider: bool = False,
     draw_chime_volume_slider: bool = False,
@@ -1560,7 +1676,9 @@ def _draw_settings_rows(
     body_font = _display_font()
     row_y = top + theme.s(4) - scroll_offset
     row_h = body_font.get_height() + theme.s(6)
-    total_h = theme.s(4) + len(rows) * row_h
+    # Slider rows draw slightly taller than the text pitch and add focus padding;
+    # reserve that so the last row can scroll clear of the footer buttons.
+    total_h = theme.s(4) + len(rows) * row_h + theme.s(8)
     max_scroll = max(0, total_h - (bottom - top))
     brightness_idx = brightness_row_index() if draw_brightness_slider else -1
     hud_opacity_idx = hud_opacity_row_index() if draw_hud_opacity_slider else -1
@@ -1573,50 +1691,62 @@ def _draw_settings_rows(
     )
     vfr_idx = vfr_opacity_row_index() if draw_vfr_opacity_slider else -1
     volume_idx = atc_volume_row_index() if draw_atc_volume_slider else -1
-    for i, line in enumerate(rows):
-        ry = row_y + i * row_h
-        if ry + body_font.get_height() < top or ry > bottom:
-            continue
-        if draw_brightness_slider and i == brightness_idx:
-            _draw_brightness_slider_row(surface, int(ry), display_focus == i)
-            continue
-        if draw_hud_opacity_slider and i == hud_opacity_idx:
-            _draw_hud_opacity_slider_row(surface, int(ry), display_focus == i)
-            continue
-        if draw_chime_volume_slider and i == chime_vol_idx:
-            _draw_hud_volume_slider_row(
-                surface, int(ry), display_focus == i, "chime_volume"
+    # Clip to the body band so scrolled rows never bleed over the footer buttons.
+    clip_prev = surface.get_clip()
+    surface.set_clip(pygame.Rect(0, int(top), surface.get_width(), max(0, int(bottom - top))))
+    try:
+        for i, line in enumerate(rows):
+            ry = row_y + i * row_h
+            if ry + body_font.get_height() < top or ry > bottom:
+                continue
+            if draw_brightness_slider and i == brightness_idx:
+                _draw_brightness_slider_row(surface, int(ry), display_focus == i)
+                continue
+            if draw_hud_opacity_slider and i == hud_opacity_idx:
+                _draw_hud_opacity_slider_row(surface, int(ry), display_focus == i)
+                continue
+            if draw_chime_volume_slider and i == chime_vol_idx:
+                _draw_hud_volume_slider_row(
+                    surface, int(ry), display_focus == i, "chime_volume"
+                )
+                continue
+            if draw_chime_volume_slider and i == traffic_vol_idx:
+                _draw_hud_volume_slider_row(
+                    surface, int(ry), display_focus == i, "traffic_sfx_volume"
+                )
+                continue
+            if draw_chime_volume_slider and i == military_vol_idx:
+                _draw_hud_volume_slider_row(
+                    surface, int(ry), display_focus == i, "military_sfx_volume"
+                )
+                continue
+            if draw_vfr_opacity_slider and i == vfr_idx:
+                _draw_vfr_opacity_slider_row(surface, int(ry), display_focus == i)
+                continue
+            if draw_atc_volume_slider and i == volume_idx:
+                _draw_atc_volume_slider_row(surface, int(ry), display_focus == i)
+                continue
+            state = _TOGGLE_ROW_STATE.get(actions[i]) if i < len(actions) else None
+            if state is not None:
+                _draw_toggle_row(
+                    surface, line, int(ry), display_focus == i, bool(state())
+                )
+                continue
+            text_w, text_h = body_font.size(line)
+            pad_x = theme.s(10)
+            pad_y = theme.s(3)
+            # Hug the label — full-circle width looked like a weird tall bar.
+            rect = pygame.Rect(
+                theme.CENTER_X - text_w // 2 - pad_x,
+                ry - pad_y,
+                text_w + pad_x * 2,
+                text_h + pad_y * 2,
             )
-            continue
-        if draw_chime_volume_slider and i == traffic_vol_idx:
-            _draw_hud_volume_slider_row(
-                surface, int(ry), display_focus == i, "traffic_sfx_volume"
-            )
-            continue
-        if draw_chime_volume_slider and i == military_vol_idx:
-            _draw_hud_volume_slider_row(
-                surface, int(ry), display_focus == i, "military_sfx_volume"
-            )
-            continue
-        if draw_vfr_opacity_slider and i == vfr_idx:
-            _draw_vfr_opacity_slider_row(surface, int(ry), display_focus == i)
-            continue
-        if draw_atc_volume_slider and i == volume_idx:
-            _draw_atc_volume_slider_row(surface, int(ry), display_focus == i)
-            continue
-        text_w, text_h = body_font.size(line)
-        pad_x = theme.s(10)
-        pad_y = theme.s(3)
-        # Hug the label — full-circle width looked like a weird tall bar.
-        rect = pygame.Rect(
-            theme.CENTER_X - text_w // 2 - pad_x,
-            ry - pad_y,
-            text_w + pad_x * 2,
-            text_h + pad_y * 2,
-        )
-        if i == display_focus:
-            pygame.draw.rect(surface, theme.GRID, rect, max(1, theme.s(1)))
-        draw.draw_center_line(surface, line, int(ry), body_font, theme.MUTED)
+            if i == display_focus:
+                pygame.draw.rect(surface, theme.GRID, rect, max(1, theme.s(1)))
+            draw.draw_center_line(surface, line, int(ry), body_font, theme.MUTED)
+    finally:
+        surface.set_clip(clip_prev)
     return max_scroll
 
 
@@ -1718,50 +1848,50 @@ def _draw_hud_volume_slider_row(
         return
     label_text, getter, _setter = meta
     body_font = _display_font()
-    track_w, slider_h, label_w, value_w = _chime_volume_slider_metrics()
-    gap = theme.s(8)
+    track_w, _slider_h, _label_w, value_w = _chime_volume_slider_metrics()
+    switch_x, label_x, track_x, value_x, row_h = _hud_volume_row_columns()
     pct = int(getter())
     lo = settings.SFX_VOLUME_MIN
     hi = settings.SFX_VOLUME_MAX
     if action == "chime_volume":
         lo = settings.HOURLY_CHIME_VOLUME_MIN
         hi = settings.HOURLY_CHIME_VOLUME_MAX
-    block_w = label_w + gap + track_w + gap + value_w
-    left_x = theme.CENTER_X - block_w // 2
-    track_x = left_x + label_w + gap
+    enabled = hud_sound_enabled(action)
     text_h = body_font.get_height()
-    row_h = max(slider_h, text_h + theme.s(6))
     if focused:
         pad = theme.s(4)
         focus = pygame.Rect(
-            left_x - pad,
+            switch_x - pad,
             ry - pad,
-            block_w + pad * 2,
+            (value_x + value_w) - switch_x + pad * 2,
             row_h + pad,
         )
         pygame.draw.rect(surface, theme.GRID, focus, max(1, theme.s(1)))
-    label = body_font.render(label_text, True, theme.MUTED)
-    surface.blit(label, (left_x, int(ry + (row_h - text_h) // 2)))
+    draw.draw_toggle_switch(surface, _hud_switch_rect(action, ry), enabled)
+    label = body_font.render(label_text, True, theme.MUTED if enabled else theme.HINT)
+    surface.blit(label, (label_x, int(ry + (row_h - text_h) // 2)))
     track_cy = int(ry + row_h // 2)
     track_rect = pygame.Rect(track_x, track_cy - max(2, theme.s(2)), track_w, max(4, theme.s(4)))
     pygame.draw.rect(surface, theme.HINT, track_rect, border_radius=theme.s(2))
     t = (pct - lo) / max(1, hi - lo)
     fill_w = int(round(t * track_w))
+    # A muted sound keeps its level, but the slider says it is not being heard.
+    fill_color = theme.SWEEP if enabled else theme.SWEEP_TRAIL
     if fill_w > 0:
         fill_rect = pygame.Rect(track_x, track_rect.y, fill_w, track_rect.height)
-        pygame.draw.rect(surface, theme.SWEEP, fill_rect, border_radius=theme.s(2))
+        pygame.draw.rect(surface, fill_color, fill_rect, border_radius=theme.s(2))
     knob_x = track_x + fill_w
-    knob_r = max(5, theme.s(6))
-    pygame.draw.circle(surface, theme.SWEEP, (knob_x, track_cy), knob_r)
-    pygame.draw.circle(surface, theme.LABEL, (knob_x, track_cy), knob_r, max(1, theme.s(1)))
-    value = body_font.render(f"{pct}%", True, theme.MUTED)
-    surface.blit(
-        value,
-        (
-            track_x + track_w + gap,
-            int(ry + (row_h - text_h) // 2),
-        ),
+    knob_r = _hud_slider_knob_radius()
+    pygame.draw.circle(surface, fill_color, (knob_x, track_cy), knob_r)
+    pygame.draw.circle(
+        surface,
+        theme.LABEL if enabled else theme.HINT,
+        (knob_x, track_cy),
+        knob_r,
+        max(1, theme.s(1)),
     )
+    value = body_font.render(f"{pct}%", True, theme.MUTED if enabled else theme.HINT)
+    surface.blit(value, (value_x, int(ry + (row_h - text_h) // 2)))
 
 
 def _draw_chime_volume_slider_row(surface, ry: int, focused: bool) -> None:
@@ -1892,6 +2022,7 @@ def draw_info(
             display_focus,
             top,
             bottom,
+            actions=DISPLAY_ACTIONS,
             draw_brightness_slider=True,
         )
 
@@ -1903,6 +2034,7 @@ def draw_info(
             display_focus,
             top,
             bottom,
+            actions=HUD_ACTIONS,
             draw_hud_opacity_slider=True,
             draw_chime_volume_slider=True,
         )
@@ -1915,6 +2047,7 @@ def draw_info(
             display_focus,
             top,
             bottom,
+            actions=OPTIONS_ACTIONS,
             draw_vfr_opacity_slider=True,
         )
 
@@ -1926,6 +2059,7 @@ def draw_info(
             display_focus,
             top,
             bottom,
+            actions=LAYERS_ACTIONS,
         )
 
     elif page == PAGE_ATC:
@@ -1942,6 +2076,7 @@ def draw_info(
             display_focus,
             top,
             bottom,
+            actions=ATC_QUIET_ACTIONS,
         )
 
     elif page == PAGE_COLORS:

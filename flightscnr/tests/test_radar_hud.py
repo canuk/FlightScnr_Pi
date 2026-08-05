@@ -572,5 +572,102 @@ class HudVolumeControlTests(unittest.TestCase):
                     self.assertEqual(radar_hud.volume_popover_channel(), "speaker")
 
 
+class HudSettingsRowTests(unittest.TestCase):
+    """HUD settings page: one row per sound (switch + shortened volume slider)."""
+
+    @classmethod
+    def setUpClass(cls):
+        os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
+        import pygame
+
+        pygame.init()
+        try:
+            pygame.display.set_mode((1, 1))
+        except pygame.error:
+            pass
+
+    def test_sound_toggles_share_the_volume_rows(self):
+        from display.round_touch.screens import info
+
+        for action in ("hourly_chime", "traffic_sfx", "military_sfx"):
+            self.assertNotIn(action, info.HUD_ACTIONS)
+        for action in info._HUD_VOLUME_ACTIONS:
+            self.assertIn(action, info.HUD_ACTIONS)
+
+    def test_hud_page_fits_without_scrolling(self):
+        import pygame
+        from display.round_touch import theme
+        from display.round_touch.screens import info
+
+        surface = pygame.Surface((theme.SIZE, theme.SIZE))
+        max_scroll = info.draw_info(surface, info.PAGE_HUD, 0, -1)
+        self.assertEqual(max_scroll, 0)
+
+    def test_switch_and_slider_hit_targets_do_not_overlap(self):
+        from display.round_touch.screens import info
+
+        expected = {
+            "chime_volume": "hourly_chime",
+            "traffic_sfx_volume": "traffic_sfx",
+            "military_sfx_volume": "military_sfx",
+        }
+        for action, toggle in expected.items():
+            ry = info._hud_volume_row_y(action)
+            self.assertIsNotNone(ry)
+            switch = info._hud_switch_rect(action, ry)
+            _hit, track_x, track_w = info._hud_volume_slider_geometry(action)
+            self.assertLess(switch.right, track_x)
+            self.assertEqual(
+                info.hud_sound_toggle_at(switch.centerx, switch.centery), toggle
+            )
+            self.assertIsNone(
+                info.hud_volume_slider_at(switch.centerx, switch.centery)
+            )
+            mid_x = track_x + track_w // 2
+            self.assertEqual(info.hud_volume_slider_at(mid_x, switch.centery), action)
+            self.assertIsNone(
+                info.hud_sound_toggle_at(mid_x, switch.centery)
+            )
+
+    def test_boolean_rows_use_switches_not_on_off_text(self):
+        from display.round_touch.screens import info
+
+        pages = (
+            (info.DISPLAY_ACTIONS, info._display_row_labels()),
+            (info.HUD_ACTIONS, info._hud_row_labels()),
+            (info.LAYERS_ACTIONS, info._layers_row_labels()),
+            (info.ATC_QUIET_ACTIONS, info._atc_quiet_row_labels()),
+        )
+        for actions, labels in pages:
+            self.assertEqual(len(actions), len(labels))
+            for action, label in zip(actions, labels):
+                if action in info._TOGGLE_ROW_STATE:
+                    self.assertNotIn(":", label)
+                    self.assertTrue(callable(info._TOGGLE_ROW_STATE[action]))
+
+    def test_switch_knob_ignores_the_user_palette(self):
+        import pygame
+        from display.round_touch import draw, theme
+
+        # settings.apply_theme_colors() repaints theme.LABEL from the user's
+        # colour; the knob has to stay white regardless.
+        surface = pygame.Surface((80, 40))
+        surface.fill((0, 0, 0))
+        rect = pygame.Rect(10, 10, 40, 20)
+        with mock.patch.object(theme, "LABEL", (48, 255, 96)):
+            draw.draw_toggle_switch(surface, rect, True)
+        knob_x = rect.right - rect.height // 2
+        self.assertEqual(surface.get_at((knob_x, rect.centery))[:3], (255, 255, 255))
+
+    def test_rows_stay_inside_the_body_band(self):
+        from display.round_touch import nav
+        from display.round_touch.screens import info
+
+        bottom = nav.content_bottom_y()
+        for action in info._HUD_VOLUME_ACTIONS:
+            hit, _track_x, _track_w = info._hud_volume_slider_geometry(action)
+            self.assertLess(hit.bottom, bottom)
+
+
 if __name__ == "__main__":
     unittest.main()
