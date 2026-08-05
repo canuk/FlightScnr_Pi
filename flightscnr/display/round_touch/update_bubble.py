@@ -18,7 +18,7 @@ import pygame
 
 from display.round_touch import draw, radar_hud, theme
 
-_LABEL = "Firmware Update available"
+_LABEL = "Firmware Update Available"
 _CACHE_TTL_S = 2.0
 
 _bubble_rect = pygame.Rect(0, 0, 0, 0)
