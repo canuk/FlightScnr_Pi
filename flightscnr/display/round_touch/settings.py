@@ -154,7 +154,7 @@ RADAR_HUD_LAYOUT_OFFSET_MAX = 96
 RADAR_HUD_LAYOUT_TOP_DEFAULT = {
     "wx_icon": [-29, 31],
     "temp": [42, -29],
-    "wind": [14, -6],
+    "wind": [5, -5],
 }
 
 # Baked bottom-pill offsets (from device arrange pass, 2026-07-31).
@@ -521,6 +521,12 @@ def _save(data, *, merge_atc_from_disk: bool = True):
         with open(tmp_path, "w", encoding="utf-8") as f:
             json.dump(out, f, indent=2)
         os.replace(tmp_path, SETTINGS_PATH)
+        # Match sibling prefs (weather/alert): world-writable so the Pi user
+        # can edit /var/lib/flightscnr/round_touch_settings.json in Cursor.
+        try:
+            os.chmod(SETTINGS_PATH, 0o666)
+        except OSError:
+            pass
         try:
             _settings_mtime = os.path.getmtime(SETTINGS_PATH)
         except OSError:
