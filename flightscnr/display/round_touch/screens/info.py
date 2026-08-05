@@ -81,7 +81,7 @@ DISPLAY_ACTIONS = (
     "rotate",
     "brightness",
 )
-# Radar clock HUD + hourly chime (fits one viewport without footer overlap).
+# Radar clock HUD + hourly chime + enter-range / military SFX.
 HUD_ACTIONS = (
     "radar_hud",
     "hud_position",
@@ -89,6 +89,10 @@ HUD_ACTIONS = (
     "hud_opacity",
     "hourly_chime",
     "chime_volume",
+    "traffic_sfx",
+    "traffic_sfx_volume",
+    "military_sfx",
+    "military_sfx_volume",
 )
 # Filter / map controls — kept short so rows fit the round viewport.
 OPTIONS_ACTIONS = (
@@ -1026,26 +1030,62 @@ def hud_opacity_slider_value_at(x: int, scroll_offset: int = 0) -> int | None:
 
 def _chime_volume_slider_metrics() -> tuple[int, int, int, int]:
     body_font = _display_font()
-    label_w = body_font.size("Chime volume")[0]
+    # Widest HUD volume label so all SFX sliders share geometry.
+    label_w = max(
+        body_font.size(lbl)[0]
+        for lbl in ("Chime volume", "Tracked volume", "Military volume")
+    )
     value_w = body_font.size("100%")[0]
     track_w = theme.s(100)
     row_h = body_font.get_height() + theme.s(8)
     return track_w, row_h, label_w, value_w
 
 
-def chime_volume_row_index() -> int:
+_HUD_VOLUME_ACTIONS = ("chime_volume", "traffic_sfx_volume", "military_sfx_volume")
+
+
+def _hud_volume_meta(action: str):
+    """Return (label, getter, setter) for a HUD volume slider action."""
+    if action == "chime_volume":
+        return (
+            "Chime volume",
+            settings.hourly_chime_volume,
+            settings.set_hourly_chime_volume,
+        )
+    if action == "traffic_sfx_volume":
+        return (
+            "Tracked volume",
+            settings.traffic_sfx_volume,
+            settings.set_traffic_sfx_volume,
+        )
+    if action == "military_sfx_volume":
+        return (
+            "Military volume",
+            settings.military_sfx_volume,
+            settings.set_military_sfx_volume,
+        )
+    return None
+
+
+def hud_volume_row_index(action: str) -> int:
     try:
-        return HUD_ACTIONS.index("chime_volume")
+        return HUD_ACTIONS.index(action)
     except ValueError:
         return -1
 
 
-def _chime_volume_slider_geometry(scroll_offset: int = 0) -> tuple[pygame.Rect, int, int] | None:
-    if "chime_volume" not in HUD_ACTIONS:
+def chime_volume_row_index() -> int:
+    return hud_volume_row_index("chime_volume")
+
+
+def _hud_volume_slider_geometry(
+    action: str, scroll_offset: int = 0
+) -> tuple[pygame.Rect, int, int] | None:
+    if action not in HUD_ACTIONS or _hud_volume_meta(action) is None:
         return None
     track_w, slider_h, label_w, value_w = _chime_volume_slider_metrics()
     gap = theme.s(8)
-    idx = chime_volume_row_index()
+    idx = hud_volume_row_index(action)
     if idx < 0:
         return None
     row_y, row_h, _ = _display_layout(PAGE_HUD, scroll_offset)
@@ -1057,23 +1097,42 @@ def _chime_volume_slider_geometry(scroll_offset: int = 0) -> tuple[pygame.Rect, 
     return hit, track_x, track_w
 
 
+def _chime_volume_slider_geometry(scroll_offset: int = 0) -> tuple[pygame.Rect, int, int] | None:
+    return _hud_volume_slider_geometry("chime_volume", scroll_offset)
+
+
+def hud_volume_slider_at(x: int, y: int, scroll_offset: int = 0) -> str | None:
+    """Return which HUD volume action was hit, or None."""
+    for action in _HUD_VOLUME_ACTIONS:
+        geom = _hud_volume_slider_geometry(action, scroll_offset)
+        if geom is not None and geom[0].collidepoint(x, y):
+            return action
+    return None
+
+
 def chime_volume_slider_at(x: int, y: int, scroll_offset: int = 0) -> bool:
-    geom = _chime_volume_slider_geometry(scroll_offset)
-    if geom is None:
-        return False
-    return geom[0].collidepoint(x, y)
+    return hud_volume_slider_at(x, y, scroll_offset) == "chime_volume"
 
 
-def chime_volume_slider_value_at(x: int, scroll_offset: int = 0) -> int | None:
-    geom = _chime_volume_slider_geometry(scroll_offset)
+def hud_volume_slider_value_at(
+    action: str, x: int, scroll_offset: int = 0
+) -> int | None:
+    geom = _hud_volume_slider_geometry(action, scroll_offset)
     if geom is None:
         return None
     _, track_x, track_w = geom
-    lo = settings.HOURLY_CHIME_VOLUME_MIN
-    hi = settings.HOURLY_CHIME_VOLUME_MAX
+    lo = settings.SFX_VOLUME_MIN
+    hi = settings.SFX_VOLUME_MAX
+    if action == "chime_volume":
+        lo = settings.HOURLY_CHIME_VOLUME_MIN
+        hi = settings.HOURLY_CHIME_VOLUME_MAX
     t = (x - track_x) / max(1, track_w)
     span = hi - lo
     return max(lo, min(hi, int(round(lo + t * span))))
+
+
+def chime_volume_slider_value_at(x: int, scroll_offset: int = 0) -> int | None:
+    return hud_volume_slider_value_at("chime_volume", x, scroll_offset)
 
 
 def _vfr_opacity_slider_metrics() -> tuple[int, int, int, int]:
@@ -1433,7 +1492,9 @@ def _hud_row_labels() -> list[str]:
     hud_pos = settings.radar_hud_position()
     hud_style = "dark" if settings.radar_hud_dark() else "light"
     chime = "on" if settings.hourly_chime_enabled() else "off"
-    # HUD opacity / chime volume are drawn as sliders; placeholders align rows.
+    traffic = "on" if settings.traffic_sfx_enabled() else "off"
+    military = "on" if settings.military_sfx_enabled() else "off"
+    # Opacity / volume rows are drawn as sliders; placeholders align actions.
     return [
         f"HUD: {hud}",
         f"Clock Position: {hud_pos}",
@@ -1441,6 +1502,10 @@ def _hud_row_labels() -> list[str]:
         "",  # HUD opacity slider
         f"Hourly Chime: {chime}",
         "",  # chime volume slider
+        f"Tracked Enter Sound: {traffic}",
+        "",  # traffic volume slider
+        f"Military Sound: {military}",
+        "",  # military volume slider
     ]
 
 
@@ -1500,6 +1565,12 @@ def _draw_settings_rows(
     brightness_idx = brightness_row_index() if draw_brightness_slider else -1
     hud_opacity_idx = hud_opacity_row_index() if draw_hud_opacity_slider else -1
     chime_vol_idx = chime_volume_row_index() if draw_chime_volume_slider else -1
+    traffic_vol_idx = (
+        hud_volume_row_index("traffic_sfx_volume") if draw_chime_volume_slider else -1
+    )
+    military_vol_idx = (
+        hud_volume_row_index("military_sfx_volume") if draw_chime_volume_slider else -1
+    )
     vfr_idx = vfr_opacity_row_index() if draw_vfr_opacity_slider else -1
     volume_idx = atc_volume_row_index() if draw_atc_volume_slider else -1
     for i, line in enumerate(rows):
@@ -1513,7 +1584,19 @@ def _draw_settings_rows(
             _draw_hud_opacity_slider_row(surface, int(ry), display_focus == i)
             continue
         if draw_chime_volume_slider and i == chime_vol_idx:
-            _draw_chime_volume_slider_row(surface, int(ry), display_focus == i)
+            _draw_hud_volume_slider_row(
+                surface, int(ry), display_focus == i, "chime_volume"
+            )
+            continue
+        if draw_chime_volume_slider and i == traffic_vol_idx:
+            _draw_hud_volume_slider_row(
+                surface, int(ry), display_focus == i, "traffic_sfx_volume"
+            )
+            continue
+        if draw_chime_volume_slider and i == military_vol_idx:
+            _draw_hud_volume_slider_row(
+                surface, int(ry), display_focus == i, "military_sfx_volume"
+            )
             continue
         if draw_vfr_opacity_slider and i == vfr_idx:
             _draw_vfr_opacity_slider_row(surface, int(ry), display_focus == i)
@@ -1627,13 +1710,22 @@ def _draw_hud_opacity_slider_row(surface, ry: int, focused: bool) -> None:
     )
 
 
-def _draw_chime_volume_slider_row(surface, ry: int, focused: bool) -> None:
+def _draw_hud_volume_slider_row(
+    surface, ry: int, focused: bool, action: str
+) -> None:
+    meta = _hud_volume_meta(action)
+    if meta is None:
+        return
+    label_text, getter, _setter = meta
     body_font = _display_font()
     track_w, slider_h, label_w, value_w = _chime_volume_slider_metrics()
     gap = theme.s(8)
-    pct = settings.hourly_chime_volume()
-    lo = settings.HOURLY_CHIME_VOLUME_MIN
-    hi = settings.HOURLY_CHIME_VOLUME_MAX
+    pct = int(getter())
+    lo = settings.SFX_VOLUME_MIN
+    hi = settings.SFX_VOLUME_MAX
+    if action == "chime_volume":
+        lo = settings.HOURLY_CHIME_VOLUME_MIN
+        hi = settings.HOURLY_CHIME_VOLUME_MAX
     block_w = label_w + gap + track_w + gap + value_w
     left_x = theme.CENTER_X - block_w // 2
     track_x = left_x + label_w + gap
@@ -1648,7 +1740,7 @@ def _draw_chime_volume_slider_row(surface, ry: int, focused: bool) -> None:
             row_h + pad,
         )
         pygame.draw.rect(surface, theme.GRID, focus, max(1, theme.s(1)))
-    label = body_font.render("Chime volume", True, theme.MUTED)
+    label = body_font.render(label_text, True, theme.MUTED)
     surface.blit(label, (left_x, int(ry + (row_h - text_h) // 2)))
     track_cy = int(ry + row_h // 2)
     track_rect = pygame.Rect(track_x, track_cy - max(2, theme.s(2)), track_w, max(4, theme.s(4)))
@@ -1670,6 +1762,10 @@ def _draw_chime_volume_slider_row(surface, ry: int, focused: bool) -> None:
             int(ry + (row_h - text_h) // 2),
         ),
     )
+
+
+def _draw_chime_volume_slider_row(surface, ry: int, focused: bool) -> None:
+    _draw_hud_volume_slider_row(surface, ry, focused, "chime_volume")
 
 
 def _draw_vfr_opacity_slider_row(surface, ry: int, focused: bool) -> None:

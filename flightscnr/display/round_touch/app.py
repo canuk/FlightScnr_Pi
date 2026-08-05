@@ -48,6 +48,7 @@ from display.round_touch import (
     wildfire_overlay,
 )
 from utilities import aircraft_alert
+from display.round_touch import alert_sounds
 from display.round_touch.screens import (
     clock,
     clock_settings,
@@ -222,7 +223,7 @@ class RoundTouchDisplay:
         self._radar_hud_volume_drag = False
         self._radar_hud_layout_drag = False
         self._hud_opacity_slider_active = False
-        self._chime_volume_slider_active = False
+        self._hud_volume_slider_kind: str | None = None
 
         radar._init_sweep()
         try:
@@ -1079,7 +1080,7 @@ class RoundTouchDisplay:
         self._radar_hud_volume_drag = False
         self._radar_hud_layout_drag = False
         self._hud_opacity_slider_active = False
-        self._chime_volume_slider_active = False
+        self._hud_volume_slider_kind = None
         self._system_confirm = None
         self._close_atc_picker()
         self._invalidate_timeout_content_cache()
@@ -1224,6 +1225,14 @@ class RoundTouchDisplay:
             settings.toggle_hourly_chime_enabled()
             radar.invalidate_frame_layer()
         elif action == "chime_volume":
+            return
+        elif action == "traffic_sfx":
+            settings.toggle_traffic_sfx_enabled()
+        elif action == "traffic_sfx_volume":
+            return
+        elif action == "military_sfx":
+            settings.toggle_military_sfx_enabled()
+        elif action == "military_sfx_volume":
             return
         elif action == "enabled":
             from utilities import atc_audio
@@ -1514,24 +1523,37 @@ class RoundTouchDisplay:
         return changed
 
     def _apply_chime_volume_slider(self, x: int, *, persist: bool = True) -> bool:
-        value = info.chime_volume_slider_value_at(x, self._scroll.offset)
+        return self._apply_hud_volume_slider("chime_volume", x, persist=persist)
+
+    def _apply_hud_volume_slider(
+        self, action: str, x: int, *, persist: bool = True
+    ) -> bool:
+        meta = info._hud_volume_meta(action)  # noqa: SLF001
+        if meta is None:
+            return False
+        _label, getter, setter = meta
+        value = info.hud_volume_slider_value_at(action, x, self._scroll.offset)
         if value is None:
             return False
-        if value == settings.hourly_chime_volume():
-            self._display_focus = info.chime_volume_row_index()
+        if value == int(getter()):
+            self._display_focus = info.hud_volume_row_index(action)
             return False
-        settings.set_hourly_chime_volume(value, persist=persist)
-        self._display_focus = info.chime_volume_row_index()
+        setter(value, persist=persist)
+        self._display_focus = info.hud_volume_row_index(action)
         return True
 
     def _update_chime_volume_slider_drag(self) -> bool:
         if self.screen != SCREEN_SETTINGS or self.settings_page != info.PAGE_HUD:
-            self._chime_volume_slider_active = False
+            self._hud_volume_slider_kind = None
             return False
         if not self.input.is_dragging():
-            if self._chime_volume_slider_active:
-                self._chime_volume_slider_active = False
-                settings.set_hourly_chime_volume(settings.hourly_chime_volume(), persist=True)
+            if self._hud_volume_slider_kind:
+                kind = self._hud_volume_slider_kind
+                self._hud_volume_slider_kind = None
+                meta = info._hud_volume_meta(kind)  # noqa: SLF001
+                if meta is not None:
+                    _label, getter, setter = meta
+                    setter(getter(), persist=True)
                 self.input.consume_scroll_drag()
                 return True
             return False
@@ -1539,11 +1561,14 @@ class RoundTouchDisplay:
         if pos is None:
             return False
         x, y = pos
-        if not self._chime_volume_slider_active:
-            if not info.chime_volume_slider_at(x, y, self._scroll.offset):
+        if self._hud_volume_slider_kind is None:
+            hit = info.hud_volume_slider_at(x, y, self._scroll.offset)
+            if not hit:
                 return False
-            self._chime_volume_slider_active = True
-        changed = self._apply_chime_volume_slider(x, persist=False)
+            self._hud_volume_slider_kind = hit
+        changed = self._apply_hud_volume_slider(
+            self._hud_volume_slider_kind, x, persist=False
+        )
         self.input.consume_scroll_drag()
         return changed
 
@@ -2431,11 +2456,11 @@ class RoundTouchDisplay:
             ):
                 self._apply_hud_opacity_slider(x, persist=True)
                 return
-            if self.settings_page == info.PAGE_HUD and info.chime_volume_slider_at(
-                x, y, self._scroll.offset
-            ):
-                self._apply_chime_volume_slider(x, persist=True)
-                return
+            if self.settings_page == info.PAGE_HUD:
+                hit_vol = info.hud_volume_slider_at(x, y, self._scroll.offset)
+                if hit_vol:
+                    self._apply_hud_volume_slider(hit_vol, x, persist=True)
+                    return
             if self.settings_page == info.PAGE_OPTIONS and info.vfr_opacity_slider_at(
                 x, y, self._scroll.offset
             ):
@@ -3064,6 +3089,10 @@ class RoundTouchDisplay:
                 ):
                     self._return_to_radar()
                     self._safe_draw()
+            try:
+                alert_sounds.tick(self.flights, self.overhead.tracked_data)
+            except Exception:
+                logger.debug("Alert SFX tick failed", exc_info=True)
         except Exception:
             logger.exception("Flight data poll failed")
 
