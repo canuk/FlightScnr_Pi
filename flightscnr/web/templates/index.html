@@ -315,32 +315,32 @@
     </details>
 
     <details class="card">
-        <summary><span class="ico">&#9888;</span>Alerts<span class="sum">aircraft filters</span><span class="chev">&#9656;</span></summary>
+        <summary><span class="ico">&#9888;</span>Alerts<span class="sum">flight #, type, registration</span><span class="chev">&#9656;</span></summary>
         <div class="body">
             <div class="chk"><label for="alert-mil">Alert on military aircraft</label><span class="switch"><input id="alert-mil" type="checkbox"><span class="track"></span></span></div>
             <div class="chk"><label for="alert-emrg">Alert on emergency squawk (7700/7600/7500)</label><span class="switch"><input id="alert-emrg" type="checkbox"><span class="track"></span></span></div>
             <div class="chk"><label for="alert-hide">Hide non-alerted aircraft on radar</label><span class="switch"><input id="alert-hide" type="checkbox"><span class="track"></span></span></div>
-            <label for="alert-watch">Watch list (callsigns / registrations)</label>
-            <input id="alert-watch" type="text" autocomplete="off" placeholder="UAL123, D-AIML, N2136U">
-            <p class="hint">Many flights to highlight on the local radar when they appear in range — not a dedicated follow. Callsigns (UAL123) or tails (D-AIML, N2136U).</p>
+            <label for="alert-watch">Watch list (flight numbers / registrations)</label>
+            <input id="alert-watch" type="text" autocomplete="off" placeholder="UAL1083, N2136U, D-AIML">
+            <p class="hint">Highlight many aircraft on the <strong>local radar</strong> when they enter range — not a worldwide follow (use Tracking for that). Enter ICAO flight numbers (UAL1083) and/or registrations / tail numbers (N2136U, D-AIML), comma-separated. Clear and Save to remove.</p>
             <label for="alert-watch-types">Watch list (aircraft types)</label>
-            <input id="alert-watch-types" type="text" autocomplete="off" placeholder="A337, B748, A330-743">
-            <p class="hint">Comma-separated ICAO type codes or designations (e.g. A337, B738, A330-743). Matches every aircraft of that type on radar. Clear either field and Save to remove those watches.</p>
+            <input id="alert-watch-types" type="text" autocomplete="off" placeholder="B738, A337, A330-743">
+            <p class="hint">Alert on every aircraft of a given type on local radar. Use ICAO type codes (B738, A337) or designations (A330-743), comma-separated. Clear and Save to remove.</p>
             <button class="btn btn-primary" id="btn-alerts" style="margin-top:.7rem" type="button">Save alerts</button>
             <div id="alert-status" class="status"></div>
         </div>
     </details>
 
     <details class="card">
-        <summary><span class="ico">&#9992;</span>Tracking<span class="sum">follow one flight worldwide</span><span class="chev">&#9656;</span></summary>
+        <summary><span class="ico">&#9992;</span>Tracking<span class="sum">one flight # or tail worldwide</span><span class="chev">&#9656;</span></summary>
         <div class="body">
-            <label for="callsign-input">Track callsign or registration</label>
+            <label for="callsign-input">Track flight number or registration</label>
             <div class="track-row">
-                <input type="text" id="callsign-input" placeholder="UAL1134 / N2136U / CS-TPQ" maxlength="12">
+                <input type="text" id="callsign-input" placeholder="UAL1083 / N2136U / CS-TPQ" maxlength="12">
                 <button class="btn btn-primary" id="btn-track" type="button">Track</button>
                 <button class="btn" id="btn-clear-track" type="button">Clear</button>
             </div>
-            <p class="hint">Follow <strong>one</strong> flight worldwide on the Tracked screen (route, ETA, pin) — even outside radar range. Callsign (UAL1134 / DLH3Y) or tail (D-AIML, N2136U).</p>
+            <p class="hint">Follow <strong>one</strong> aircraft worldwide on the Tracked screen (route, ETA, pin) — even outside radar range. Enter an ICAO flight number (UAL1083) or a registration / tail number (N2136U, CS-TPQ). For many flights or types on local radar only, use Alerts instead.</p>
             <p class="hint" id="current-tracked">Loading tracked flight...</p>
             <div id="track-status" class="status"></div>
             <div class="track-row hidden" id="confirm-row">
