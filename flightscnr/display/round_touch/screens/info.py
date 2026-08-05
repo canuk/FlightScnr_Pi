@@ -57,10 +57,8 @@ FOOTER_BUTTONS = ("prev", "next", "radar")
 
 
 def footer_kinds_for_page(page: int) -> tuple[str, ...]:
-    """Settings footer: omit Prev on first page and Next on last."""
-    kinds: list[str] = []
-    if page > PAGE_MAIN:
-        kinds.append("prev")
+    """Settings footer: Prev always (Main returns to About); omit Next on last."""
+    kinds: list[str] = ["prev"]
     if page < PAGE_SYSTEM:
         kinds.append("next")
     kinds.append("radar")
@@ -247,7 +245,7 @@ def _firms_api_line() -> str:
 
 
 def _breadcrumb(page: int) -> list[str]:
-    trail = ["Radar", "Settings"]
+    trail = ["Radar", "About", "Settings"]
     if page == PAGE_DISPLAY:
         trail.append("Display")
     elif page == PAGE_HUD:
