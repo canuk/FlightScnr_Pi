@@ -71,6 +71,14 @@ def init_display(width: int, height: int, fullscreen: bool) -> pygame.Surface:
 
                 if not speaker_connected():
                     os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
+                else:
+                    # SDL holds the device open even when nothing is playing, so
+                    # a starved buffer spams snd_pcm_recover forever rather than
+                    # once per sound. 512 frames (~12ms) could not survive the
+                    # render loop; 2048 gives the callback ~46ms of slack.
+                    pygame.mixer.pre_init(
+                        frequency=44100, size=-16, channels=2, buffer=2048
+                    )
             except Exception:
                 pass
             # Cabinet sticks must keep working when the compositor gives focus

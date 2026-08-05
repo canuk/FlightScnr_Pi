@@ -78,6 +78,45 @@ def fit_text(text: str, font: pygame.font.Font, max_width: int) -> str:
     return "…"
 
 
+# theme.LABEL follows the user palette (green on the stock theme); switch knobs
+# stay neutral so they read as a physical toggle.
+SWITCH_OFF_FILL = (24, 30, 38)
+SWITCH_KNOB_ON = (255, 255, 255)
+SWITCH_KNOB_OFF = (150, 165, 180)
+
+
+def toggle_switch_size(font: pygame.font.Font) -> tuple[int, int]:
+    """Pill switch dimensions for a row drawn in ``font``."""
+    height = max(theme.s(14), font.get_height() - theme.s(8))
+    return int(height * 1.8), height
+
+
+def draw_toggle_switch(surface: pygame.Surface, rect: pygame.Rect, on: bool) -> None:
+    """Pill switch: green with the knob right when on, dim and left when off."""
+    radius = max(2, rect.height // 2)
+    pygame.draw.rect(
+        surface,
+        theme.GRID if on else SWITCH_OFF_FILL,
+        rect,
+        border_radius=radius,
+    )
+    pygame.draw.rect(
+        surface,
+        theme.SWEEP if on else theme.HINT,
+        rect,
+        max(1, theme.s(1)),
+        border_radius=radius,
+    )
+    knob_r = max(2, radius - max(1, theme.s(2)))
+    knob_x = rect.right - radius if on else rect.left + radius
+    pygame.draw.circle(
+        surface,
+        SWITCH_KNOB_ON if on else SWITCH_KNOB_OFF,
+        (int(knob_x), rect.centery),
+        knob_r,
+    )
+
+
 def draw_center_line(
     surface: pygame.Surface,
     text: str,

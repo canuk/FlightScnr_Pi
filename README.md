@@ -45,7 +45,7 @@ The UI is designed for a **4in round LCD with touch** (default layout: **720x720
 | **Weather Forecast**          | Swipe right from clock                      | Multi-day forecast (Tomorrow.io)                                                                        |
 | **Clock settings**            | Swipe left from clock                       | Clock format and related options on-device                                                              |
 | **About / details**           | Swipe up from radar                         | Version, network, API status, portal URL                                                                |
-| **Settings**                  | Swipe left from radar                       | Brightness, timeouts, color theme, facing direction, display options, ATC audio, system (multi-page)    |
+| **Settings**                  | Swipe left from About                       | Brightness, timeouts, color theme, facing direction, display options, ATC audio, system (multi-page)    |
 | **Wi-Fi setup**               | Automatic when offline                      | QR code to join the FlightScnr setup hotspot, then finish on your phone                                 |
 
 
@@ -84,7 +84,7 @@ By default the radar is **north-up**. If the display is mounted on a wall or des
 
 **On the device**
 
-1. Swipe left → **Settings** → **Display** → tap **Facing**
+1. Swipe up → **About** → swipe left → **Settings** → **Display** → tap **Facing**
 2. Traffic drawing and ADS-B refresh pause; drag around the screen to rotate the rose, crosshairs, and map
 3. **Tap center** to save, or **tap the rim** to cancel
 
