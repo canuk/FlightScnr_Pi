@@ -2626,13 +2626,22 @@ class RoundTouchDisplay:
         elif swipe == input_handler.SWIPE_DOWN and self.screen == SCREEN_DETAILS:
             self._return_to_radar()
             self._safe_draw()
-        elif swipe == input_handler.SWIPE_UP and self.screen == SCREEN_CLOCK:
-            self._return_to_radar()
-            self._safe_draw()
-        elif swipe == input_handler.SWIPE_LEFT and self.screen == SCREEN_RADAR:
+        elif swipe == input_handler.SWIPE_LEFT and self.screen == SCREEN_DETAILS:
+            # Settings sits beside About; Radar swipe-left stays free for apps.
             self._open_screen(SCREEN_SETTINGS)
             self.settings_page = info.PAGE_MAIN
             self._note_activity()
+            self._safe_draw()
+        elif (
+            swipe == input_handler.SWIPE_RIGHT
+            and self.screen == SCREEN_SETTINGS
+            and self.settings_page == info.PAGE_MAIN
+        ):
+            self._open_screen(SCREEN_DETAILS)
+            self._note_activity()
+            self._safe_draw()
+        elif swipe == input_handler.SWIPE_UP and self.screen == SCREEN_CLOCK:
+            self._return_to_radar()
             self._safe_draw()
         elif self.screen == SCREEN_FLIGHT and swipe in (input_handler.SWIPE_UP, input_handler.SWIPE_DOWN):
             delta = -nav.scroll_step() if swipe == input_handler.SWIPE_UP else nav.scroll_step()
@@ -2671,7 +2680,7 @@ class RoundTouchDisplay:
                 if prev is not None:
                     self._set_settings_page(prev)
                 else:
-                    self._return_to_radar()
+                    self._open_screen(SCREEN_DETAILS)
             else:
                 self._return_to_radar()
             self._note_activity()
@@ -2789,7 +2798,12 @@ class RoundTouchDisplay:
                     self._safe_draw()
         elif tap and self.screen == SCREEN_DETAILS:
             action = details.tap_footer_action(tap[0], tap[1])
-            if action == "radar":
+            if action == "next":
+                self._open_screen(SCREEN_SETTINGS)
+                self.settings_page = info.PAGE_MAIN
+                self._note_activity()
+                self._safe_draw()
+            elif action == "radar":
                 self._return_to_radar()
                 self._safe_draw()
         elif tap and self.screen == SCREEN_SETTINGS:
@@ -2816,6 +2830,9 @@ class RoundTouchDisplay:
                     prev = info.prev_page(self.settings_page)
                     if prev is not None:
                         self._set_settings_page(prev)
+                    else:
+                        # First settings page — back to About.
+                        self._open_screen(SCREEN_DETAILS)
                 elif action == "next":
                     nxt = info.next_page(self.settings_page)
                     if nxt is not None:

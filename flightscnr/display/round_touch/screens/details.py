@@ -19,10 +19,9 @@ import pygame
 from display.round_touch import draw, nav, theme
 from version import APP_VERSION
 
-FOOTER_BUTTONS = ("radar",)
-# Compact radar control tucked toward the rim so it clears the version line.
-_FOOTER_Y_OFFSET = theme.s(28)
-_FOOTER_BUTTON_SIZE = theme.s(28)
+FOOTER_BUTTONS = ("next", "radar")
+# Nudge below the live version line; use default footer slot size (same as Settings).
+_FOOTER_Y_OFFSET = theme.s(16)
 
 _BOOT_DIR = os.path.normpath(
     os.path.join(
@@ -50,7 +49,6 @@ def tap_footer_action(x: int, y: int) -> str | None:
         y,
         len(FOOTER_BUTTONS),
         y_offset=_FOOTER_Y_OFFSET,
-        button_size=_FOOTER_BUTTON_SIZE,
     )
     if idx is None:
         return None
@@ -135,6 +133,5 @@ def draw_details(surface, boot_splash=False, scroll_offset: int = 0) -> int:
         surface,
         list(FOOTER_BUTTONS),
         y_offset=_FOOTER_Y_OFFSET,
-        button_size=_FOOTER_BUTTON_SIZE,
     )
     return 0
