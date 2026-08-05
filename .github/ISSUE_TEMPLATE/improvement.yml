@@ -1,18 +1,19 @@
-name: 🚀 Feature request
-description: Suggest an improvement or new option
-title: "[Feature]: "
-labels: ["feature-request"]
+name: 🔧 Improvement
+description: Change that improves existing behavior
+title: "[Improvement]: "
+labels: ["kind:improvement"]
 body:
   - type: markdown
     attributes:
       value: |
-        Thanks for the idea. Describe the problem or clutter you're trying to solve, and what you'd like added.
+        Use this for refining something that already exists (UX, performance, reliability, clarity).
+        For a brand-new capability, use the **Wishlist** template instead.
 
   - type: textarea
     id: summary
     attributes:
       label: Summary
-      description: What is missing or awkward today, and why it matters.
+      description: What feels awkward or incomplete today, and why it matters.
       placeholder: |
         The radar already has a "Show compass rose" toggle, but there is no equivalent for…
     validations:
@@ -21,7 +22,7 @@ body:
   - type: textarea
     id: request
     attributes:
-      label: Request
+      label: Proposed change
       description: Concrete behavior or UI you want (settings, portal checkbox, on-device control, etc.).
       placeholder: |
         Add a `show_range_rings` setting (mirroring `show_compass_rose`) with a matching checkbox in the web portal…
