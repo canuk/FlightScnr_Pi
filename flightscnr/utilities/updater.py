@@ -29,6 +29,8 @@ DATA_DIR = os.environ.get("FLIGHTSCNR_DATA_DIR", "/var/lib/flightscnr")
 STATUS_PATH = os.path.join(DATA_DIR, "update-status.json")
 LOCK_PATH = os.path.join(DATA_DIR, "update.lock")
 UPDATE_LOG_PATH = os.path.join(DATA_DIR, "update.log")
+INSTALL_STAMP_PATH = os.path.join(DATA_DIR, "install-script.sha256")
+INSTALL_RESYNC_BOOT_PATH = os.path.join(DATA_DIR, "install-resync.boot")
 GITHUB_TIMEOUT_S = 12
 _REMOTE_CACHE_PATH = os.path.join(DATA_DIR, "github-remote-cache.json")
 _REMOTE_CACHE_TTL_S = 30 * 60
@@ -36,6 +38,8 @@ _REMOTE_CACHE_STALE_S = 24 * 3600
 NOTIFY_PATH = os.path.join(DATA_DIR, "update-notify.json")
 # Three checks per day from the display process.
 CHECK_INTERVAL_S = 8 * 3600
+_AUTO_RESYNC_DELAY_S = 12.0
+_auto_resync_started = False
 
 
 def repo_root() -> str:
@@ -44,6 +48,79 @@ def repo_root() -> str:
 
 def update_script_path() -> str:
     return os.path.join(repo_root(), "flightscnr", "setup", "portal-update.sh")
+
+
+def install_script_path() -> str:
+    return os.path.join(repo_root(), "install-pi.sh")
+
+
+def _sha256_file(path: str) -> str:
+    import hashlib
+
+    digest = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def current_install_script_sha() -> str:
+    path = install_script_path()
+    if not os.path.isfile(path):
+        return ""
+    try:
+        return _sha256_file(path)
+    except OSError as exc:
+        logger.warning("Could not hash install-pi.sh: %s", exc)
+        return ""
+
+
+def read_install_stamp() -> str:
+    try:
+        with open(INSTALL_STAMP_PATH, encoding="utf-8") as fh:
+            return (fh.read() or "").strip()
+    except OSError:
+        return ""
+
+
+def install_resync_needed() -> bool:
+    """True when on-disk install-pi.sh has not completed since last change."""
+    current = current_install_script_sha()
+    if not current:
+        return False
+    stamped = read_install_stamp()
+    return stamped != current
+
+
+def _boot_id() -> str:
+    try:
+        with open("/proc/sys/kernel/random/boot_id", encoding="utf-8") as fh:
+            return (fh.read() or "").strip()
+    except OSError:
+        return ""
+
+
+def _auto_resync_attempted_this_boot() -> bool:
+    boot = _boot_id()
+    if not boot:
+        return False
+    try:
+        with open(INSTALL_RESYNC_BOOT_PATH, encoding="utf-8") as fh:
+            return (fh.read() or "").strip() == boot
+    except OSError:
+        return False
+
+
+def _mark_auto_resync_attempted() -> None:
+    boot = _boot_id()
+    if not boot:
+        return
+    try:
+        os.makedirs(DATA_DIR, exist_ok=True)
+        with open(INSTALL_RESYNC_BOOT_PATH, "w", encoding="utf-8") as fh:
+            fh.write(boot + "\n")
+    except OSError as exc:
+        logger.warning("Could not write install-resync boot marker: %s", exc)
 
 
 def _run_git(args: list[str]) -> str | None:
@@ -549,24 +626,28 @@ def check_for_update(*, force: bool = False) -> dict:
     elif update_available:
         if remote_release and local_release:
             message = f"Update available: {local_release} → {remote_release}"
-            # Builds before 2026.8.7.4 load install-pi.sh into memory, then
-            # git pull, then run the *old* cmd_install in-process. A second
-            # Update Now (or install --skip-apt) is required for X11 / 720 / fan.
-            if compare_versions(local_release, "2026.8.7.4") < 0:
-                message += (
-                    " — From 2026.8.5.x run Update Now twice "
-                    "(then reboot if X11 / pinch is required)."
-                )
         else:
             message = "A newer version is available."
 
     running = update_running()
+    resync_needed = install_resync_needed() and not running
     if running:
-        message = "Update in progress…"
+        status = _read_status()
+        status_msg = str(status.get("message") or "")
+        if "re-sync" in status_msg.lower() or "Finishing install" in status_msg:
+            message = "Install re-sync in progress… Do not turn off."
+        else:
+            message = "Update in progress…"
+    elif resync_needed and not update_available:
+        message = (
+            "Install steps pending after the last update — finishing automatically "
+            "(or tap Finish install)."
+        )
 
     result = {
         "ok": True,
         "update_available": update_available and not running,
+        "install_resync_needed": resync_needed,
         "update_running": running,
         "message": message,
         "local": local,
@@ -585,29 +666,28 @@ def mark_update_finished(success: bool, message: str) -> None:
     _write_status("success" if success else "failed", message)
 
 
-def start_update() -> dict:
+def _spawn_portal_script(*, mode: str = "update", status_message: str) -> dict:
     if update_running():
         return {"ok": False, "message": "An update is already running."}
-
-    local = local_version_info()
-    if not local.get("is_git_repo"):
-        return {"ok": False, "message": "This install is not a git repository."}
 
     script = update_script_path()
     if not os.path.isfile(script):
         return {"ok": False, "message": f"Update script not found: {script}"}
 
     os.makedirs(DATA_DIR, exist_ok=True)
-    mark_update_running()
+    _write_status("running", status_message)
 
     log_fh = open(UPDATE_LOG_PATH, "a", encoding="utf-8")
-    log_fh.write(f"\n--- update started {datetime.now(timezone.utc).isoformat()} ---\n")
+    log_fh.write(
+        f"\n--- {mode} started {datetime.now(timezone.utc).isoformat()} ---\n"
+    )
     log_fh.flush()
 
+    args = [script] if mode == "update" else [script, mode]
     if os.geteuid() == 0:
-        cmd = ["/bin/bash", script]
+        cmd = ["/bin/bash", *args]
     else:
-        cmd = ["sudo", "-n", "/bin/bash", script]
+        cmd = ["sudo", "-n", "/bin/bash", *args]
 
     try:
         subprocess.Popen(
@@ -619,13 +699,85 @@ def start_update() -> dict:
         )
     except OSError as exc:
         log_fh.close()
-        mark_update_finished(False, f"Could not start update: {exc}")
-        return {"ok": False, "message": f"Could not start update: {exc}"}
+        mark_update_finished(False, f"Could not start {mode}: {exc}")
+        return {"ok": False, "message": f"Could not start {mode}: {exc}"}
 
+    return {"ok": True}
+
+
+def start_update() -> dict:
+    local = local_version_info()
+    if not local.get("is_git_repo"):
+        return {"ok": False, "message": "This install is not a git repository."}
+
+    result = _spawn_portal_script(
+        mode="update",
+        status_message="Update started.",
+    )
+    if not result.get("ok"):
+        return result
     return {
         "ok": True,
         "message": "Update started. The display will restart shortly.",
     }
+
+
+def start_install_resync(*, auto: bool = False) -> dict:
+    """Re-run install-pi.sh install --skip-apt (no git pull)."""
+    if not install_resync_needed():
+        return {"ok": False, "message": "Install is already in sync."}
+
+    result = _spawn_portal_script(
+        mode="resync",
+        status_message="Finishing install (re-sync)… Do not turn off.",
+    )
+    if not result.get("ok"):
+        return result
+    return {
+        "ok": True,
+        "message": "Install re-sync started. The display will restart shortly.",
+        "auto": auto,
+    }
+
+
+def maybe_auto_install_resync(*, delay_s: float | None = None) -> None:
+    """Once per boot: if install stamp mismatches, start a background re-sync."""
+    global _auto_resync_started
+    if _auto_resync_started:
+        return
+    _auto_resync_started = True
+
+    wait_s = _AUTO_RESYNC_DELAY_S if delay_s is None else max(0.0, float(delay_s))
+
+    def _worker() -> None:
+        if wait_s:
+            time.sleep(wait_s)
+        try:
+            if update_running():
+                return
+            if not install_resync_needed():
+                return
+            if _auto_resync_attempted_this_boot():
+                logger.info(
+                    "Install re-sync needed but already attempted this boot — skipping"
+                )
+                return
+            _mark_auto_resync_attempted()
+            result = start_install_resync(auto=True)
+            if result.get("ok"):
+                logger.info("Auto install re-sync started")
+            else:
+                logger.warning("Auto install re-sync not started: %s", result.get("message"))
+        except Exception:
+            logger.exception("Auto install re-sync failed")
+
+    import threading
+
+    threading.Thread(
+        target=_worker,
+        name="install-resync",
+        daemon=True,
+    ).start()
 
 
 def update_status() -> dict:
@@ -641,6 +793,7 @@ def update_status() -> dict:
     return {
         "ok": True,
         "update_running": running,
+        "install_resync_needed": install_resync_needed() and not running,
         "status": status,
         "log_tail": tail,
     }

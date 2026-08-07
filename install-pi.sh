@@ -13,11 +13,9 @@
 # Update (git pull + re-sync, skips apt for speed):
 #   bash ~/FlightScnr_Pi/install-pi.sh update
 #
-# Upgrading from 2026.8.5.x: run update twice (or update once, then
-#   sudo bash install-pi.sh install --skip-apt). The first pass pulls new
-#   code but still executes the pre-pull installer in memory; the second
-#   applies X11/pinch, 720x720, and other post-8.5.5 steps. Reboot if
-#   LightDM switched to rpd-x.
+# After an OTA from builds that still ran install in-process (pre-re-exec),
+# the app auto-re-syncs install-pi.sh once (stamp mismatch) so users do not
+# need a second Update click. Reboot if LightDM switched to rpd-x.
 #
 # Usage:
 #   sudo bash install-pi.sh [install] [--no-start] [--skip-apt]
@@ -857,6 +855,29 @@ start_service() {
     fi
 }
 
+write_install_stamp() {
+    # Record which install-pi.sh body last completed successfully so the app
+    # can auto-re-sync after OTAs that pulled a newer installer but ran the
+    # old in-memory one (pre-re-exec update path).
+    local stamp="$DATA_DIR/install-script.sha256"
+    local script="$REPO_ROOT/install-pi.sh"
+    mkdir -p "$DATA_DIR"
+    if [ ! -f "$script" ]; then
+        log_warn "install stamp skipped — missing $script"
+        return 0
+    fi
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$script" | awk '{print $1}' >"$stamp"
+    elif command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 "$script" | awk '{print $1}' >"$stamp"
+    else
+        log_warn "install stamp skipped — no sha256sum/shasum"
+        return 0
+    fi
+    chmod 644 "$stamp" 2>/dev/null || true
+    log_ok "Wrote install stamp ($(tr -d '[:space:]' <"$stamp" | cut -c1-12)…)"
+}
+
 install_update_sudoers() {
     local src="$SETUP_DIR/sudoers-flightscnr-update"
     local dest="/etc/sudoers.d/flightscnr-update"
@@ -926,6 +947,7 @@ cmd_install() {
     install_systemd_service
     install_update_sudoers
     fix_repo_permissions
+    write_install_stamp
 
     if [ "$no_start" -eq 0 ]; then
         start_service

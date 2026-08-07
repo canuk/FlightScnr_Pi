@@ -1,6 +1,10 @@
 #!/bin/bash
-# Portal-triggered update: git pull, refresh deps, then restart flightscnr.service.
+# Portal-triggered update or install re-sync, then restart flightscnr.service.
 # User presets live outside the repo (/var/lib/flightscnr, /etc/flightscnr.env).
+#
+# Modes:
+#   (default)  git pull via install-pi.sh update --no-start
+#   resync     re-run install-pi.sh install --skip-apt --no-start (no pull)
 #
 # Restart is deferred (systemd-run / sleep fallback) so this script can write
 # update-status.json + drop the lock BEFORE systemctl restart. Restarting the
@@ -16,12 +20,21 @@ LOCK_FILE="$DATA_DIR/update.lock"
 LOG_FILE="$DATA_DIR/update.log"
 RESTART_DELAY_S="${FLIGHTSCNR_UPDATE_RESTART_DELAY_S:-2}"
 
+UPDATE_MODE="${1:-update}"
+case "$UPDATE_MODE" in
+    update|resync) ;;
+    *)
+        echo "Unknown mode: $UPDATE_MODE (use update|resync)" >&2
+        exit 1
+        ;;
+esac
+
 # Detach from the web portal process (new session / nohup). Still stays in the
 # flightscnr.service cgroup — deferred restart below is what avoids self-kill.
 if [ -z "${FLIGHTSCNR_PORTAL_UPDATE:-}" ]; then
     export FLIGHTSCNR_PORTAL_UPDATE=1
     mkdir -p "$DATA_DIR"
-    nohup "$0" >>"$LOG_FILE" 2>&1 </dev/null &
+    nohup "$0" "$UPDATE_MODE" >>"$LOG_FILE" 2>&1 </dev/null &
     exit 0
 fi
 
@@ -92,13 +105,11 @@ trap fail_cleanup EXIT
 
 {
     echo ""
-    echo "==> Portal update $(date -Iseconds)"
+    echo "==> Portal ${UPDATE_MODE} $(date -Iseconds)"
     echo "    Repo: $REPO_ROOT"
 } | tee -a "$LOG_FILE"
 
-write_status "running" "Pulling latest changes…"
-
-if [ ! -x "$REPO_ROOT/install-pi.sh" ]; then
+if [ ! -f "$REPO_ROOT/install-pi.sh" ]; then
     echo "install-pi.sh not found" | tee -a "$LOG_FILE"
     exit 1
 fi
@@ -106,11 +117,20 @@ fi
 # Sync code/deps/unit without restarting from inside this cgroup.
 # FLIGHTSCNR_SKIP_RESTART is a belt-and-suspenders guard for start_service().
 export FLIGHTSCNR_SKIP_RESTART=1
-bash "$REPO_ROOT/install-pi.sh" update --no-start 2>&1 | tee -a "$LOG_FILE"
+
+if [ "$UPDATE_MODE" = "resync" ]; then
+    write_status "running" "Finishing install (re-sync)… Do not turn off."
+    bash "$REPO_ROOT/install-pi.sh" install --skip-apt --no-start 2>&1 | tee -a "$LOG_FILE"
+    success_msg="Install re-sync finished. Restarting display…"
+else
+    write_status "running" "Pulling latest changes…"
+    bash "$REPO_ROOT/install-pi.sh" update --no-start 2>&1 | tee -a "$LOG_FILE"
+    success_msg="Update finished successfully. Restarting display…"
+fi
 
 # Status + lock must be cleared before restart can kill this cgroup member.
 trap - EXIT
-write_status "success" "Update finished successfully. Restarting display…"
+write_status "success" "$success_msg"
 release_lock
 schedule_service_restart
 exit 0

@@ -264,6 +264,12 @@ class RoundTouchDisplay:
             name="update-check",
             daemon=True,
         ).start()
+        try:
+            from utilities import updater
+
+            updater.maybe_auto_install_resync()
+        except Exception:
+            logger.debug("Install re-sync arm failed", exc_info=True)
 
     def _update_check_loop(self) -> None:
         """Force-check GitHub for updates about three times per day."""
