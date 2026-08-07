@@ -1341,14 +1341,13 @@ def atc_save():
         settings.set_atc_quiet_end(str(data.get("quiet_end") or ""))
 
     action = str(data.get("action") or "").strip().lower()
+    # Legacy Play/Stop map onto the single enable switch.
     if action == "play":
-        if not settings.atc_enabled():
-            atc_audio.apply_enabled(True)
-        result = atc_audio.start(override=True)
+        result = atc_audio.apply_enabled(True)
         settings.request_reload()
         return jsonify(result)
     if action == "stop":
-        result = atc_audio.stop()
+        result = atc_audio.apply_enabled(False)
         settings.request_reload()
         return jsonify(result)
 

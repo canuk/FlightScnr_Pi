@@ -492,7 +492,7 @@
     <details class="card atc-card">
         <summary><span class="ico">&#9835;</span>ATC Audio<span class="sum">LiveATC</span><span class="chev">&#9656;</span></summary>
         <div class="body">
-            <p class="hint">Manual LiveATC stream to the Pi’s USB or Bluetooth speaker via <code>mpv</code> (<code>sudo apt install mpv</code>). Pair a Bluetooth speaker in the card below. Airport lists every large/medium field in radar range. Channel loads local seed/index immediately, then auto-fetches the full LiveATC feed list in the background (Cloudflare-bypass search). If ATC is enabled and playback is active (or was left on via Play), changing airport or moving the map selects that area’s Tower and keeps playing; Stop clears that so a map move only updates the selection. Playback resumes after reboot/app restart when it was playing. Quiet hours block auto-start and resume; Play still overrides until you Stop.</p>
+            <p class="hint">Manual LiveATC stream to the Pi’s USB or Bluetooth speaker via <code>mpv</code> (<code>sudo apt install mpv</code>). Pair a Bluetooth speaker in the card below. Airport lists every large/medium field in radar range. Channel loads local seed/index immediately, then auto-fetches the full LiveATC feed list in the background (Cloudflare-bypass search). Enable ATC audio to start playback; disable to stop. Changing airport or moving the map while ATC is enabled selects that area’s Tower and keeps playing. Playback resumes after reboot/app restart when it was left enabled. Quiet hours block auto-resume after reboot; turning ATC on again overrides quiet hours until you disable it.</p>
             <div class="chk">
                 <label for="atc_enabled">Enable ATC audio</label>
                 <span class="switch"><input id="atc_enabled" type="checkbox"><span class="track"></span></span>
@@ -529,8 +529,6 @@
             <p class="hint" id="atc_status_line">Status: —</p>
             <div class="track-row" style="margin-top:.55rem">
                 <button class="btn btn-primary" id="btn-atc-save" type="button">Save</button>
-                <button class="btn btn-primary" id="btn-atc-play" type="button">Play</button>
-                <button class="btn" id="btn-atc-stop" type="button">Stop</button>
             </div>
             <div id="atc-status" class="status"></div>
         </div>
@@ -2213,8 +2211,7 @@ if ($("atc_channel")) {
     $("atc_channel").addEventListener("change", () => saveAtc());
 }
 if ($("btn-atc-save")) $("btn-atc-save").addEventListener("click", () => saveAtc());
-if ($("btn-atc-play")) $("btn-atc-play").addEventListener("click", () => saveAtc({ action: "play" }));
-if ($("btn-atc-stop")) $("btn-atc-stop").addEventListener("click", () => saveAtc({ action: "stop" }));
+if ($("atc_enabled")) $("atc_enabled").addEventListener("change", () => saveAtc());
 
 function renderBluetoothStatus(st) {
     const line = $("bt_status_line");

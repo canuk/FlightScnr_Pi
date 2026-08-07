@@ -572,6 +572,12 @@ lightdm_session_is_wayland() {
     grep -qE '^[[:space:]]*(user-session|autologin-session)=(rpd-labwc|labwc|LXDE-pi-labwc|rpd-wayland)[[:space:]]*$' "$conf"
 }
 
+# True when the *live* desktop is still labwc/Xwayland (config may already say X11
+# if the machine was never rebooted after prefer_x11_session).
+wayland_desktop_still_running() {
+    pgrep -x labwc >/dev/null 2>&1 || pgrep -x Xwayland >/dev/null 2>&1
+}
+
 prefer_x11_session() {
     # Bookworm defaults to labwc/Wayland. FlightScnr is an SDL X11 client on :0;
     # under Xwayland touch is pointer-emulated (MOUSE* only) so pinch cannot work
@@ -611,6 +617,13 @@ prefer_x11_session() {
     if ! lightdm_session_is_wayland "$conf"; then
         if grep -qE "^[[:space:]]*user-session=${xsession}[[:space:]]*$" "$conf" \
             && grep -qE "^[[:space:]]*autologin-session=${xsession}[[:space:]]*$" "$conf"; then
+            if wayland_desktop_still_running; then
+                # Config was switched earlier but this boot is still labwc/Xwayland.
+                NEED_REBOOT_FOR_X11=1
+                log_warn "LightDM is set to X11 (${xsession}) but labwc/Xwayland is still running"
+                log_warn "Reboot required before pinch-to-zoom will work (issue #21)"
+                return 0
+            fi
             log_ok "LightDM already on X11 (${xsession}) — pinch multi-touch path OK"
             return 0
         fi
