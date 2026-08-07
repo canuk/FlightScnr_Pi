@@ -126,6 +126,14 @@ repo_corrupt() {
     if find "$REPO_ROOT/.git/objects" -type f -empty 2>/dev/null | grep -q .; then
         return 0
     fi
+    # Loose ref files corrupted at the file level (truncated/garbage) are
+    # silently *skipped* by for-each-ref, so the loop below never sees them —
+    # check the files directly. A valid loose ref holds a hex object id or a
+    # "ref: " symref line.
+    local reffile
+    while IFS= read -r reffile; do
+        grep -qE '^([0-9a-f]{40}|ref: )' "$reffile" 2>/dev/null || return 0
+    done < <(find "$REPO_ROOT/.git/refs" -type f 2>/dev/null)
     local ref obj
     while read -r ref obj; do
         [ -n "$obj" ] || continue
@@ -172,6 +180,18 @@ repair_object_db() {
         [ -e "$idx" ] || continue
         [ -f "${idx%.idx}.pack" ] || rm -f "$idx"
     done
+
+    # Loose ref files broken at the file level cannot be deleted with
+    # update-ref ("cannot lock ref …: reference broken") and are invisible to
+    # for-each-ref — remove the files directly. Anything legitimate is
+    # recreated by the fetch below.
+    local reffile
+    while IFS= read -r reffile; do
+        if ! grep -qE '^([0-9a-f]{40}|ref: )' "$reffile" 2>/dev/null; then
+            echo "Removing broken ref file: ${reffile#"$REPO_ROOT/"}"
+            rm -f "$reffile"
+        fi
+    done < <(find "$REPO_ROOT/.git/refs" -type f 2>/dev/null)
 
     # Delete refs whose target object was lost — they make every fetch fail
     # its connectivity check ("did not send all necessary objects"). main,
