@@ -835,8 +835,29 @@ fix_repo_permissions() {
     find "$REPO_ROOT" -type f -exec chmod 644 {} +
     chmod 755 "$REPO_ROOT/install-pi.sh"
     chmod 755 "$SETUP_DIR/portal-update.sh" 2>/dev/null || true
+    # Preserve +x on release helpers — a blanket chmod 644 leaves git "dirty"
+    # (mode 100755→100644) and blocks the next `git pull --ff-only` OTA.
+    if [ -d "$REPO_ROOT/scripts" ]; then
+        find "$REPO_ROOT/scripts" -type f \( -name '*.sh' -o -name '*.cmd' \) \
+            -exec chmod 755 {} + 2>/dev/null || true
+    fi
     chmod 755 "$VENV_DIR/bin/"* 2>/dev/null || true
     log_ok "Repo owned by $REPO_OWNER"
+}
+
+# Drop install-induced dirt that would abort `git pull --ff-only` (notably
+# scripts/release.sh executable-bit flips from older fix_repo_permissions).
+prepare_repo_for_pull() {
+    local git_safe=("$@")
+    local rel
+    for rel in scripts/release.sh scripts/release.cmd; do
+        if "${git_safe[@]}" status --porcelain -- "$rel" 2>/dev/null | grep -q .; then
+            log_step "Clearing local changes that block pull ($rel)"
+            "${git_safe[@]}" restore --source=HEAD --staged --worktree -- "$rel" 2>/dev/null \
+                || "${git_safe[@]}" checkout HEAD -- "$rel" 2>/dev/null \
+                || true
+        fi
+    done
 }
 
 start_service() {
@@ -1002,6 +1023,7 @@ cmd_update() {
     # Match utilities/updater.py: always pass safe.directory so root-run portal
     # updates can read a pi-owned checkout (Git 2.35+ dubious-ownership checks).
     local git_safe=(git -c "safe.directory=${REPO_ROOT}" -C "$REPO_ROOT")
+    prepare_repo_for_pull "${git_safe[@]}"
     if [ "$(id -u)" -eq 0 ] && [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ]; then
         sudo -u "$SUDO_USER" "${git_safe[@]}" pull --ff-only
     elif [ "$(id -u)" -eq 0 ]; then
