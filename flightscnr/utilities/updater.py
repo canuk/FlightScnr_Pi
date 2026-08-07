@@ -54,7 +54,12 @@ def install_script_path() -> str:
     return os.path.join(repo_root(), "install-pi.sh")
 
 
-_PULL_BLOCKER_PATHS = ("scripts/release.sh", "scripts/release.cmd")
+_PULL_BLOCKER_PATHS = (
+    "scripts/release.sh",
+    "scripts/release.cmd",
+    "scripts/dev-release.sh",
+    "scripts/repair-ota.sh",
+)
 
 
 def pull_blockers_present() -> bool:

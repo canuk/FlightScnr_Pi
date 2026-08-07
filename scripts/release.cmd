@@ -2,9 +2,9 @@
 REM SPDX-License-Identifier: CC-BY-NC-SA-4.0
 REM Copyright (c) 2026 Yash Mulgaonkar - https://github.com/yashmulgaonkar/FlightScnr_Pi
 REM
-REM Windows cmd/PowerShell wrapper for release.sh (no ExecutionPolicy needed).
+REM Windows cmd/PowerShell wrapper for dev-release.sh (no ExecutionPolicy needed).
 REM   .\scripts\release.cmd --dry-run
-REM macOS/Linux: ./scripts/release.sh --dry-run
+REM macOS/Linux: ./scripts/dev-release.sh --dry-run
 
 setlocal
 set "SCRIPT_DIR=%~dp0"
@@ -22,12 +22,12 @@ if not defined BASH (
 :have_bash
 if not defined BASH (
   echo Git Bash not found. Install Git for Windows, or run from Git Bash:
-  echo   ./scripts/release.sh %*
+  echo   ./scripts/dev-release.sh %*
   exit /b 1
 )
 
 REM Prefer real CPython over the Microsoft Store python3 stub.
 if exist "%ProgramFiles%\Python311\python.exe" set "PATH=%ProgramFiles%\Python311;%PATH%"
 
-"%BASH%" "%SCRIPT_DIR%release.sh" %*
+"%BASH%" "%SCRIPT_DIR%dev-release.sh" %*
 exit /b %ERRORLEVEL%

@@ -7,6 +7,12 @@
 # the device stays on the old VERSION (e.g. 2026.8.5.5) even though the portal
 # may look like the update "finished".
 #
+# It also repairs a corrupted git object database — the classic Pi power-loss
+# signature: "error: object file .git/objects/... is empty" followed by
+# "fatal: unpack-objects failed" on fetch/pull. Zero-byte objects are removed
+# and history is re-fetched; if that is not enough, .git is re-cloned from
+# GitHub (local repo edits are discarded — they are unrecoverable anyway).
+#
 # This script does NOT need a successful pull first — fetch it from GitHub:
 #
 #   curl -fsSL https://raw.githubusercontent.com/yashmulgaonkar/FlightScnr_Pi/main/scripts/repair-ota.sh | bash
@@ -17,6 +23,8 @@
 #   --repo DIR   FlightScnr_Pi checkout path (default: auto-detect)
 #
 set -euo pipefail
+
+GITHUB_URL="https://github.com/yashmulgaonkar/FlightScnr_Pi.git"
 
 HARD=0
 REPO_ROOT="${FLIGHTSCNR_REPO:-}"
@@ -33,7 +41,7 @@ while [ $# -gt 0 ]; do
             fi
             ;;
         -h|--help)
-            sed -n '2,20p' "$0"
+            sed -n '2,25p' "$0"
             exit 0
             ;;
         *)
@@ -43,6 +51,13 @@ while [ $# -gt 0 ]; do
     esac
     shift
 done
+
+# An explicitly requested path must exist — never silently auto-detect a
+# different checkout than the one the user asked for.
+if [ -n "$REPO_ROOT" ] && [ ! -f "$REPO_ROOT/install-pi.sh" ]; then
+    echo "No FlightScnr_Pi checkout at requested path: $REPO_ROOT" >&2
+    exit 1
+fi
 
 resolve_repo() {
     local d candidate
@@ -85,20 +100,112 @@ cd "$REPO_ROOT"
 OWNER="$(stat -c '%U' "$REPO_ROOT" 2>/dev/null || echo pi)"
 git_safe=(git -c "safe.directory=${REPO_ROOT}" -C "$REPO_ROOT")
 
-run_git() {
+run_as_owner() {
     if [ "$(id -u)" -eq 0 ] && [ "$OWNER" != "root" ]; then
-        sudo -u "$OWNER" "${git_safe[@]}" "$@"
+        sudo -u "$OWNER" "$@"
     else
-        "${git_safe[@]}" "$@"
+        "$@"
     fi
 }
+
+run_git() {
+    run_as_owner "${git_safe[@]}" "$@"
+}
+
+remote_url() {
+    run_git config --get remote.origin.url 2>/dev/null || echo "$GITHUB_URL"
+}
+
+# True if the object database has the power-loss signature (zero-byte objects).
+objectdb_corrupt() {
+    find "$REPO_ROOT/.git/objects" -type f -empty 2>/dev/null | grep -q .
+}
+
+# Last resort: replace .git with a fresh clone, keeping the worktree path.
+reclone_git_dir() {
+    local url tmp bak
+    url="$(remote_url)"
+    echo "Re-cloning git history from $url…"
+    tmp="$(run_as_owner mktemp -d)"
+    if ! run_as_owner git clone --no-checkout "$url" "$tmp/clone"; then
+        rm -rf "$tmp"
+        echo "Re-clone failed (network down?). Cannot repair automatically." >&2
+        echo "Manual fix: back up any local edits, then delete and re-clone:" >&2
+        echo "  git clone $GITHUB_URL ~/FlightScnr_Pi && sudo bash ~/FlightScnr_Pi/install-pi.sh" >&2
+        return 1
+    fi
+    bak="$REPO_ROOT/.git.corrupt.$$"
+    mv "$REPO_ROOT/.git" "$bak"
+    mv "$tmp/clone/.git" "$REPO_ROOT/.git"
+    rm -rf "$tmp" "$bak"
+}
+
+# Remove zero-byte loose objects, re-fetch full history, and point main at
+# origin/main. Discards local repo edits (they reference lost objects anyway).
+repair_object_db() {
+    echo "Git object database looks corrupted (e.g. zero-byte files in .git/objects)."
+    echo "This usually follows a power loss / SD-card write interruption."
+    echo "Repairing — local repo edits (if any) will be discarded…"
+
+    find "$REPO_ROOT/.git/objects" -type f -empty -delete 2>/dev/null || true
+    rm -f "$REPO_ROOT/.git/objects/pack/tmp_pack_"* 2>/dev/null || true
+    # Drop .idx files whose .pack was truncated away by the sweep above.
+    local idx
+    for idx in "$REPO_ROOT/.git/objects/pack/"*.idx; do
+        [ -e "$idx" ] || continue
+        [ -f "${idx%.idx}.pack" ] || rm -f "$idx"
+    done
+
+    # Delete refs whose target object was lost in the sweep — otherwise even
+    # `fetch --refetch` fails its connectivity check ("did not send all
+    # necessary objects"). main and origin/* are recreated below.
+    local ref obj
+    while read -r ref obj; do
+        [ -n "$ref" ] || continue
+        if ! run_git cat-file -e "$obj" 2>/dev/null; then
+            run_git update-ref -d "$ref" 2>/dev/null || true
+        fi
+    done < <(run_git for-each-ref --format='%(refname) %(objectname)' 2>/dev/null || true)
+
+    # --refetch (git >= 2.36) transfers a self-contained pack, so unpacking
+    # never needs a delta base from the (broken) local store. Plain fetch is
+    # the fallback for older git; if both fail, swap in a fresh clone.
+    if ! run_git fetch --refetch origin 2>/dev/null \
+        && ! run_git fetch origin; then
+        reclone_git_dir || exit 1
+    fi
+
+    if ! run_git rev-parse --verify --quiet 'origin/main^{commit}' >/dev/null; then
+        reclone_git_dir || exit 1
+    fi
+
+    # Reflogs still reference the lost objects; drop them so fsck/gc stay clean.
+    run_git reflog expire --expire=now --all 2>/dev/null || true
+    rm -rf "$REPO_ROOT/.git/logs" 2>/dev/null || true
+
+    # -B recreates main at origin/main with tracking (status showed "[gone]"),
+    # -f overwrites the worktree/index left over from the corrupt state.
+    if ! run_git checkout -f -B main origin/main \
+        || objectdb_corrupt \
+        || ! run_git log --oneline -1 >/dev/null 2>&1; then
+        echo "Repository still unhealthy after repair." >&2
+        echo "Manual fix: back up any local edits, then delete and re-clone:" >&2
+        echo "  git clone $GITHUB_URL ~/FlightScnr_Pi && sudo bash ~/FlightScnr_Pi/install-pi.sh" >&2
+        exit 1
+    fi
+    echo "Git repository repaired."
+}
+
+if objectdb_corrupt; then
+    repair_object_db
+fi
 
 echo "Before: $(run_git status -sb | tr '\n' ' ')"
 echo "VERSION=$(tr -d '[:space:]' <VERSION 2>/dev/null || echo '?')"
 
 if [ "$HARD" -eq 1 ]; then
     echo "Hard reset to origin/main (discards local checkout changes)…"
-    run_git fetch origin
+    run_git fetch origin || repair_object_db
     # Prefer main; fall back to whatever upstream is.
     if run_git show-ref --verify --quiet refs/remotes/origin/main; then
         run_git reset --hard origin/main

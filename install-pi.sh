@@ -850,7 +850,7 @@ fix_repo_permissions() {
 prepare_repo_for_pull() {
     local git_safe=("$@")
     local rel
-    for rel in scripts/release.sh scripts/release.cmd; do
+    for rel in scripts/release.sh scripts/release.cmd scripts/dev-release.sh scripts/repair-ota.sh; do
         if "${git_safe[@]}" status --porcelain -- "$rel" 2>/dev/null | grep -q .; then
             log_step "Clearing local changes that block pull ($rel)"
             "${git_safe[@]}" restore --source=HEAD --staged --worktree -- "$rel" 2>/dev/null \
