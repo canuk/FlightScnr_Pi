@@ -2991,6 +2991,9 @@ class RoundTouchDisplay:
                         self._note_activity()
                         radar.invalidate_frame_layer()
                         self._safe_draw()
+                    elif bubble_action == "progress":
+                        # In-progress bubble is not dismissible; ignore underlying taps.
+                        self._note_activity()
                     else:
                         hud_action = radar_hud.handle_tap(tap[0], tap[1])
                         if hud_action is not None:

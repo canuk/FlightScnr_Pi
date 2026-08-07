@@ -13,6 +13,12 @@
 # Update (git pull + re-sync, skips apt for speed):
 #   bash ~/FlightScnr_Pi/install-pi.sh update
 #
+# Upgrading from 2026.8.5.x: run update twice (or update once, then
+#   sudo bash install-pi.sh install --skip-apt). The first pass pulls new
+#   code but still executes the pre-pull installer in memory; the second
+#   applies X11/pinch, 720x720, and other post-8.5.5 steps. Reboot if
+#   LightDM switched to rpd-x.
+#
 # Usage:
 #   sudo bash install-pi.sh [install] [--no-start] [--skip-apt]
 #   bash install-pi.sh update

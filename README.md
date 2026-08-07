@@ -197,6 +197,8 @@ Also included: wildfire markers (CAL FIRE / NIFC / NASA FIRMS), alert mode, faci
 | Updating from the portal | [Updates](https://github.com/yashmulgaonkar/FlightScnr_Pi/wiki/Updates) |
 | Credits and license details | [Credits and License](https://github.com/yashmulgaonkar/FlightScnr_Pi/wiki/Credits-and-License) |
 
+**Upgrading from `2026.8.5.x`:** portal **Update Now** must be run **twice** (or once, then `sudo bash ~/FlightScnr_Pi/install-pi.sh install --skip-apt`). The first pass pulls the new code but still runs the pre-pull installer in memory; the second pass applies X11 (pinch), 720×720, and other post-8.5.5 install steps. Then **reboot** if LightDM switched to X11.
+
 ---
 
 ## Quick install

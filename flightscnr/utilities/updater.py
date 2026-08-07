@@ -549,6 +549,14 @@ def check_for_update(*, force: bool = False) -> dict:
     elif update_available:
         if remote_release and local_release:
             message = f"Update available: {local_release} → {remote_release}"
+            # Builds before 2026.8.7.4 load install-pi.sh into memory, then
+            # git pull, then run the *old* cmd_install in-process. A second
+            # Update Now (or install --skip-apt) is required for X11 / 720 / fan.
+            if compare_versions(local_release, "2026.8.7.4") < 0:
+                message += (
+                    " — From 2026.8.5.x run Update Now twice "
+                    "(then reboot if X11 / pinch is required)."
+                )
         else:
             message = "A newer version is available."
 
