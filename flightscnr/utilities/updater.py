@@ -54,6 +54,44 @@ def install_script_path() -> str:
     return os.path.join(repo_root(), "install-pi.sh")
 
 
+_PULL_BLOCKER_PATHS = ("scripts/release.sh", "scripts/release.cmd")
+
+
+def pull_blockers_present() -> bool:
+    """True when known install-induced dirt would abort ``git pull --ff-only``."""
+    for rel in _PULL_BLOCKER_PATHS:
+        try:
+            if _run_git(["status", "--porcelain", "--", rel]):
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def clear_pull_blockers() -> list[str]:
+    """Reset known blocker files so OTA pull can proceed. Returns cleared paths."""
+    cleared: list[str] = []
+    for rel in _PULL_BLOCKER_PATHS:
+        try:
+            if not _run_git(["status", "--porcelain", "--", rel]):
+                continue
+        except Exception:
+            continue
+        restored = _run_git(
+            ["restore", "--source=HEAD", "--staged", "--worktree", "--", rel]
+        )
+        if restored is None:
+            _run_git(["checkout", "HEAD", "--", rel])
+        # Confirm clean (restore returns empty string on success).
+        try:
+            if not _run_git(["status", "--porcelain", "--", rel]):
+                cleared.append(rel)
+                logger.info("Cleared OTA pull blocker: %s", rel)
+        except Exception:
+            pass
+    return cleared
+
+
 def _sha256_file(path: str) -> str:
     import hashlib
 
@@ -631,13 +669,27 @@ def check_for_update(*, force: bool = False) -> dict:
 
     running = update_running()
     resync_needed = install_resync_needed() and not running
+    blocked = pull_blockers_present() and not running
+    failed = (not running) and str(status.get("state") or "") == "failed"
     if running:
         status = _read_status()
         status_msg = str(status.get("message") or "")
         if "re-sync" in status_msg.lower() or "Finishing install" in status_msg:
             message = "Install re-sync in progress… Do not turn off."
+        elif "Repairing" in status_msg:
+            message = "Repairing update… Do not turn off."
         else:
             message = "Update in progress…"
+    elif blocked and update_available:
+        message = (
+            "Update is blocked by a local file permission glitch — "
+            "tap Repair & Update (or Update Now)."
+        )
+    elif failed and update_available:
+        message = (
+            "Last update failed — tap Repair & Update. "
+            "If that button is missing, this build is too old; see the hint below."
+        )
     elif resync_needed and not update_available:
         message = (
             "Install steps pending after the last update — finishing automatically "
@@ -648,6 +700,9 @@ def check_for_update(*, force: bool = False) -> dict:
         "ok": True,
         "update_available": update_available and not running,
         "install_resync_needed": resync_needed,
+        "pull_blocked": blocked,
+        "update_failed": failed,
+        "ota_repair_needed": (blocked or failed) and update_available and not running,
         "update_running": running,
         "message": message,
         "local": local,
@@ -710,6 +765,12 @@ def start_update() -> dict:
     if not local.get("is_git_repo"):
         return {"ok": False, "message": "This install is not a git repository."}
 
+    # Clear install-induced mode dirt before portal-update runs git pull.
+    # Without this, Update Now fails on devices where scripts/release.sh lost +x.
+    cleared = clear_pull_blockers()
+    if cleared:
+        logger.info("Pre-update cleared pull blockers: %s", ", ".join(cleared))
+
     result = _spawn_portal_script(
         mode="update",
         status_message="Update started.",
@@ -719,6 +780,28 @@ def start_update() -> dict:
     return {
         "ok": True,
         "message": "Update started. The display will restart shortly.",
+        "cleared_pull_blockers": cleared,
+    }
+
+
+def start_ota_repair() -> dict:
+    """Clear known pull blockers and start a normal update (portal Repair button)."""
+    if update_running():
+        return {"ok": False, "message": "An update is already running."}
+    local = local_version_info()
+    if not local.get("is_git_repo"):
+        return {"ok": False, "message": "This install is not a git repository."}
+    cleared = clear_pull_blockers()
+    result = _spawn_portal_script(
+        mode="update",
+        status_message="Repairing update (clearing blocked files)…",
+    )
+    if not result.get("ok"):
+        return result
+    return {
+        "ok": True,
+        "message": "Repair started. The display will restart shortly.",
+        "cleared_pull_blockers": cleared,
     }
 
 
@@ -741,7 +824,7 @@ def start_install_resync(*, auto: bool = False) -> dict:
 
 
 def maybe_auto_install_resync(*, delay_s: float | None = None) -> None:
-    """Once per boot: if install stamp mismatches, start a background re-sync."""
+    """Once per boot: clear pull blockers, then auto-resync install if needed."""
     global _auto_resync_started
     if _auto_resync_started:
         return
@@ -753,6 +836,8 @@ def maybe_auto_install_resync(*, delay_s: float | None = None) -> None:
         if wait_s:
             time.sleep(wait_s)
         try:
+            # Harmless if clean; unblocks the next Update Now without a terminal.
+            clear_pull_blockers()
             if update_running():
                 return
             if not install_resync_needed():
@@ -790,10 +875,18 @@ def update_status() -> dict:
                 tail = "".join(fh.readlines()[-40:])
     except OSError:
         pass
+    blocked = pull_blockers_present() and not running
+    failed = (not running) and str(status.get("state") or "") == "failed"
     return {
         "ok": True,
         "update_running": running,
         "install_resync_needed": install_resync_needed() and not running,
+        "pull_blocked": blocked,
+        "update_failed": failed,
+        "ota_repair_needed": bool(
+            (blocked or failed)
+            and not running
+        ),
         "status": status,
         "log_tail": tail,
     }

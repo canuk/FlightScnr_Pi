@@ -1277,6 +1277,13 @@ def updates_resync():
     return jsonify(updater.start_install_resync())
 
 
+@app.post("/updates/repair")
+def updates_repair():
+    from utilities import updater
+
+    return jsonify(updater.start_ota_repair())
+
+
 @app.get("/atc/airports")
 def atc_airports():
     from utilities import atc_audio

@@ -199,6 +199,14 @@ Also included: wildfire markers (CAL FIRE / NIFC / NASA FIRMS), alert mode, faci
 
 **Upgrading from older builds:** one **Update Now** is enough. If an OTA pulled a newer installer but could not run it (pre-re-exec path), the device **auto-finishes** install steps after restart — or use **Finish install** in the portal. Then **reboot** if LightDM switched to X11.
 
+**Stuck on an old version (pull blocked by `scripts/release.sh`):** an older install step flipped that file’s permissions so Git refuses to pull. On the Pi run:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/yashmulgaonkar/FlightScnr_Pi/main/scripts/repair-ota.sh | bash
+```
+
+(or `git restore -- scripts/release.sh` then **Update Now**). Use `| bash -s -- --hard` only if other local edits also block the pull.
+
 ---
 
 ## Quick install
