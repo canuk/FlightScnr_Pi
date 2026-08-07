@@ -123,6 +123,91 @@ resolve_boot_paths() {
     fi
 }
 
+configure_display_720x720() {
+    # Waveshare 4″ DSI (C) is natively 720×720. Persist that mode for labwc
+    # (kanshi) and X11 (dispsetup.sh). Never abort install if outputs differ.
+    local mode="720x720"
+    local kanshi_body
+    local dispsetup
+    local home_dir owner
+    local applied=0
+
+    log_step "Display resolution ${mode}"
+
+    kanshi_body=$(cat <<EOF
+# Managed by FlightScnr install-pi.sh — round Waveshare DSI panel.
+profile {
+    output DSI-1 enable mode ${mode} position 0,0 scale 1
+}
+profile {
+    output DSI-2 enable mode ${mode} position 0,0 scale 1
+}
+EOF
+)
+
+    for owner in "$REPO_OWNER" pi root; do
+        home_dir="$(getent passwd "$owner" | cut -d: -f6)"
+        [ -n "$home_dir" ] || continue
+        mkdir -p "${home_dir}/.config/kanshi"
+        if printf '%s\n' "$kanshi_body" > "${home_dir}/.config/kanshi/config"; then
+            chown -R "$owner:$owner" "${home_dir}/.config/kanshi" 2>/dev/null || true
+            applied=1
+        else
+            log_warn "Could not write ${home_dir}/.config/kanshi/config (continuing)"
+        fi
+    done
+
+    # System fallback used by greeter / first boot before a user config exists.
+    if mkdir -p /etc/xdg/kanshi 2>/dev/null; then
+        if printf '%s\n' "$kanshi_body" > /etc/xdg/kanshi/config 2>/dev/null; then
+            applied=1
+        fi
+    fi
+
+    # Raspberry Pi Desktop X11 screen layout hook (Screen Configuration / arandr).
+    dispsetup="/usr/share/dispsetup.sh"
+    if cat > "$dispsetup" <<EOF
+#!/bin/sh
+# Managed by FlightScnr install-pi.sh — force round panel mode on X11.
+for out in DSI-1 DSI-2; do
+    xrandr --output "\$out" --mode ${mode} --primary 2>/dev/null || true
+done
+exit 0
+EOF
+    then
+        chmod 0755 "$dispsetup" 2>/dev/null || true
+        applied=1
+    else
+        log_warn "Could not write $dispsetup (continuing)"
+    fi
+
+    # Best-effort apply to a live session (no failure if compositor is down).
+    if command -v wlr-randr >/dev/null 2>&1; then
+        for sock_dir in /run/user/*; do
+            [ -d "$sock_dir" ] || continue
+            for wd in wayland-1 wayland-0; do
+                [ -S "${sock_dir}/${wd}" ] || continue
+                for out in DSI-1 DSI-2; do
+                    env XDG_RUNTIME_DIR="$sock_dir" WAYLAND_DISPLAY="$wd" \
+                        wlr-randr --output "$out" --mode "$mode" >/dev/null 2>&1 || true
+                done
+            done
+        done
+    fi
+    if [ -n "${DISPLAY:-}" ] || [ -S /tmp/.X11-unix/X0 ]; then
+        for out in DSI-1 DSI-2; do
+            DISPLAY="${DISPLAY:-:0}" XAUTHORITY="${XAUTHORITY:-${REPO_OWNER_HOME}/.Xauthority}" \
+                xrandr --output "$out" --mode "$mode" --primary >/dev/null 2>&1 || true
+        done
+    fi
+
+    if [ "$applied" -eq 1 ]; then
+        log_ok "Configured ${mode} via kanshi + dispsetup.sh (DSI-1/DSI-2 when present)"
+    else
+        log_warn "Could not persist ${mode} display config (continuing)"
+    fi
+}
+
 install_gpio_fan() {
     # Kernel gpio-fan: on/off on the control wire when SoC hits the threshold.
     # Matches the official Pi case-fan wiring (GPIO 14). temp is millidegrees C.
@@ -818,6 +903,8 @@ cmd_install() {
     else
         log_ok "Skipped apt packages (--skip-apt)"
     fi
+    # Before splash/UI assets so the panel is in native mode as early as possible.
+    configure_display_720x720
     install_ui_fonts
     install_weather_icons
     install_aircraft_icons
