@@ -988,12 +988,15 @@ cmd_update() {
         install_args+=(--no-start)
     fi
 
+    # Always re-exec the post-pull install-pi.sh. Calling cmd_install in-process
+    # would keep running the *pre-pull* script still loaded in memory — so OTA
+    # from an old build would skip new steps (X11 session, 720x720, fan guards).
+    echo ""
+    echo "Re-syncing with updated installer..."
     if [ "$(id -u)" -ne 0 ]; then
-        echo ""
-        echo "Re-syncing install (needs root)..."
         exec sudo bash "$REPO_ROOT/install-pi.sh" install "${install_args[@]}"
     else
-        cmd_install "${install_args[@]}"
+        exec bash "$REPO_ROOT/install-pi.sh" install "${install_args[@]}"
     fi
 }
 
