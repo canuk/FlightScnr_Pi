@@ -1,17 +1,24 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Create a FlightScnr Pi release (year.month.day.iteration).
 #
 # Bumps VERSION, commits, tags, and optionally pushes to GitHub.
 # Pushing the tag triggers .github/workflows/release.yml to publish
 # a GitHub Release for public installs / the web portal updater.
 #
-# Usage:
+# Usage (macOS / Linux / Git Bash):
 #   ./scripts/release.sh              # bump for today (or next iteration same day)
 #   ./scripts/release.sh --dry-run    # show next version only
-#   ./scripts/release.sh --iteration 3  # force 2026.7.7.3 (uses today's date)
+#   ./scripts/release.sh --iteration 3  # force today's date with iteration 3
 #   ./scripts/release.sh --push       # commit, tag, and push to origin
 #   ./scripts/release.sh --message "Fix radar range sync"
 #       (--message is stored on the git tag and shown in GitHub Release notes)
+#
+# Optional: PYTHON=/path/to/python3 ./scripts/release.sh --dry-run
+#
+# Windows PowerShell / cmd: .sh opens git-bash.exe in a separate window (no
+# console output), and .ps1 may be blocked by ExecutionPolicy. Use:
+#   .\scripts\release.cmd --dry-run
+# Or from Git Bash:  ./scripts/release.sh --dry-run
 #
 set -euo pipefail
 
@@ -22,6 +29,80 @@ DRY_RUN=0
 PUSH=0
 ITERATION=""
 MESSAGE=""
+
+# True if $1 (and optional launcher args) is a real Python 3.
+# Skips Microsoft Store stubs under WindowsApps (Git Bash on Windows).
+_python_is_usable() {
+    local bin="$1"
+    shift || true
+    local path=""
+    if [ -e "$bin" ] || [ -L "$bin" ]; then
+        path="$bin"
+    else
+        path="$(command -v "$bin" 2>/dev/null || true)"
+    fi
+    [ -n "$path" ] || return 1
+    case "$path" in
+        *WindowsApps*|*windowsapps*) return 1 ;;
+    esac
+    "$bin" "$@" -c 'import sys; raise SystemExit(0 if sys.version_info[0] >= 3 else 1)' \
+        >/dev/null 2>&1
+}
+
+# Sets PYTHON_CMD as a bash array (e.g. (python3) or (py -3)).
+resolve_python() {
+    PYTHON_CMD=()
+    if [ -n "${PYTHON:-}" ]; then
+        if _python_is_usable "$PYTHON"; then
+            PYTHON_CMD=("$PYTHON")
+            return 0
+        fi
+        echo "PYTHON=$PYTHON is not a usable Python 3 interpreter." >&2
+        return 1
+    fi
+    # Prefer python3 everywhere (macOS/Linux/Homebrew; Windows when not a stub).
+    if _python_is_usable python3; then
+        PYTHON_CMD=(python3)
+        return 0
+    fi
+    if _python_is_usable python; then
+        PYTHON_CMD=(python)
+        return 0
+    fi
+    # Windows py launcher only.
+    if _python_is_usable py -3; then
+        PYTHON_CMD=(py -3)
+        return 0
+    fi
+    echo "No usable Python 3 found (tried: python3, python, py -3)." >&2
+    echo "Install Python 3, or set PYTHON to the interpreter path." >&2
+    case "$(uname -s 2>/dev/null || true)" in
+        Darwin)
+            echo "macOS tip: brew install python  (or use Xcode's python3)." >&2
+            ;;
+        Linux)
+            echo "Linux tip: sudo apt install python3   # or your distro equivalent" >&2
+            ;;
+        MINGW*|MSYS*|CYGWIN*)
+            echo "Windows tip: the Microsoft Store python3 stub is ignored." >&2
+            echo "Install from python.org, or disable App execution aliases for python/python3." >&2
+            ;;
+    esac
+    return 1
+}
+
+# Native path for Windows Python when running under Git Bash / MSYS.
+repo_root_for_python() {
+    case "$(uname -s 2>/dev/null || true)" in
+        MINGW*|MSYS*|CYGWIN*)
+            if command -v cygpath >/dev/null 2>&1; then
+                cygpath -w "$REPO_ROOT"
+                return 0
+            fi
+            ;;
+    esac
+    printf '%s\n' "$REPO_ROOT"
+}
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -44,7 +125,8 @@ while [ $# -gt 0 ]; do
             fi
             ;;
         -h|--help)
-            sed -n '2,14p' "$0"
+            # Print leading comment block only (stop before set -e).
+            sed -n '2,/^set -euo pipefail$/p' "$0" | sed '$d'
             exit 0
             ;;
         *)
@@ -60,30 +142,47 @@ if [ ! -d "$REPO_ROOT/.git" ]; then
     exit 1
 fi
 
-if [ -n "$(git -C "$REPO_ROOT" status --porcelain)" ]; then
+# Dry-run only prints the next version — allow a dirty tree for local checks.
+if [ "$DRY_RUN" -eq 0 ] && [ -n "$(git -C "$REPO_ROOT" status --porcelain)" ]; then
     echo "Working tree has uncommitted changes. Commit or stash first." >&2
     git -C "$REPO_ROOT" status --short >&2
     exit 1
 fi
+
+resolve_python
+REPO_ROOT_PY="$(repo_root_for_python)"
 
 CURRENT=""
 if [ -f "$VERSION_FILE" ]; then
     CURRENT="$(tr -d '[:space:]' < "$VERSION_FILE")"
 fi
 
-NEXT_VERSION="$(python3 <<PY
-import os, sys
-sys.path.insert(0, os.path.join("$REPO_ROOT", "flightscnr"))
+# Pass paths/values via env so the heredoc stays quoted (safe on all platforms).
+NEXT_VERSION="$(
+    FLIGHTSCNR_REPO_ROOT="$REPO_ROOT_PY" \
+    FLIGHTSCNR_CURRENT="$CURRENT" \
+    FLIGHTSCNR_ITERATION="$ITERATION" \
+    "${PYTHON_CMD[@]}" <<'PY'
+import os
+import sys
+
+sys.path.insert(0, os.path.join(os.environ["FLIGHTSCNR_REPO_ROOT"], "flightscnr"))
 from datetime import date
 from version import bump_version
 
 today = date.today()
 kwargs = {"today": (today.year, today.month, today.day)}
-if "$ITERATION":
-    kwargs["iteration"] = int("$ITERATION")
-print(bump_version("$CURRENT" or None, **kwargs))
+iteration = os.environ.get("FLIGHTSCNR_ITERATION") or ""
+if iteration:
+    kwargs["iteration"] = int(iteration)
+current = os.environ.get("FLIGHTSCNR_CURRENT") or None
+print(bump_version(current, **kwargs))
 PY
 )"
+if [ -z "$NEXT_VERSION" ]; then
+    echo "Failed to compute next version with: ${PYTHON_CMD[*]}" >&2
+    exit 1
+fi
 
 echo "Current: ${CURRENT:-<none>}"
 echo "Next:    $NEXT_VERSION"
