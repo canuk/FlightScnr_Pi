@@ -212,39 +212,78 @@ PYROT
     fi
 
     # Desktop wallpaper — same image as Plymouth.
+    # labwc's /usr/bin/pcmanfm-pi runs `pcmanfm --desktop` with no -p flag, so the
+    # active profile is "default" (not LXDE-pi). Updating only LXDE-pi left
+    # /etc/xdg/pcmanfm/default on sunrise.jpg and the desktop never changed.
     if [ -d "$wall_dir" ] || mkdir -p "$wall_dir" 2>/dev/null; then
         install -m 0644 "$tmp_splash" "$wall_splash"
-        local conf
-        for conf in \
-            /etc/xdg/pcmanfm/LXDE-pi/desktop-items-0.conf \
-            /home/pi/.config/pcmanfm/LXDE-pi/desktop-items-0.conf
-        do
+
+        _set_pcmanfm_wallpaper_conf() {
+            local conf="$1"
             mkdir -p "$(dirname "$conf")"
             if [ -f "$conf" ]; then
                 if grep -qE '^\s*wallpaper=' "$conf"; then
-                    sed -i "s|^[[:space:]]*wallpaper=.*|wallpaper=$wall_splash|" "$conf"
+                    sed -i "s|^[[:space:]]*wallpaper=.*|wallpaper=$wall_splash|" "$conf" || return 0
                 else
-                    printf 'wallpaper=%s\n' "$wall_splash" >> "$conf"
+                    printf 'wallpaper=%s\n' "$wall_splash" >> "$conf" || return 0
                 fi
                 if ! grep -qE '^\s*wallpaper_mode=' "$conf"; then
-                    printf 'wallpaper_mode=crop\n' >> "$conf"
+                    printf 'wallpaper_mode=crop\n' >> "$conf" || true
                 fi
             else
-                printf '[*]\nwallpaper_mode=crop\nwallpaper_common=1\nwallpaper=%s\n' "$wall_splash" > "$conf"
+                printf '[*]\nwallpaper_mode=crop\nwallpaper_common=1\nwallpaper=%s\n' \
+                    "$wall_splash" > "$conf" || true
             fi
-            if [[ "$conf" == /home/pi/* ]]; then
-                chown -R pi:pi "$(dirname "$conf")" 2>/dev/null || true
-            fi
-        done
-        # Refresh live desktop if a session is up (best-effort).
-        if id pi >/dev/null 2>&1; then
-            local pi_uid
-            pi_uid="$(id -u pi)"
-            sudo -u pi env DISPLAY="${DISPLAY:-:0}" \
-                XDG_RUNTIME_DIR="/run/user/$pi_uid" \
+        }
+
+        _refresh_pcmanfm_wallpaper() {
+            local desk_user="$1"
+            local desk_uid
+            id "$desk_user" >/dev/null 2>&1 || return 0
+            desk_uid="$(id -u "$desk_user")"
+            sudo -u "$desk_user" env DISPLAY="${DISPLAY:-:0}" \
+                XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$desk_uid}" \
                 pcmanfm --set-wallpaper="$wall_splash" --wallpaper-mode=crop \
                 >/dev/null 2>&1 || true
+            sudo -u "$desk_user" env DISPLAY="${DISPLAY:-:0}" \
+                XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$desk_uid}" \
+                pcmanfm --reconfigure >/dev/null 2>&1 || true
+        }
+
+        local profile home_dir owner
+        for profile in default LXDE-pi; do
+            _set_pcmanfm_wallpaper_conf \
+                "/etc/xdg/pcmanfm/${profile}/desktop-items-0.conf"
+            if [ -f "/etc/xdg/pcmanfm/${profile}/desktop-items-1.conf" ]; then
+                _set_pcmanfm_wallpaper_conf \
+                    "/etc/xdg/pcmanfm/${profile}/desktop-items-1.conf"
+            fi
+            for owner in "$REPO_OWNER" pi root; do
+                home_dir="$(getent passwd "$owner" | cut -d: -f6)"
+                [ -n "$home_dir" ] || continue
+                _set_pcmanfm_wallpaper_conf \
+                    "${home_dir}/.config/pcmanfm/${profile}/desktop-items-0.conf"
+                if [ -f "${home_dir}/.config/pcmanfm/${profile}/desktop-items-1.conf" ]; then
+                    _set_pcmanfm_wallpaper_conf \
+                        "${home_dir}/.config/pcmanfm/${profile}/desktop-items-1.conf"
+                fi
+                chown -R "$owner:$owner" "${home_dir}/.config/pcmanfm" 2>/dev/null || true
+            done
+        done
+
+        _refresh_pcmanfm_wallpaper "${REPO_OWNER:-pi}"
+        # Some images autologin the graphical session as root.
+        if [ "$(id -u)" -eq 0 ]; then
+            env DISPLAY="${DISPLAY:-:0}" \
+                XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/0}" \
+                pcmanfm --set-wallpaper="$wall_splash" --wallpaper-mode=crop \
+                >/dev/null 2>&1 || true
+            env DISPLAY="${DISPLAY:-:0}" \
+                XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/0}" \
+                pcmanfm --reconfigure >/dev/null 2>&1 || true
         fi
+
+        unset -f _set_pcmanfm_wallpaper_conf _refresh_pcmanfm_wallpaper
         log_ok "Desktop wallpaper set to FlightScnr splash ($wall_splash)"
     else
         log_warn "Could not create $wall_dir — skipped wallpaper install"
