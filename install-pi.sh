@@ -2,6 +2,8 @@
 # install-pi.sh — Install or update FlightScnr Pi on a Raspberry Pi.
 #
 # Requires: Raspberry Pi OS with desktop (X11 on :0), round touch LCD, network.
+# Fresh installs prefer the X11 session (rpd-x) over labwc/Wayland so SDL gets
+# real multi-touch (pinch-to-zoom). SDL_VIDEODRIVER=x11 stays as today.
 #
 # First install (after clone):
 #   git clone https://github.com/yashmulgaonkar/FlightScnr_Pi.git ~/FlightScnr_Pi
@@ -38,6 +40,8 @@ REPO_OWNER_HOME=""
 REPO_OWNER_UID=""
 BOOT_CONFIG=""
 BOOT_CMDLINE=""
+# Set by prefer_x11_session when LightDM was switched off labwc/Wayland.
+NEED_REBOOT_FOR_X11=0
 
 setup_paths() {
     REPO_ROOT="$(cd "$(dirname "$0")" && pwd)"
@@ -122,6 +126,8 @@ resolve_boot_paths() {
 install_gpio_fan() {
     # Kernel gpio-fan: on/off on the control wire when SoC hits the threshold.
     # Matches the official Pi case-fan wiring (GPIO 14). temp is millidegrees C.
+    # Writes must not abort portal OTA under set -e (vfat remount-ro / full boot
+    # partition) — same class of guard as Bluetooth panel edits (5fdb6d4).
     local fan_line="dtoverlay=gpio-fan,gpiopin=14,temp=60000"
 
     log_step "Case fan (gpio-fan overlay)"
@@ -131,13 +137,23 @@ install_gpio_fan() {
         log_warn "Could not find config.txt — skipped gpio-fan overlay"
         return 0
     fi
+    if [ ! -w "$BOOT_CONFIG" ]; then
+        log_warn "config.txt not writable ($BOOT_CONFIG) — skipped gpio-fan overlay"
+        return 0
+    fi
 
     if grep -qE '^\s*dtoverlay=gpio-fan' "$BOOT_CONFIG"; then
-        sed -i "s|^[[:space:]]*dtoverlay=gpio-fan.*|${fan_line}|" "$BOOT_CONFIG"
-        log_ok "Updated gpio-fan overlay ($BOOT_CONFIG): GPIO 14 @ 60°C"
+        if sed -i "s|^[[:space:]]*dtoverlay=gpio-fan.*|${fan_line}|" "$BOOT_CONFIG"; then
+            log_ok "Updated gpio-fan overlay ($BOOT_CONFIG): GPIO 14 @ 60°C"
+        else
+            log_warn "Could not update gpio-fan overlay in $BOOT_CONFIG (continuing)"
+        fi
     else
-        printf '\n# FlightScnr Pi — case fan (GPIO 14 @ 60°C)\n%s\n' "$fan_line" >> "$BOOT_CONFIG"
-        log_ok "Installed gpio-fan overlay ($BOOT_CONFIG): GPIO 14 @ 60°C"
+        if printf '\n# FlightScnr Pi — case fan (GPIO 14 @ 60°C)\n%s\n' "$fan_line" >> "$BOOT_CONFIG"; then
+            log_ok "Installed gpio-fan overlay ($BOOT_CONFIG): GPIO 14 @ 60°C"
+        else
+            log_warn "Could not write gpio-fan overlay to $BOOT_CONFIG (continuing)"
+        fi
     fi
 }
 
@@ -420,15 +436,94 @@ setup_config_h() {
     log_ok "Created config.h from config.h.example"
 }
 
+lightdm_session_is_wayland() {
+    # Prefer LightDM config over $XDG_SESSION_TYPE — installs over SSH are often
+    # tty and would miss a labwc autologin session.
+    local conf="${1:-/etc/lightdm/lightdm.conf}"
+    [ -f "$conf" ] || return 1
+    grep -qE '^[[:space:]]*(user-session|autologin-session)=(rpd-labwc|labwc|LXDE-pi-labwc|rpd-wayland)[[:space:]]*$' "$conf"
+}
+
+prefer_x11_session() {
+    # Bookworm defaults to labwc/Wayland. FlightScnr is an SDL X11 client on :0;
+    # under Xwayland touch is pointer-emulated (MOUSE* only) so pinch cannot work
+    # (issue #21). Mirror raspi-config "W1 X11" so fresh installs get real Xorg
+    # multi-touch. Leaves SDL_VIDEODRIVER=x11 unchanged (env + unit already set it).
+    local conf="/etc/lightdm/lightdm.conf"
+    local xsession wsession xgsession
+    local accounts=""
+
+    log_step "Desktop session (X11 for multi-touch / pinch-zoom)"
+
+    if [ ! -f "$conf" ]; then
+        log_ok "No LightDM config — skipping session preference"
+        return 0
+    fi
+
+    if [ -f /usr/share/xsessions/rpd-x.desktop ] \
+        || [ -f /usr/share/wayland-sessions/rpd-labwc.desktop ]; then
+        xsession=rpd-x
+        wsession=rpd-labwc
+        xgsession=pi-greeter-x
+    elif [ -f /usr/share/xsessions/LXDE-pi-x.desktop ]; then
+        xsession=LXDE-pi-x
+        wsession=LXDE-pi-labwc
+        xgsession=pi-greeter
+    else
+        log_warn "No Pi X11 session desktop file found — leave LightDM as-is"
+        log_warn "Pinch-to-zoom needs real X11 (not Xwayland); see GitHub issue #21"
+        return 0
+    fi
+
+    if [ ! -f "/usr/share/xsessions/${xsession}.desktop" ]; then
+        log_warn "X11 session '${xsession}' missing — leave LightDM as-is"
+        return 0
+    fi
+
+    if ! lightdm_session_is_wayland "$conf"; then
+        if grep -qE "^[[:space:]]*user-session=${xsession}[[:space:]]*$" "$conf" \
+            && grep -qE "^[[:space:]]*autologin-session=${xsession}[[:space:]]*$" "$conf"; then
+            log_ok "LightDM already on X11 (${xsession}) — pinch multi-touch path OK"
+            return 0
+        fi
+        log_ok "LightDM not on labwc/Wayland — leaving session unchanged"
+        return 0
+    fi
+
+    sed -i -e "s/^#\\?user-session.*/user-session=${xsession}/" "$conf"
+    sed -i -e "s/^#\\?autologin-session.*/autologin-session=${xsession}/" "$conf"
+    if [ -f "/usr/share/xgreeters/${xgsession}.desktop" ] \
+        || [ -f "/usr/share/lightdm/greeters/${xgsession}.desktop" ]; then
+        sed -i -e "s/^#\\?greeter-session.*/greeter-session=${xgsession}/" "$conf"
+    fi
+    sed -i -e "s/^fallback-test.*/#fallback-test=/" "$conf"
+    sed -i -e "s/^fallback-session.*/#fallback-session=/" "$conf"
+    sed -i -e "s/^fallback-greeter.*/#fallback-greeter=/" "$conf"
+
+    accounts="/var/lib/AccountsService/users/${REPO_OWNER}"
+    if [ -f "$accounts" ]; then
+        sed -i -e "s/^XSession=.*/XSession=${xsession}/" "$accounts" || true
+    fi
+
+    NEED_REBOOT_FOR_X11=1
+    log_ok "Switched LightDM to X11 (${xsession}; was ${wsession}) for pinch-to-zoom"
+    log_warn "Reboot required before the X11 session (and pinch) take effect"
+    return 0
+}
+
 setup_env_file() {
     if [ -f "$ENV_DEST" ]; then
         log_ok "$ENV_DEST already exists — keeping current configuration"
         # Bookworm labwc/Xwayland pointer-emulates touch (MOUSE* only). An old
         # TOUCH_USE_FINGER_EVENTS=True install silently drops every tap (#14).
+        # Detect via LightDM config too — SSH installs often have no WAYLAND_*.
         if grep -qE '^[[:space:]]*TOUCH_USE_FINGER_EVENTS=(True|true|1|yes|on)[[:space:]]*$' "$ENV_DEST"; then
-            if [ "${XDG_SESSION_TYPE:-}" = "wayland" ] || [ -n "${WAYLAND_DISPLAY:-}" ]; then
+            if [ "${XDG_SESSION_TYPE:-}" = "wayland" ] \
+                || [ -n "${WAYLAND_DISPLAY:-}" ] \
+                || lightdm_session_is_wayland \
+                || [ "${NEED_REBOOT_FOR_X11:-0}" -eq 1 ]; then
                 sed -i 's/^[[:space:]]*TOUCH_USE_FINGER_EVENTS=.*/TOUCH_USE_FINGER_EVENTS=False/' "$ENV_DEST"
-                log_ok "Set TOUCH_USE_FINGER_EVENTS=False for Wayland/Xwayland touch (issue #14)"
+                log_ok "Set TOUCH_USE_FINGER_EVENTS=False for safe taps (issue #14)"
             else
                 log_warn "TOUCH_USE_FINGER_EVENTS is True — if taps do nothing under Xwayland, set it False in $ENV_DEST"
             fi
@@ -693,6 +788,7 @@ cmd_install() {
     setup_venv
     verify_python_deps || true
     setup_data_dir
+    prefer_x11_session
     setup_env_file
     suppress_desktop_bluetooth_popups
     install_systemd_service
@@ -715,7 +811,12 @@ cmd_install() {
     echo "  Config:    nano $REPO_ROOT/config.h"
     echo "             OR web portal → API Keys (http://raspberrypi.local)"
     echo "             (advanced: sudo nano $ENV_DEST)"
-    echo "  Reboot:    starts automatically (systemctl is-enabled flightscnr)"
+    if [ "${NEED_REBOOT_FOR_X11:-0}" -eq 1 ]; then
+        echo "  Reboot:    REQUIRED now — switched desktop to X11 for pinch-to-zoom"
+        echo "             (sudo reboot). Afterward: pinch on radar should change range."
+    else
+        echo "  Reboot:    starts automatically (systemctl is-enabled flightscnr)"
+    fi
     echo "  Fan:       gpio-fan on GPIO 14 @ 60°C (reboot once if this install just added it)"
     echo "  Update:    bash $REPO_ROOT/install-pi.sh update"
     echo ""
@@ -744,14 +845,17 @@ cmd_update() {
     fi
 
     log_step "Pulling latest changes"
+    # Match utilities/updater.py: always pass safe.directory so root-run portal
+    # updates can read a pi-owned checkout (Git 2.35+ dubious-ownership checks).
+    local git_safe=(git -c "safe.directory=${REPO_ROOT}" -C "$REPO_ROOT")
     if [ "$(id -u)" -eq 0 ] && [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ]; then
-        sudo -u "$SUDO_USER" git -C "$REPO_ROOT" pull --ff-only
+        sudo -u "$SUDO_USER" "${git_safe[@]}" pull --ff-only
     elif [ "$(id -u)" -eq 0 ]; then
-        sudo -u "$REPO_OWNER" git -C "$REPO_ROOT" pull --ff-only
+        sudo -u "$REPO_OWNER" "${git_safe[@]}" pull --ff-only
     else
-        git -C "$REPO_ROOT" pull --ff-only
+        "${git_safe[@]}" pull --ff-only
     fi
-    log_ok "Git pull complete ($(git -C "$REPO_ROOT" log --oneline -1))"
+    log_ok "Git pull complete ($("${git_safe[@]}" log --oneline -1 2>/dev/null || true))"
 
     local install_args=(--skip-apt)
     if [ "$no_start" -eq 1 ]; then
