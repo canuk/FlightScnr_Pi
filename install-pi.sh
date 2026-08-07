@@ -36,6 +36,8 @@ VENV_DIR=""
 REPO_OWNER=""
 REPO_OWNER_HOME=""
 REPO_OWNER_UID=""
+BOOT_CONFIG=""
+BOOT_CMDLINE=""
 
 setup_paths() {
     REPO_ROOT="$(cd "$(dirname "$0")" && pwd)"
@@ -104,6 +106,41 @@ install_apt_packages() {
     log_ok "System packages ready"
 }
 
+resolve_boot_paths() {
+    # Prefer Bookworm firmware partition layout.
+    BOOT_CONFIG=""
+    BOOT_CMDLINE=""
+    if [ -f /boot/firmware/config.txt ]; then
+        BOOT_CONFIG="/boot/firmware/config.txt"
+        BOOT_CMDLINE="/boot/firmware/cmdline.txt"
+    elif [ -f /boot/config.txt ]; then
+        BOOT_CONFIG="/boot/config.txt"
+        BOOT_CMDLINE="/boot/cmdline.txt"
+    fi
+}
+
+install_gpio_fan() {
+    # Kernel gpio-fan: on/off on the control wire when SoC hits the threshold.
+    # Matches the official Pi case-fan wiring (GPIO 14). temp is millidegrees C.
+    local fan_line="dtoverlay=gpio-fan,gpiopin=14,temp=60000"
+
+    log_step "Case fan (gpio-fan overlay)"
+
+    resolve_boot_paths
+    if [ -z "$BOOT_CONFIG" ]; then
+        log_warn "Could not find config.txt — skipped gpio-fan overlay"
+        return 0
+    fi
+
+    if grep -qE '^\s*dtoverlay=gpio-fan' "$BOOT_CONFIG"; then
+        sed -i "s|^[[:space:]]*dtoverlay=gpio-fan.*|${fan_line}|" "$BOOT_CONFIG"
+        log_ok "Updated gpio-fan overlay ($BOOT_CONFIG): GPIO 14 @ 60°C"
+    else
+        printf '\n# FlightScnr Pi — case fan (GPIO 14 @ 60°C)\n%s\n' "$fan_line" >> "$BOOT_CONFIG"
+        log_ok "Installed gpio-fan overlay ($BOOT_CONFIG): GPIO 14 @ 60°C"
+    fi
+}
+
 install_boot_splash() {
     # Custom Plymouth splash + desktop wallpaper + hide firmware rainbow splash.
     local src="$APP_DIR/assets/boot/splash.png"
@@ -111,8 +148,6 @@ install_boot_splash() {
     local pix_splash="$pix_dir/splash.png"
     local wall_dir="/usr/share/rpd-wallpaper"
     local wall_splash="$wall_dir/flightscnr.png"
-    local config=""
-    local cmdline=""
     local tmp_splash=""
 
     log_step "Boot splash & wallpaper (FlightScnr)"
@@ -122,14 +157,7 @@ install_boot_splash() {
         return 0
     fi
 
-    # Prefer Bookworm firmware partition layout.
-    if [ -f /boot/firmware/config.txt ]; then
-        config="/boot/firmware/config.txt"
-        cmdline="/boot/firmware/cmdline.txt"
-    elif [ -f /boot/config.txt ]; then
-        config="/boot/config.txt"
-        cmdline="/boot/cmdline.txt"
-    fi
+    resolve_boot_paths
 
     # Pi panel is usually rotated vs the art (DISPLAY_ROTATION); Plymouth / the
     # desktop greeter have no FlightScnr rotation, so bake a 90° CW copy once.
@@ -208,25 +236,25 @@ PYROT
 
     rm -f "$tmp_splash"
 
-    if [ -n "$config" ]; then
-        if grep -qE '^\s*disable_splash=' "$config"; then
-            sed -i 's/^\s*disable_splash=.*/disable_splash=1/' "$config"
+    if [ -n "$BOOT_CONFIG" ]; then
+        if grep -qE '^\s*disable_splash=' "$BOOT_CONFIG"; then
+            sed -i 's/^\s*disable_splash=.*/disable_splash=1/' "$BOOT_CONFIG"
         else
-            printf '\n# FlightScnr Pi — hide firmware rainbow splash\ndisable_splash=1\n' >> "$config"
+            printf '\n# FlightScnr Pi — hide firmware rainbow splash\ndisable_splash=1\n' >> "$BOOT_CONFIG"
         fi
-        log_ok "Firmware splash disabled ($config)"
+        log_ok "Firmware splash disabled ($BOOT_CONFIG)"
     else
         log_warn "Could not find config.txt — firmware splash unchanged"
     fi
 
-    if [ -n "$cmdline" ] && [ -f "$cmdline" ]; then
+    if [ -n "$BOOT_CMDLINE" ] && [ -f "$BOOT_CMDLINE" ]; then
         # Keep quiet splash for Plymouth; add if missing.
-        if ! grep -qw splash "$cmdline"; then
+        if ! grep -qw splash "$BOOT_CMDLINE"; then
             # cmdline is a single line
-            sed -i 's/$/ splash/' "$cmdline"
+            sed -i 's/$/ splash/' "$BOOT_CMDLINE"
         fi
-        if ! grep -qw quiet "$cmdline"; then
-            sed -i 's/$/ quiet/' "$cmdline"
+        if ! grep -qw quiet "$BOOT_CMDLINE"; then
+            sed -i 's/$/ quiet/' "$BOOT_CMDLINE"
         fi
         log_ok "Kernel cmdline keeps quiet splash"
     fi
@@ -660,6 +688,7 @@ cmd_install() {
     install_weather_icons
     install_aircraft_icons
     install_boot_splash
+    install_gpio_fan
     extract_logos
     setup_venv
     verify_python_deps || true
@@ -687,6 +716,7 @@ cmd_install() {
     echo "             OR web portal → API Keys (http://raspberrypi.local)"
     echo "             (advanced: sudo nano $ENV_DEST)"
     echo "  Reboot:    starts automatically (systemctl is-enabled flightscnr)"
+    echo "  Fan:       gpio-fan on GPIO 14 @ 60°C (reboot once if this install just added it)"
     echo "  Update:    bash $REPO_ROOT/install-pi.sh update"
     echo ""
 }

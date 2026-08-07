@@ -210,6 +210,8 @@ cd ~/FlightScnr_Pi
 sudo bash install-pi.sh
 ```
 
+The installer also enables the enclosure cooling fan via the kernel `gpio-fan` overlay (**GPIO 14**, on at **60°C**). Reboot once after first install so the overlay loads.
+
 3. Open the web portal at `http://<hostname>.local` and add API keys.
 
 Step-by-step instructions: [Software Setup](https://github.com/yashmulgaonkar/FlightScnr_Pi/wiki/Software-Setup).
