@@ -8,10 +8,12 @@
 # may look like the update "finished".
 #
 # It also repairs a corrupted git object database — the classic Pi power-loss
-# signature: "error: object file .git/objects/... is empty" followed by
-# "fatal: unpack-objects failed" on fetch/pull. Zero-byte objects are removed
-# and history is re-fetched; if that is not enough, .git is re-cloned from
-# GitHub (local repo edits are discarded — they are unrecoverable anyway).
+# signatures: "error: object file .git/objects/... is empty" followed by
+# "fatal: unpack-objects failed", or "fatal: bad object refs/tags/..." +
+# "did not send all necessary objects" (a ref left pointing at a lost object).
+# Zero-byte objects and broken refs are removed and history is re-fetched;
+# if that is not enough, .git is re-cloned from GitHub (local repo edits are
+# discarded — they are unrecoverable anyway).
 #
 # This script does NOT need a successful pull first — fetch it from GitHub:
 #
@@ -41,7 +43,7 @@ while [ $# -gt 0 ]; do
             fi
             ;;
         -h|--help)
-            sed -n '2,25p' "$0"
+            sed -n '2,26p' "$0"
             exit 0
             ;;
         *)
@@ -116,17 +118,31 @@ remote_url() {
     run_git config --get remote.origin.url 2>/dev/null || echo "$GITHUB_URL"
 }
 
-# True if the object database has the power-loss signature (zero-byte objects).
-objectdb_corrupt() {
-    find "$REPO_ROOT/.git/objects" -type f -empty 2>/dev/null | grep -q .
+# True if the repo has the power-loss signature: zero-byte object files, or
+# refs whose target object is gone (seen as "fatal: bad object refs/tags/X" +
+# "did not send all necessary objects" when the empty files were already
+# deleted by hand but a ref pointed at one of them).
+repo_corrupt() {
+    if find "$REPO_ROOT/.git/objects" -type f -empty 2>/dev/null | grep -q .; then
+        return 0
+    fi
+    local ref obj
+    while read -r ref obj; do
+        [ -n "$obj" ] || continue
+        run_git cat-file -e "$obj" 2>/dev/null || return 0
+    done < <(run_git for-each-ref --format='%(refname) %(objectname)' 2>/dev/null)
+    return 1
 }
 
 # Last resort: replace .git with a fresh clone, keeping the worktree path.
+# Staged on the same filesystem as the repo (NOT /tmp, which is tmpfs/RAM on
+# Bookworm and too small for the ~100MB history on low-memory Pis), so the
+# final swap is an atomic rename.
 reclone_git_dir() {
     local url tmp bak
     url="$(remote_url)"
     echo "Re-cloning git history from $url…"
-    tmp="$(run_as_owner mktemp -d)"
+    tmp="$(run_as_owner mktemp -d "$REPO_ROOT/.repair-clone.XXXXXX")"
     if ! run_as_owner git clone --no-checkout "$url" "$tmp/clone"; then
         rm -rf "$tmp"
         echo "Re-clone failed (network down?). Cannot repair automatically." >&2
@@ -140,8 +156,9 @@ reclone_git_dir() {
     rm -rf "$tmp" "$bak"
 }
 
-# Remove zero-byte loose objects, re-fetch full history, and point main at
-# origin/main. Discards local repo edits (they reference lost objects anyway).
+# Remove zero-byte loose objects and broken refs, re-fetch history, and point
+# main at origin/main. Discards local repo edits (they reference lost objects
+# anyway).
 repair_object_db() {
     echo "Git object database looks corrupted (e.g. zero-byte files in .git/objects)."
     echo "This usually follows a power loss / SD-card write interruption."
@@ -156,9 +173,9 @@ repair_object_db() {
         [ -f "${idx%.idx}.pack" ] || rm -f "$idx"
     done
 
-    # Delete refs whose target object was lost in the sweep — otherwise even
-    # `fetch --refetch` fails its connectivity check ("did not send all
-    # necessary objects"). main and origin/* are recreated below.
+    # Delete refs whose target object was lost — they make every fetch fail
+    # its connectivity check ("did not send all necessary objects"). main,
+    # origin/* and tags are recreated below.
     local ref obj
     while read -r ref obj; do
         [ -n "$ref" ] || continue
@@ -167,36 +184,46 @@ repair_object_db() {
         fi
     done < <(run_git for-each-ref --format='%(refname) %(objectname)' 2>/dev/null || true)
 
-    # --refetch (git >= 2.36) transfers a self-contained pack, so unpacking
-    # never needs a delta base from the (broken) local store. Plain fetch is
-    # the fallback for older git; if both fail, swap in a fresh clone.
-    if ! run_git fetch --refetch origin 2>/dev/null \
-        && ! run_git fetch origin; then
-        reclone_git_dir || exit 1
-    fi
-
-    if ! run_git rev-parse --verify --quiet 'origin/main^{commit}' >/dev/null; then
-        reclone_git_dir || exit 1
-    fi
-
     # Reflogs still reference the lost objects; drop them so fsck/gc stay clean.
     run_git reflog expire --expire=now --all 2>/dev/null || true
     rm -rf "$REPO_ROOT/.git/logs" 2>/dev/null || true
 
-    # -B recreates main at origin/main with tracking (status showed "[gone]"),
-    # -f overwrites the worktree/index left over from the corrupt state.
-    if ! run_git checkout -f -B main origin/main \
-        || objectdb_corrupt \
-        || ! run_git log --oneline -1 >/dev/null 2>&1; then
-        echo "Repository still unhealthy after repair." >&2
-        echo "Manual fix: back up any local edits, then delete and re-clone:" >&2
-        echo "  git clone $GITHUB_URL ~/FlightScnr_Pi && sudo bash ~/FlightScnr_Pi/install-pi.sh" >&2
-        exit 1
+    # Point main back at origin/main. -B recreates the branch with tracking
+    # (status showed "[gone]"), -f overwrites the index/worktree left over
+    # from the corrupt state. The full fsck catches objects that are still
+    # missing but not needed by the checkout itself (e.g. a blob whose
+    # worktree copy happens to be current) — without it a later gc/checkout
+    # would hit the hole.
+    restore_main() {
+        run_git rev-parse --verify --quiet 'origin/main^{commit}' >/dev/null \
+            && run_git checkout -f -B main origin/main \
+            && ! repo_corrupt \
+            && run_git fsck --no-progress >/dev/null 2>&1
+    }
+
+    # Cheapest first: a plain incremental fetch is enough when none of the
+    # lost objects are needed by main or as delta bases (the common case).
+    # --tags restores release tags whose broken refs were pruned above.
+    # --refetch (git >= 2.36) re-downloads full history as a self-contained
+    # pack; a fresh clone is the last resort.
+    run_git fetch --tags origin || true
+    if ! restore_main; then
+        echo "Incremental fetch was not enough — re-fetching full history…"
+        run_git fetch --refetch origin 2>/dev/null || true
+        if ! restore_main; then
+            reclone_git_dir || exit 1
+            if ! restore_main; then
+                echo "Repository still unhealthy after repair." >&2
+                echo "Manual fix: back up any local edits, then delete and re-clone:" >&2
+                echo "  git clone $GITHUB_URL ~/FlightScnr_Pi && sudo bash ~/FlightScnr_Pi/install-pi.sh" >&2
+                exit 1
+            fi
+        fi
     fi
     echo "Git repository repaired."
 }
 
-if objectdb_corrupt; then
+if repo_corrupt; then
     repair_object_db
 fi
 
@@ -213,7 +240,10 @@ if [ "$HARD" -eq 1 ]; then
         run_git pull --ff-only || run_git reset --hard '@{u}'
     fi
 else
-    for rel in scripts/release.sh scripts/release.cmd; do
+    # Same blocker list as install-pi.sh prepare_repo_for_pull, minus this
+    # script itself: rewriting the running file mid-execution is unsafe when
+    # invoked from disk, and install-pi.sh clears it before pulling anyway.
+    for rel in scripts/release.sh scripts/release.cmd scripts/dev-release.sh; do
         if run_git status --porcelain -- "$rel" 2>/dev/null | grep -q .; then
             echo "Clearing local changes: $rel"
             run_git restore --source=HEAD --staged --worktree -- "$rel" 2>/dev/null \
