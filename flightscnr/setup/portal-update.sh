@@ -31,6 +31,8 @@ esac
 
 # Detach from the web portal process (new session / nohup). Still stays in the
 # flightscnr.service cgroup — deferred restart below is what avoids self-kill.
+# stdout/stderr go only to LOG_FILE here; the worker must not also tee -a the
+# same file or every line is duplicated (issue #77 user logs).
 if [ -z "${FLIGHTSCNR_PORTAL_UPDATE:-}" ]; then
     export FLIGHTSCNR_PORTAL_UPDATE=1
     mkdir -p "$DATA_DIR"
@@ -73,16 +75,16 @@ schedule_service_restart() {
             --on-active="${RESTART_DELAY_S}s" \
             /bin/systemctl restart flightscnr.service
         then
-            echo "Scheduled flightscnr restart in ${RESTART_DELAY_S}s ($unit)" | tee -a "$LOG_FILE"
+            echo "Scheduled flightscnr restart in ${RESTART_DELAY_S}s ($unit)"
             return 0
         fi
-        echo "systemd-run scheduling failed — falling back to background sleep" | tee -a "$LOG_FILE"
+        echo "systemd-run scheduling failed — falling back to background sleep"
     fi
     # Fallback still works for portal status (already written) even if this
     # sleeper is later swept by KillMode=mixed during the restart.
     nohup bash -c "sleep ${RESTART_DELAY_S}; systemctl restart flightscnr.service" \
         >>"$LOG_FILE" 2>&1 </dev/null &
-    echo "Scheduled flightscnr restart in ${RESTART_DELAY_S}s (sleep fallback, pid $!)" | tee -a "$LOG_FILE"
+    echo "Scheduled flightscnr restart in ${RESTART_DELAY_S}s (sleep fallback, pid $!)"
 }
 
 fail_cleanup() {
@@ -90,6 +92,10 @@ fail_cleanup() {
     trap - EXIT
     write_status "failed" "Update failed (exit $code). See $LOG_FILE"
     release_lock
+    # git pull may already have advanced VERSION on disk while install aborted.
+    # Restart so the splash matches the checkout; auto-resync can finish install
+    # steps on the next boot of the service (issue #77 exit-2 reports).
+    schedule_service_restart || true
     exit "$code"
 }
 
@@ -103,14 +109,12 @@ fi
 echo $$ >"$LOCK_FILE"
 trap fail_cleanup EXIT
 
-{
-    echo ""
-    echo "==> Portal ${UPDATE_MODE} $(date -Iseconds)"
-    echo "    Repo: $REPO_ROOT"
-} | tee -a "$LOG_FILE"
+echo ""
+echo "==> Portal ${UPDATE_MODE} $(date -Iseconds)"
+echo "    Repo: $REPO_ROOT"
 
 if [ ! -f "$REPO_ROOT/install-pi.sh" ]; then
-    echo "install-pi.sh not found" | tee -a "$LOG_FILE"
+    echo "install-pi.sh not found"
     exit 1
 fi
 
@@ -120,11 +124,11 @@ export FLIGHTSCNR_SKIP_RESTART=1
 
 if [ "$UPDATE_MODE" = "resync" ]; then
     write_status "running" "Finishing install (re-sync)… Do not turn off."
-    bash "$REPO_ROOT/install-pi.sh" install --skip-apt --no-start 2>&1 | tee -a "$LOG_FILE"
+    bash "$REPO_ROOT/install-pi.sh" install --skip-apt --no-start
     success_msg="Install re-sync finished. Restarting display…"
 else
     write_status "running" "Pulling latest changes…"
-    bash "$REPO_ROOT/install-pi.sh" update --no-start 2>&1 | tee -a "$LOG_FILE"
+    bash "$REPO_ROOT/install-pi.sh" update --no-start
     success_msg="Update finished successfully. Restarting display…"
 fi
 

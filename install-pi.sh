@@ -415,10 +415,14 @@ install_ui_fonts() {
         tmp=$(mktemp -d)
         if curl -fsSL -o "$tmp/Inter.zip" \
             "https://github.com/yashmulgaonkar/inter/releases/download/v4.1/Inter-4.1.zip"; then
-            unzip -qo -j "$tmp/Inter.zip" \
+            if unzip -qo -j "$tmp/Inter.zip" \
                 "extras/ttf/Inter-Regular.ttf" "extras/ttf/Inter-Bold.ttf" \
                 -d "$inter_dir"
-            log_ok "Inter fonts ready"
+            then
+                log_ok "Inter fonts ready"
+            else
+                log_warn "Could not extract Inter fonts — UI may fall back to DejaVu"
+            fi
         else
             log_warn "Could not download Inter fonts — UI may fall back to DejaVu"
         fi
@@ -501,9 +505,13 @@ extract_logos() {
 
     if [ ! -d "$logo_dir" ] || [ "$logo_zip" -nt "$logo_dir" ]; then
         log_step "Extracting airline logos"
-        unzip -qo "$logo_zip" -d "$REPO_ROOT"
-        chmod -R a+r "$logo_dir"
-        log_ok "Logos extracted to logo/"
+        # unzip exit 2 = zip format error; must not abort portal OTA (set -e).
+        if unzip -qo "$logo_zip" -d "$REPO_ROOT"; then
+            chmod -R a+r "$logo_dir"
+            log_ok "Logos extracted to logo/"
+        else
+            log_warn "Could not extract logo.zip (continuing)"
+        fi
     fi
 
     rm -f "$logos_link"
@@ -520,7 +528,10 @@ setup_venv() {
         log_ok "Using existing $VENV_DIR"
     fi
 
-    "$VENV_DIR/bin/python" -m pip install --upgrade pip setuptools wheel >/dev/null
+    # pip uses exit 2 for UNKNOWN_ERROR — do not let a self-upgrade flake abort OTA.
+    if ! "$VENV_DIR/bin/python" -m pip install --upgrade pip setuptools wheel >/dev/null; then
+        log_warn "pip self-upgrade failed (continuing with existing pip)"
+    fi
     "$VENV_DIR/bin/python" -m pip install -r "$REPO_ROOT/requirements.txt"
     log_ok "Python dependencies installed"
 }
@@ -734,7 +745,11 @@ PY
     # from popping "Connected"/battery toasts over fullscreen FlightScnr.
     local wf_ini="${REPO_OWNER_HOME}/.config/wf-panel-pi.ini"
     mkdir -p "$(dirname "$wf_ini")"
-    if python3 - "$wf_ini" <<'PY'
+    # Prefer stdout markers over sys.exit(2): that code became portal
+    # "Update failed (exit 2)" whenever set -e / $? handling missed it (#77).
+    local wf_rc=0
+    local wf_out=""
+    wf_out="$(python3 - "$wf_ini" 2>/dev/null <<'PY'
 import pathlib, re, sys
 
 FALLBACK_RIGHT = (
@@ -787,20 +802,22 @@ text = set_key(text, "widgets_right", without_bluetooth(current.group(1) if curr
 text = set_key(text, "notify_enable", "false")
 
 if text == original:
-    sys.exit(2)
-path.write_text(text, encoding="utf-8")
+    print("UNCHANGED")
+else:
+    path.write_text(text, encoding="utf-8")
+    print("UPDATED")
 PY
-    then
+)" || wf_rc=$?
+    if [ "$wf_rc" -eq 0 ] && [ "$wf_out" = "UPDATED" ]; then
         if [ -n "${REPO_OWNER:-}" ]; then
             chown "$REPO_OWNER:$REPO_OWNER" "$wf_ini" 2>/dev/null || true
         fi
         changed=1
         log_ok "Disabled bluetooth widget + panel notifications in $wf_ini"
+    elif [ "$wf_rc" -eq 0 ]; then
+        log_ok "wf-panel-pi already has bluetooth widget + notifications disabled"
     else
-        case "$?" in
-            2) log_ok "wf-panel-pi already has bluetooth widget + notifications disabled" ;;
-            *) log_warn "Could not update $wf_ini (continuing)" ;;
-        esac
+        log_warn "Could not update $wf_ini (continuing)"
     fi
 
     if [ "$changed" -eq 1 ]; then
