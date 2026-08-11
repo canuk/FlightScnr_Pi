@@ -120,8 +120,52 @@ install_apt_packages() {
         mpv \
         bluez \
         libspa-0.2-bluetooth \
-        pulseaudio-utils
+        pulseaudio-utils \
+        rfkill
     log_ok "System packages ready"
+}
+
+ensure_bluetooth_ready() {
+    # Fresh Bookworm images often soft-block Bluetooth (rfkill) and/or leave
+    # bluetoothd inactive until the desktop tray toggles it. FlightScnr pairs
+    # speakers via bluetoothctl with no tray — unblock + enable here.
+    local conf="/etc/bluetooth/main.conf"
+
+    log_step "Bluetooth (adapter for speaker pairing)"
+
+    if command -v rfkill >/dev/null 2>&1; then
+        rfkill unblock bluetooth >/dev/null 2>&1 || true
+        log_ok "rfkill unblock bluetooth"
+    else
+        log_warn "rfkill not installed — skipping unblock"
+    fi
+
+    if systemctl list-unit-files bluetooth.service >/dev/null 2>&1; then
+        systemctl enable bluetooth.service >/dev/null 2>&1 || true
+        if systemctl start bluetooth.service >/dev/null 2>&1; then
+            log_ok "bluetooth.service enabled and started"
+        else
+            log_warn "Could not start bluetooth.service (continuing)"
+        fi
+    else
+        log_warn "bluetooth.service not found — is bluez installed?"
+    fi
+
+    if [ -f "$conf" ]; then
+        if grep -qE '^[[:space:]]*AutoEnable=' "$conf"; then
+            sed -i -e 's/^[[:space:]]*AutoEnable=.*/AutoEnable=true/' "$conf" || true
+        elif grep -qE '^[[:space:]]*#[[:space:]]*AutoEnable=' "$conf"; then
+            sed -i -e 's/^[[:space:]]*#[[:space:]]*AutoEnable=.*/AutoEnable=true/' "$conf" || true
+        else
+            printf '\n# FlightScnr Pi — power adapter on boot for speaker pairing\nAutoEnable=true\n' >> "$conf" || true
+        fi
+        log_ok "BlueZ AutoEnable=true ($conf)"
+    fi
+
+    if command -v bluetoothctl >/dev/null 2>&1; then
+        bluetoothctl power on >/dev/null 2>&1 || true
+        bluetoothctl pairable on >/dev/null 2>&1 || true
+    fi
 }
 
 resolve_boot_paths() {
@@ -788,6 +832,12 @@ setup_env_file() {
                 log_warn "TOUCH_USE_FINGER_EVENTS is True — if taps do nothing under Xwayland, set it False in $ENV_DEST"
             fi
         fi
+        # If dump1090 was never configured in env, keep the explicit off default
+        # (avoids connection-refused spam when no local receiver is installed).
+        if ! grep -qE '^[[:space:]]*DUMP1090_ENABLED=' "$ENV_DEST"; then
+            printf '\n# Local ADS-B receiver (off until enabled in the portal)\nDUMP1090_ENABLED=False\n' >> "$ENV_DEST"
+            log_ok "Set DUMP1090_ENABLED=False (no local receiver by default)"
+        fi
     else
         log_step "Creating $ENV_DEST"
         if [ -f "$REPO_ROOT/.env" ]; then
@@ -799,6 +849,9 @@ setup_env_file() {
         fi
         chown root:root "$ENV_DEST"
         chmod 0600 "$ENV_DEST"
+        if ! grep -qE '^[[:space:]]*DUMP1090_ENABLED=' "$ENV_DEST"; then
+            printf '\nDUMP1090_ENABLED=False\n' >> "$ENV_DEST"
+        fi
     fi
 
     setup_config_h
@@ -1102,6 +1155,7 @@ cmd_install() {
     setup_data_dir
     prefer_x11_session
     setup_env_file
+    ensure_bluetooth_ready
     suppress_desktop_bluetooth_popups
     install_systemd_service
     install_update_sudoers
