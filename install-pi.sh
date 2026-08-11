@@ -2,8 +2,9 @@
 # install-pi.sh — Install or update FlightScnr Pi on a Raspberry Pi.
 #
 # Requires: Raspberry Pi OS with desktop (X11 on :0), round touch LCD, network.
-# Fresh installs prefer the X11 session (rpd-x) over labwc/Wayland so SDL gets
-# real multi-touch (pinch-to-zoom). SDL_VIDEODRIVER=x11 stays as today.
+# Fresh installs force the X11 session (rpd-x) over labwc/Wayland so SDL gets
+# real multi-touch (pinch-to-zoom), then auto-reboot when needed. Users should
+# not need raspi-config. SDL_VIDEODRIVER=x11 stays as today.
 #
 # First install (after clone):
 #   git clone https://github.com/yashmulgaonkar/FlightScnr_Pi.git ~/FlightScnr_Pi
@@ -15,7 +16,7 @@
 #
 # After an OTA from builds that still ran install in-process (pre-re-exec),
 # the app auto-re-syncs install-pi.sh once (stamp mismatch) so users do not
-# need a second Update click. Reboot if LightDM switched to rpd-x.
+# need a second Update click. Auto-reboots if LightDM switched to rpd-x.
 #
 # Usage:
 #   sudo bash install-pi.sh [install] [--no-start] [--skip-apt]
@@ -582,12 +583,14 @@ setup_config_h() {
     log_ok "Created config.h from config.h.example"
 }
 
+REBOOT_X11_FLAG="${DATA_DIR}/need-reboot-for-x11"
+
 lightdm_session_is_wayland() {
     # Prefer LightDM config over $XDG_SESSION_TYPE — installs over SSH are often
     # tty and would miss a labwc autologin session.
     local conf="${1:-/etc/lightdm/lightdm.conf}"
     [ -f "$conf" ] || return 1
-    grep -qE '^[[:space:]]*(user-session|autologin-session)=(rpd-labwc|labwc|LXDE-pi-labwc|rpd-wayland)[[:space:]]*$' "$conf"
+    grep -qE '^[[:space:]]*(user-session|autologin-session)=(rpd-labwc|labwc|LXDE-pi-labwc|LXDE-pi-wayland|rpd-wayland)[[:space:]]*$' "$conf"
 }
 
 # True when the *live* desktop is still labwc/Xwayland (config may already say X11
@@ -596,14 +599,51 @@ wayland_desktop_still_running() {
     pgrep -x labwc >/dev/null 2>&1 || pgrep -x Xwayland >/dev/null 2>&1
 }
 
+lightdm_on_x11_session() {
+    local conf="$1"
+    local xsession="$2"
+    grep -qE "^[[:space:]]*user-session=${xsession}[[:space:]]*$" "$conf" \
+        && grep -qE "^[[:space:]]*autologin-session=${xsession}[[:space:]]*$" "$conf"
+}
+
+# Ensure a LightDM [Seat:*] key exists (create or uncomment), then set its value.
+# Mirrors raspi-config do_wayland W1; also handles images missing the key entirely.
+_set_lightdm_seat_key() {
+    local conf="$1"
+    local key="$2"
+    local value="$3"
+    if grep -qE "^#?[[:space:]]*${key}=" "$conf"; then
+        sed -i -e "s/^#\\?[[:space:]]*${key}.*/${key}=${value}/" "$conf"
+        return 0
+    fi
+    if grep -qE '^\[Seat:\*\]' "$conf"; then
+        sed -i "/^\[Seat:\*\]/a ${key}=${value}" "$conf"
+    else
+        printf '\n[Seat:*]\n%s=%s\n' "$key" "$value" >> "$conf"
+    fi
+}
+
+_mark_reboot_for_x11() {
+    NEED_REBOOT_FOR_X11=1
+    mkdir -p "$DATA_DIR"
+    printf 'x11\n' >"$REBOOT_X11_FLAG"
+    chmod 644 "$REBOOT_X11_FLAG" 2>/dev/null || true
+}
+
+_clear_reboot_for_x11() {
+    rm -f "$REBOOT_X11_FLAG"
+}
+
 prefer_x11_session() {
-    # Bookworm defaults to labwc/Wayland. FlightScnr is an SDL X11 client on :0;
-    # under Xwayland touch is pointer-emulated (MOUSE* only) so pinch cannot work
-    # (issue #21). Mirror raspi-config "W1 X11" so fresh installs get real Xorg
-    # multi-touch. Leaves SDL_VIDEODRIVER=x11 unchanged (env + unit already set it).
+    # Bookworm/Trixie default to labwc/Wayland. FlightScnr is an SDL X11 client
+    # on :0; under Xwayland touch is pointer-emulated (MOUSE* only) so pinch
+    # cannot work (issue #21). Always force the Pi OS X11 session (same as
+    # raspi-config "W1 X11") — do not leave LightDM alone just because the
+    # current session name is unfamiliar. Leaves SDL_VIDEODRIVER=x11 unchanged.
     local conf="/etc/lightdm/lightdm.conf"
     local xsession wsession xgsession
     local accounts=""
+    local switched=0
 
     log_step "Desktop session (X11 for multi-touch / pinch-zoom)"
 
@@ -632,28 +672,37 @@ prefer_x11_session() {
         return 0
     fi
 
-    if ! lightdm_session_is_wayland "$conf"; then
-        if grep -qE "^[[:space:]]*user-session=${xsession}[[:space:]]*$" "$conf" \
-            && grep -qE "^[[:space:]]*autologin-session=${xsession}[[:space:]]*$" "$conf"; then
-            if wayland_desktop_still_running; then
-                # Config was switched earlier but this boot is still labwc/Xwayland.
-                NEED_REBOOT_FOR_X11=1
-                log_warn "LightDM is set to X11 (${xsession}) but labwc/Xwayland is still running"
-                log_warn "Reboot required before pinch-to-zoom will work (issue #21)"
-                return 0
-            fi
-            log_ok "LightDM already on X11 (${xsession}) — pinch multi-touch path OK"
+    if lightdm_on_x11_session "$conf" "$xsession"; then
+        if wayland_desktop_still_running; then
+            # Config was switched earlier but this boot is still labwc/Xwayland.
+            _mark_reboot_for_x11
+            log_warn "LightDM is set to X11 (${xsession}) but labwc/Xwayland is still running"
+            log_warn "Will reboot automatically so pinch-to-zoom can take effect"
             return 0
         fi
-        log_ok "LightDM not on labwc/Wayland — leaving session unchanged"
+        _clear_reboot_for_x11
+        rm -f "${DATA_DIR}/reboot-in-progress"
+        log_ok "LightDM already on X11 (${xsession}) — pinch multi-touch path OK"
         return 0
     fi
 
-    sed -i -e "s/^#\\?user-session.*/user-session=${xsession}/" "$conf"
-    sed -i -e "s/^#\\?autologin-session.*/autologin-session=${xsession}/" "$conf"
+    # Prefer raspi-config when present (tracks OS session/greeter naming).
+    if command -v raspi-config >/dev/null 2>&1; then
+        if raspi-config nonint do_wayland W1 >/dev/null 2>&1; then
+            switched=1
+            log_ok "raspi-config nonint do_wayland W1 → X11 (${xsession})"
+        else
+            log_warn "raspi-config nonint do_wayland W1 failed — applying LightDM edits directly"
+        fi
+    fi
+
+    # Always apply the same LightDM edits raspi-config uses, so we still win on
+    # images where nonint is missing/broken or left greeter/AccountsService stale.
+    _set_lightdm_seat_key "$conf" user-session "$xsession"
+    _set_lightdm_seat_key "$conf" autologin-session "$xsession"
     if [ -f "/usr/share/xgreeters/${xgsession}.desktop" ] \
         || [ -f "/usr/share/lightdm/greeters/${xgsession}.desktop" ]; then
-        sed -i -e "s/^#\\?greeter-session.*/greeter-session=${xgsession}/" "$conf"
+        _set_lightdm_seat_key "$conf" greeter-session "$xgsession"
     fi
     sed -i -e "s/^fallback-test.*/#fallback-test=/" "$conf"
     sed -i -e "s/^fallback-session.*/#fallback-session=/" "$conf"
@@ -661,12 +710,64 @@ prefer_x11_session() {
 
     accounts="/var/lib/AccountsService/users/${REPO_OWNER}"
     if [ -f "$accounts" ]; then
-        sed -i -e "s/^XSession=.*/XSession=${xsession}/" "$accounts" || true
+        if grep -qE '^XSession=' "$accounts"; then
+            sed -i -e "s/^XSession=.*/XSession=${xsession}/" "$accounts" || true
+        else
+            printf 'XSession=%s\n' "$xsession" >> "$accounts" || true
+        fi
     fi
 
-    NEED_REBOOT_FOR_X11=1
-    log_ok "Switched LightDM to X11 (${xsession}; was ${wsession}) for pinch-to-zoom"
-    log_warn "Reboot required before the X11 session (and pinch) take effect"
+    if ! lightdm_on_x11_session "$conf" "$xsession"; then
+        log_warn "Could not set LightDM to ${xsession} — pinch may stay unavailable"
+        return 0
+    fi
+
+    _mark_reboot_for_x11
+    if [ "$switched" -eq 1 ]; then
+        log_ok "Confirmed LightDM on X11 (${xsession}) for pinch-to-zoom"
+    else
+        log_ok "Switched LightDM to X11 (${xsession}; was ${wsession}) for pinch-to-zoom"
+    fi
+    log_warn "Reboot will be scheduled so the X11 session (and pinch) take effect"
+    return 0
+}
+
+schedule_reboot_for_x11() {
+    # Pinch needs a real Xorg session; config changes only apply after reboot.
+    # Auto-reboot so fresh installs do not require raspi-config or a manual reboot.
+    local delay_s="${FLIGHTSCNR_X11_REBOOT_DELAY_S:-8}"
+    local unit="flightscnr-x11-reboot-$$"
+    local progress="${DATA_DIR}/reboot-in-progress"
+
+    if [ "${NEED_REBOOT_FOR_X11:-0}" -ne 1 ] && [ ! -f "$REBOOT_X11_FLAG" ]; then
+        return 0
+    fi
+    if [ "${FLIGHTSCNR_NO_AUTO_REBOOT:-}" = "1" ]; then
+        log_warn "X11 reboot needed but FLIGHTSCNR_NO_AUTO_REBOOT=1 — run: sudo reboot"
+        return 0
+    fi
+
+    # On-screen modal in the display app while we wait for the reboot.
+    mkdir -p "$DATA_DIR"
+    printf 'x11\n' >"$progress"
+    chmod 644 "$progress" 2>/dev/null || true
+
+    log_step "Scheduling reboot for X11 / pinch-to-zoom (${delay_s}s)"
+    if command -v systemd-run >/dev/null 2>&1; then
+        if systemd-run \
+            --quiet \
+            --collect \
+            --unit="$unit" \
+            --on-active="${delay_s}s" \
+            /bin/systemctl reboot
+        then
+            log_ok "Reboot scheduled (${unit}) — pinch works after X11 comes up"
+            return 0
+        fi
+        log_warn "systemd-run reboot schedule failed — falling back to background sleep"
+    fi
+    nohup bash -c "sleep ${delay_s}; systemctl reboot" >/dev/null 2>&1 </dev/null &
+    log_ok "Reboot scheduled (sleep fallback, pid $!) — pinch works after X11 comes up"
     return 0
 }
 
@@ -1023,9 +1124,15 @@ cmd_install() {
     echo "  Config:    nano $REPO_ROOT/config.h"
     echo "             OR web portal → API Keys (http://raspberrypi.local)"
     echo "             (advanced: sudo nano $ENV_DEST)"
-    if [ "${NEED_REBOOT_FOR_X11:-0}" -eq 1 ]; then
-        echo "  Reboot:    REQUIRED now — switched desktop to X11 for pinch-to-zoom"
-        echo "             (sudo reboot). Afterward: pinch on radar should change range."
+    if [ "${NEED_REBOOT_FOR_X11:-0}" -eq 1 ] || [ -f "$REBOOT_X11_FLAG" ]; then
+        echo "  Reboot:    AUTO — desktop switched to X11 for pinch-to-zoom"
+        echo "             (pinch on radar works after reboot completes)"
+        # Portal (--no-start) schedules reboot after status/lock are cleared.
+        if [ "$no_start" -eq 0 ]; then
+            schedule_reboot_for_x11
+        else
+            log_ok "X11 reboot flagged for portal/updater to schedule after status write"
+        fi
     else
         echo "  Reboot:    starts automatically (systemctl is-enabled flightscnr)"
     fi

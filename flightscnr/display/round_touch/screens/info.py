@@ -738,6 +738,45 @@ def draw_system_confirm_popup(surface, action: str) -> None:
     ]
 
 
+def draw_reboot_progress_popup(
+    surface,
+    title: str = "Reboot in progress",
+    detail: str = "Display will come back shortly.",
+) -> None:
+    """Non-interactive modal shown while a reboot/shutdown is scheduled."""
+    # Opaque cover — SRCALPHA dims are unreliable on the Pi framebuffer.
+    draw.fill_background(surface)
+
+    title_font = draw.load_font(theme.s(16), bold=True)
+    body_font = draw.load_font(theme.s(12))
+    title_surf = title_font.render(title, True, theme.LABEL)
+    detail_surf = body_font.render(detail, True, theme.HINT)
+
+    pad_x = theme.s(16)
+    pad_y = theme.s(18)
+    gap = theme.s(8)
+    content_w = max(title_surf.get_width(), detail_surf.get_width())
+    panel_w = min(content_w + pad_x * 2, int(theme.VISIBLE_RADIUS * 1.6))
+    panel_h = pad_y + title_surf.get_height() + gap + detail_surf.get_height() + pad_y
+
+    panel_rect = pygame.Rect(0, 0, panel_w, panel_h)
+    panel_rect.center = (theme.CENTER_X, theme.CENTER_Y)
+    radius = theme.s(10)
+    pygame.draw.rect(surface, (8, 28, 14), panel_rect, border_radius=radius)
+    pygame.draw.rect(
+        surface,
+        _SYSTEM_BTN_DANGER_BORDER,
+        panel_rect,
+        max(1, theme.s(2)),
+        border_radius=radius,
+    )
+
+    y = panel_rect.top + pad_y
+    surface.blit(title_surf, title_surf.get_rect(midtop=(theme.CENTER_X, y)))
+    y += title_surf.get_height() + gap
+    surface.blit(detail_surf, detail_surf.get_rect(midtop=(theme.CENTER_X, y)))
+
+
 def tap_footer_action(x: int, y: int, page: int = PAGE_MAIN) -> str | None:
     kinds = footer_kinds_for_page(page)
     idx = nav.tap_footer_button(x, y, len(kinds))

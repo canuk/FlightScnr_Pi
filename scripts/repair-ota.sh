@@ -292,4 +292,4 @@ fi
 echo ""
 echo "Done. VERSION=$(tr -d '[:space:]' <VERSION 2>/dev/null || echo '?')"
 echo "If the portal still looks old, refresh the page or: sudo systemctl restart flightscnr"
-echo "If LightDM switched to X11 for pinch-zoom: sudo reboot"
+echo "If LightDM switched to X11 for pinch-zoom, the Pi reboots on its own."

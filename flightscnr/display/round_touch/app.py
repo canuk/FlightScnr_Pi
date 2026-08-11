@@ -816,12 +816,14 @@ class RoundTouchDisplay:
     def _draw(self):
         if self._fatal_error:
             draw.draw_error(self.surface, self._fatal_error)
+            self._draw_reboot_progress_overlay()
             draw.apply_round_bezel(self.surface)
             self._present()
             return
 
         if time.time() < self._boot_until:
             details.draw_details(self.surface, boot_splash=True)
+            self._draw_reboot_progress_overlay()
             draw.apply_round_bezel(self.surface)
             self._present()
             return
@@ -916,6 +918,9 @@ class RoundTouchDisplay:
             bezel_applied = True  # already applied inside capture
         else:
             self._invalidate_timeout_content_cache()
+        # Reboot/shutdown progress sits above all screens (install auto-reboot,
+        # System → Reboot, portal X11 switch).
+        self._draw_reboot_progress_overlay()
         _t = time.perf_counter()
         if not bezel_applied:
             draw.apply_round_bezel(self.surface)
@@ -925,6 +930,15 @@ class RoundTouchDisplay:
         self._present()
         if FRAME_DEBUG:
             self._stage("4_present", time.perf_counter() - _t)
+
+    def _draw_reboot_progress_overlay(self) -> None:
+        from utilities import system_control
+
+        copy = system_control.reboot_progress_copy()
+        if copy is None:
+            return
+        title, detail = copy
+        info.draw_reboot_progress_popup(self.surface, title, detail)
 
     def _timeout_duration_s(self) -> float | None:
         """Active secondary-screen timeout in seconds, or None if no countdown."""
@@ -2898,6 +2912,12 @@ class RoundTouchDisplay:
     def _handle_navigation(self):
         if time.time() < self._boot_until:
             return
+        # Ignore input while reboot/shutdown is already scheduled.
+        from utilities import system_control
+
+        if system_control.reboot_progress_copy() is not None:
+            self.input.consume_gesture()
+            return
         if self.screen == SCREEN_DISCLAIMER:
             # Consume all gestures; only checkbox / Accept hit rects act.
             # During a remembered countdown there is no Accept — wait it out.
@@ -3852,6 +3872,17 @@ class RoundTouchDisplay:
                     self._last_radar_draw = time.time()
 
                 now = time.time()
+                # Install/portal auto-reboot (and System → Reboot) write a flag;
+                # keep the modal painted until the device goes down.
+                from utilities import system_control
+
+                if system_control.reboot_progress_copy() is not None:
+                    if (now - self._last_static_draw) >= 0.25:
+                        self._safe_draw()
+                        self._last_static_draw = now
+                    time.sleep(0.05)
+                    continue
+
                 if (
                     self.screen not in (SCREEN_WIFI_SETUP, SCREEN_DISCLAIMER)
                     and not self._radar_modal_active()
