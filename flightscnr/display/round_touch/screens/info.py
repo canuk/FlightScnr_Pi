@@ -76,6 +76,7 @@ DISPLAY_ACTIONS = (
     "compass",
     "range_rings",
     "sweep",
+    "color_by_altitude",
     "units",
     "range",
     "rotate",
@@ -1561,6 +1562,7 @@ def _display_row_labels() -> list[str]:
         "Compass Rose",
         "Radar Range Rings",
         "Radar Sweep Line",
+        "Color by Altitude",
         f"Units: {settings.unit_preset_label()}",
         f"Radar Range: {settings.scale_label()}",
         f"Rotate Screen: {settings.display_rotation()}°",
@@ -1621,6 +1623,7 @@ _TOGGLE_ROW_STATE = {
     "compass": settings.show_compass_rose,
     "range_rings": settings.show_range_rings,
     "sweep": settings.show_sweep_line,
+    "color_by_altitude": settings.color_by_altitude,
     "radar_hud": settings.radar_hud_enabled,
     "precipitation": settings.show_precipitation,
     "wildfires": settings.show_wildfires,
@@ -1756,6 +1759,56 @@ def _draw_settings_rows(
     finally:
         surface.set_clip(clip_prev)
     return max_scroll
+
+
+def _draw_scroll_overflow_cues(
+    surface,
+    top: int,
+    bottom: int,
+    scroll_offset: int,
+    max_scroll: int,
+) -> None:
+    """Modern thin scrollbar on the right when settings rows overflow."""
+    if max_scroll <= 0:
+        return
+
+    track_top = int(top + theme.s(10))
+    track_bottom = int(bottom - theme.s(10))
+    track_h = track_bottom - track_top
+    if track_h < theme.s(24):
+        return
+
+    # Sit on the right of the round viewport, clear of centered labels.
+    track_x = theme.CENTER_X + int(theme.VISIBLE_RADIUS * 0.78)
+    track_w = max(3, theme.s(4))
+    radius = max(2, track_w // 2)
+
+    # Viewport fraction of total content (content = viewport + max_scroll).
+    viewport_h = max(1, bottom - top)
+    content_h = viewport_h + max_scroll
+    thumb_h = max(theme.s(18), int(round(track_h * (viewport_h / content_h))))
+    thumb_h = min(thumb_h, track_h)
+    travel = max(0, track_h - thumb_h)
+    t = 0.0 if max_scroll <= 0 else min(1.0, max(0.0, scroll_offset / float(max_scroll)))
+    thumb_y = track_top + int(round(travel * t))
+
+    track_rect = pygame.Rect(track_x - track_w // 2, track_top, track_w, track_h)
+    thumb_rect = pygame.Rect(track_x - track_w // 2, thumb_y, track_w, thumb_h)
+
+    # Frosted track + solid thumb (reads on light and dark themes).
+    track_surf = pygame.Surface((track_w, track_h), pygame.SRCALPHA)
+    pygame.draw.rect(
+        track_surf,
+        (*theme.HINT[:3], 70),
+        track_surf.get_rect(),
+        border_radius=radius,
+    )
+    surface.blit(track_surf, track_rect.topleft)
+
+    thumb_color = theme.MUTED if hasattr(theme, "MUTED") else theme.LABEL
+    pygame.draw.rect(surface, thumb_color, thumb_rect, border_radius=radius)
+    # Hairline edge for contrast on similar backgrounds.
+    pygame.draw.rect(surface, theme.GRID, thumb_rect, max(1, theme.s(1)), border_radius=radius)
 
 
 def _draw_brightness_slider_row(surface, ry: int, focused: bool) -> None:
@@ -2181,6 +2234,8 @@ def draw_info(
     if page == PAGE_ATC and atc_picker:
         # Full-screen picker; skip footer chrome underneath.
         return draw_atc_picker(surface, atc_picker, scroll_offset=atc_picker_scroll)
+    if max_scroll > 0 and page != PAGE_MAIN:
+        _draw_scroll_overflow_cues(surface, top, bottom, scroll_offset, max_scroll)
     nav.draw_footer_buttons(surface, list(footer_kinds_for_page(page)))
     if page == PAGE_SYSTEM and system_confirm:
         draw_system_confirm_popup(surface, system_confirm)
