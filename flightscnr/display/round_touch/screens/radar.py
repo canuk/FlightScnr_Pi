@@ -454,6 +454,7 @@ def draw_radar(
             from display.round_touch import update_bubble
 
             update_bubble.draw_bubble(surface)
+            airport_overlay.draw_callout(surface, pan_offset=offset)
             bezel_applied = True
         elif layer is not None:
             # Fast present composites from this layer directly; skip the unused
@@ -478,6 +479,7 @@ def draw_radar(
             from display.round_touch import update_bubble
 
             update_bubble.draw_bubble(surface)
+            airport_overlay.draw_callout(surface, pan_offset=offset)
             if aircraft_alert.rim_flash_active():
                 _draw_alert_rim_flash(surface)
         # Sweep is composited in present() on the fast path so we can skip a
