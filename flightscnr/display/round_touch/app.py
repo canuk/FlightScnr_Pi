@@ -157,6 +157,7 @@ class RoundTouchDisplay:
         self._wifi_setup_redraw = False
         self._wifi_try_saved_busy = False
         self._wifi_offline_since: float | None = None
+        self._wifi_down_streak = 0
         self._last_wifi_link_poll = 0.0
         self._wifi_ap_starting = False
         self._last_clock_minute = -1
@@ -369,6 +370,7 @@ class RoundTouchDisplay:
         )
         self._wifi_setup_mode = True
         self._wifi_offline_since = None
+        self._wifi_down_streak = 0
         self._wifi_try_saved_busy = False
         self.screen = SCREEN_WIFI_SETUP
         try:
@@ -411,6 +413,7 @@ class RoundTouchDisplay:
         self._wifi_try_saved_busy = False
         self._wifi_ap_starting = False
         self._wifi_offline_since = None
+        self._wifi_down_streak = 0
         self._fatal_error = None
         map_bg.request_background()
         map_bg.prewarm_all_scales()
@@ -551,20 +554,37 @@ class RoundTouchDisplay:
             return
         if wifi_setup_util.skip_requested():
             self._wifi_offline_since = None
+            self._wifi_down_streak = 0
             return
         now = time.time()
         if now - self._last_wifi_link_poll < 2.0:
             return
         self._last_wifi_link_poll = now
         try:
-            up = wifi_setup_util.link_up()
+            # Kick/refresh cache; probe state distinguishes down vs nmcli flakiness.
+            wifi_setup_util.link_up()
+            state = wifi_setup_util.last_link_probe_state()
         except Exception:
             logger.debug("Wi-Fi link poll failed", exc_info=True)
             return
-        if up:
+        if state == "up":
             if self._wifi_offline_since is not None:
                 logger.info("Network link restored")
             self._wifi_offline_since = None
+            self._wifi_down_streak = 0
+            return
+        if state != "down":
+            # unknown / not yet probed: do not start or continue offline grace
+            self._wifi_down_streak = 0
+            if self._wifi_offline_since is not None:
+                logger.info(
+                    "Network link probe inconclusive — pausing Wi-Fi setup entry"
+                )
+                self._wifi_offline_since = None
+            return
+        needed = wifi_setup_util.link_down_streak_needed()
+        self._wifi_down_streak += 1
+        if self._wifi_down_streak < needed:
             return
         if self._wifi_offline_since is None:
             self._wifi_offline_since = now
