@@ -25,6 +25,7 @@ from utilities.route_enrichment import (
     needs_route_enrichment,
 )
 from display.round_touch import (
+    airport_overlay,
     disclaimer_acceptance,
     draw,
     frame_debug,
@@ -1900,6 +1901,7 @@ class RoundTouchDisplay:
         self._pan_offset = (0, 0)
         self._pan_drag_start = None
         self._pan_drag_was_active = False
+        airport_overlay.clear_callout()
         self._long_press_pan.clear_candidate()
         if from_long_press:
             self._long_press_pan.begin_from_long_press()
@@ -2282,6 +2284,7 @@ class RoundTouchDisplay:
         rainviewer_overlay.request_overlay()
         wildfire_overlay.invalidate()
         wildfire_overlay.request_refresh(force=True)
+        airport_overlay.clear_callout()
         self._safe_draw()
 
     def _flights_for_detail(self):
@@ -3613,22 +3616,41 @@ class RoundTouchDisplay:
     def _open_flight_or_fire_at(
         self, x: int, y: int, alt_x: int | None = None, alt_y: int | None = None
     ) -> bool:
-        """Open the nearer of a flight or fire under the tap.
+        """Open the nearer of a flight, fire, or airport under the tap.
 
         Dense traffic (and beyond-range rim blips) used to always win over a
-        fire even when the finger was clearly on the flame icon.
+        fire even when the finger was clearly on the flame icon. Airports are
+        secondary to both: they only win when clearly nearer than a flight,
+        and never beat a fire that already wins the fire-vs-flight bias.
         """
         flight, flight_d2 = radar.pick_flight_at(self._radar_flights(), x, y, alt_x, alt_y)
         fire, fire_d2 = wildfire_overlay.pick_fire_at(x, y, alt_x, alt_y)
+        airport, airport_d2 = airport_overlay.pick_airport_at(x, y, alt_x, alt_y)
         # Prefer the fire when it is as close or only slightly farther — fires
         # are sparse and easy to miss under Oshkosh-density aircraft.
         fire_bias = theme.s(16) ** 2
         if fire is not None and (
             flight is None or fire_d2 is None or flight_d2 is None or fire_d2 <= flight_d2 + fire_bias
         ):
-            return self._open_picked_fire(fire)
-        if flight is not None:
+            if airport is None or fire_d2 is None or airport_d2 is None or fire_d2 <= airport_d2:
+                airport_overlay.clear_callout()
+                return self._open_picked_fire(fire)
+        # Prefer aircraft over airports when distances are close.
+        flight_bias = theme.s(12) ** 2
+        if flight is not None and (
+            airport is None
+            or flight_d2 is None
+            or airport_d2 is None
+            or flight_d2 <= airport_d2 + flight_bias
+        ):
+            airport_overlay.clear_callout()
             return self._open_picked_flight(flight)
+        if airport is not None:
+            airport_overlay.show_callout(airport)
+            radar.invalidate_frame_layer()
+            self._note_activity()
+            return True
+        airport_overlay.clear_callout()
         return False
 
     def _tick_ais(self):

@@ -32,10 +32,11 @@ CACHE_FILE  = os.path.join(BASE_DIR, "airports.json")
 CSV_URL     = "https://raw.githubusercontent.com/datasets/airport-codes/master/data/airport-codes.csv"
 
 # Cache version — increment to force rebuild (e.g. when coordinate parsing changes)
+# v5: persist official facility name (CSV ``name``) alongside municipality
 # v4: persist OurAirports ``type`` for radar major-airport filtering
 # v3: store municipality name for route labels
 # v2: confirmed coordinates field is "latitude, longitude" order
-CACHE_VERSION = 4
+CACHE_VERSION = 5
 
 # Types drawn on the radar when "show airports" is on (no labels / no runways).
 # Include small public fields — many GA strips are tagged small_airport but still
@@ -66,7 +67,12 @@ def _record_from_row(row: dict) -> dict | None:
     rec: dict = {"lat": lat, "lon": lon}
     municipality = (row.get("municipality") or "").strip()
     if municipality:
+        # Kept as ``name`` for route labels (e.g. "SFO, San Francisco").
         rec["name"] = municipality
+    facility = (row.get("name") or "").strip()
+    if facility:
+        # Official airport / airfield title (e.g. "Moffett Federal Airfield").
+        rec["facility"] = facility
     atype = (row.get("type") or "").strip().lower()
     if atype:
         rec["type"] = atype
@@ -168,7 +174,7 @@ def iter_airports_near(
 
     Prefers ICAO ``ident`` keys (4-letter) so IATA duplicates are not drawn twice.
     Default ``types`` is large + medium airports only.
-    Each item: ``{"ident", "lat", "lon", "type", "name", "dist_km"}``.
+    Each item: ``{"ident", "lat", "lon", "type", "name", "facility", "dist_km"}``.
     """
     _load()
     try:
@@ -212,6 +218,7 @@ def iter_airports_near(
                 "lon": alon,
                 "type": atype,
                 "name": (rec.get("name") or "").strip(),
+                "facility": (rec.get("facility") or "").strip(),
                 "dist_km": dist,
             }
         )
@@ -281,6 +288,11 @@ def _lookup_record(code: str) -> dict:
 def get_airport_name(code: str) -> str:
     """City/municipality label for an airport code (e.g. SFO → San Francisco)."""
     return (_lookup_record(code).get("name") or "").strip()
+
+
+def get_airport_facility(code: str) -> str:
+    """Official airport / airfield title when known (e.g. KNUQ → Moffett Federal Airfield)."""
+    return (_lookup_record(code).get("facility") or "").strip()
 
 
 def display_airport_code(code: str) -> str:
