@@ -859,31 +859,66 @@ setup_env_file() {
 
 suppress_desktop_bluetooth_popups() {
     # Raspberry Pi OS panel plugins (lxplug-bluetooth / wfplug-bluetooth, and
-    # wfplug-volumepulse for BT audio) pop a "Connection successful" dialog or a
-    # "<device> Connected N%" notification on every BlueZ connect/disconnect.
-    # Those steal focus from fullscreen FlightScnr. Pairing is done via the web
-    # portal, so drop the panel widget and the panel notification server —
+    # volumepulse / volumealsa for BT audio) pop a "Connection successful"
+    # dialog or a "<device> Connected N%" toast on every BlueZ connect.
+    # Those steal focus from fullscreen FlightScnr. Pairing is done via the
+    # web portal, so drop the panel widgets and mute panel notifications —
     # BlueZ/PipeWire still work for ATC audio.
+    #
+    # After prefer_x11_session, the live stack is Openbox + lxpanel (not
+    # labwc/wf-panel-pi). The earlier Wayland-only widgets_right fix is not
+    # enough; lxpanel must lose its bluetooth plugin (and we still harden
+    # wf-panel-pi for devices that remain on labwc).
     log_step "Suppressing desktop Bluetooth pair/connect popups"
 
     local changed=0
     local panel
-    local panels=(
-        "${REPO_OWNER_HOME}/.config/lxpanel/LXDE-pi/panels/panel"
-        "/etc/xdg/lxpanel/LXDE-pi/panels/panel"
-        "/root/.config/lxpanel/LXDE-pi/panels/panel"
+    local panels=()
+    local p
+    local autostart
+
+    # Collect every lxpanel panel config we can find (system + user profiles).
+    while IFS= read -r p; do
+        [ -n "$p" ] && panels+=("$p")
+    done < <(
+        find \
+            "${REPO_OWNER_HOME}/.config/lxpanel" \
+            /etc/xdg/lxpanel \
+            /root/.config/lxpanel \
+            -type f -path '*/panels/*' 2>/dev/null | sort -u
     )
 
+    # Fresh X11 logins may have no user panel yet and still load bluetooth from
+    # the packaged default — seed a user copy so our strip sticks.
+    if [ -n "${REPO_OWNER_HOME:-}" ] \
+        && [ ! -f "${REPO_OWNER_HOME}/.config/lxpanel/LXDE-pi/panels/panel" ] \
+        && [ -f /etc/xdg/lxpanel/LXDE-pi/panels/panel ]
+    then
+        mkdir -p "${REPO_OWNER_HOME}/.config/lxpanel/LXDE-pi/panels"
+        if cp -a /etc/xdg/lxpanel/LXDE-pi/panels/panel \
+            "${REPO_OWNER_HOME}/.config/lxpanel/LXDE-pi/panels/panel"
+        then
+            chown -R "$REPO_OWNER:" "${REPO_OWNER_HOME}/.config/lxpanel" 2>/dev/null || true
+            panels+=("${REPO_OWNER_HOME}/.config/lxpanel/LXDE-pi/panels/panel")
+            log_ok "Seeded user lxpanel config from system default"
+        fi
+    fi
+
     for panel in "${panels[@]}"; do
-        if [ -f "$panel" ] && grep -q 'type=bluetooth' "$panel"; then
-            # Drop the Plugin { type=bluetooth ... } block (and a following blank line).
-            # A failure here must not abort the install (set -e), so keep it guarded.
-            if python3 - "$panel" <<'PY'
+        [ -f "$panel" ] || continue
+        if ! grep -qiE '^[[:space:]]*type[[:space:]]*=[[:space:]]*bluetooth[[:space:]]*$' "$panel"; then
+            continue
+        fi
+        # Drop Plugin { … type=bluetooth … } blocks. Allow "type = bluetooth".
+        if python3 - "$panel" <<'PY'
 import pathlib, re, sys
+
 path = pathlib.Path(sys.argv[1])
 text = path.read_text(encoding="utf-8")
 new, n = re.subn(
-    r"(?ms)^Plugin \{\n(?:[^\n]*\n)*?[ \t]*type=bluetooth\n(?:[^\n]*\n)*?^\}\n?",
+    r"(?ims)^Plugin\s*\{(?:(?!^Plugin\s*\{).)*?"
+    r"^[ \t]*type[ \t]*=[ \t]*bluetooth[ \t]*\n"
+    r"(?:(?!^Plugin\s*\{).)*?^\}\s*\n?",
     "",
     text,
 )
@@ -891,19 +926,36 @@ if not n:
     sys.exit(1)
 path.write_text(new, encoding="utf-8")
 PY
-            then
-                changed=1
-                log_ok "Removed bluetooth plugin from $panel"
-            else
-                log_warn "Could not strip bluetooth plugin from $panel (continuing)"
-            fi
+        then
+            changed=1
+            log_ok "Removed bluetooth plugin from $panel"
+        else
+            log_warn "Could not strip bluetooth plugin from $panel (continuing)"
         fi
     done
 
-    # wf-panel-pi (Wayland). An absent widgets_right falls back to the compiled
-    # default, which includes the bluetooth widget — so the key must be written
-    # explicitly, not just filtered. notify_enable=false also stops volumepulse
-    # from popping "Connected"/battery toasts over fullscreen FlightScnr.
+    # Disable desktop autostart helpers that show their own BT dialogs/toasts.
+    for autostart in \
+        /etc/xdg/autostart/blueman.desktop \
+        /etc/xdg/autostart/blueman-applet.desktop \
+        /etc/xdg/autostart/blueberry-tray.desktop \
+        "${REPO_OWNER_HOME}/.config/autostart/blueman.desktop" \
+        "${REPO_OWNER_HOME}/.config/autostart/blueman-applet.desktop"
+    do
+        if [ -f "$autostart" ] && ! grep -qE '^[[:space:]]*Hidden[[:space:]]*=[[:space:]]*true' "$autostart"; then
+            if grep -qE '^[[:space:]]*Hidden[[:space:]]*=' "$autostart"; then
+                sed -i -E 's/^[[:space:]]*Hidden[[:space:]]*=.*/Hidden=true/' "$autostart" || true
+            else
+                printf '\nHidden=true\n' >> "$autostart" || true
+            fi
+            changed=1
+            log_ok "Hidden autostart $(basename "$autostart")"
+        fi
+    done
+
+    # wf-panel-pi (Wayland / labwc). An absent widgets_right falls back to the
+    # packaged default (includes bluetooth) — write the key explicitly.
+    # notify_enable=false also stops volumepulse "Connected"/battery toasts.
     local wf_ini="${REPO_OWNER_HOME}/.config/wf-panel-pi.ini"
     mkdir -p "$(dirname "$wf_ini")"
     # Prefer stdout markers over sys.exit(2): that code became portal
@@ -985,7 +1037,7 @@ PY
         # Reload panel if one is running (best-effort; ignore failures).
         if pgrep -x lxpanel >/dev/null 2>&1; then
             killall -q lxpanel 2>/dev/null || true
-            log_ok "Restarted lxpanel (will respawn with desktop session)"
+            log_ok "Stopped lxpanel so bluetooth plugin reload cannot show dialogs"
         fi
         if pgrep -x wf-panel-pi >/dev/null 2>&1; then
             # Nothing respawns it inside a running Wayland session; it comes back
@@ -993,8 +1045,78 @@ PY
             killall -q wf-panel-pi 2>/dev/null || true
             log_ok "Stopped wf-panel-pi (returns on next boot without the popups)"
         fi
+        # Blueman / blueberry trays if somehow still running.
+        killall -q blueman-applet blueman-tray blueberry-tray 2>/dev/null || true
     else
         log_ok "Desktop Bluetooth panel plugin already disabled (or not present)"
+    fi
+}
+
+suppress_desktop_panel_for_kiosk() {
+    # Under labwc, the panel often yields to fullscreen SDL. On X11 (rpd-x /
+    # Openbox) lxpanel stays on the "above" layer, so the menu bar remains
+    # visible over FlightScnr. Disable lxpanel autostart for the kiosk and
+    # stop any running panel now — flightscnr.service also kills it on start.
+    local changed=0
+    local f
+    local sys_files=(
+        /etc/xdg/lxsession/LXDE-pi/autostart
+        /etc/xdg/lxsession/LXDE/autostart
+        /etc/xdg/lxsession/rpd-x/autostart
+    )
+    local user_dir="${REPO_OWNER_HOME}/.config/lxsession/LXDE-pi"
+    local user_file="${user_dir}/autostart"
+
+    log_step "Desktop panel (hide menu bar for fullscreen kiosk)"
+
+    _comment_lxpanel_autostart() {
+        local path="$1"
+        [ -f "$path" ] || return 1
+        if grep -qE '^[[:space:]]*@lxpanel\b' "$path"; then
+            sed -i -E 's/^[[:space:]]*@lxpanel\b/#@lxpanel/' "$path" || return 1
+            return 0
+        fi
+        return 1
+    }
+
+    for f in "${sys_files[@]}"; do
+        if _comment_lxpanel_autostart "$f"; then
+            changed=1
+            log_ok "Disabled lxpanel in $f"
+        fi
+    done
+
+    # Per-user autostart overrides the system file entirely when present.
+    if [ -f "$user_file" ]; then
+        if _comment_lxpanel_autostart "$user_file"; then
+            changed=1
+            log_ok "Disabled lxpanel in $user_file"
+        fi
+        chown "$REPO_OWNER:" "$user_file" 2>/dev/null || true
+    elif [ -f /etc/xdg/lxsession/LXDE-pi/autostart ] && [ -n "${REPO_OWNER_HOME:-}" ]; then
+        mkdir -p "$user_dir"
+        if cp -a /etc/xdg/lxsession/LXDE-pi/autostart "$user_file"; then
+            _comment_lxpanel_autostart "$user_file" || true
+            chown -R "$REPO_OWNER:" "${REPO_OWNER_HOME}/.config/lxsession" 2>/dev/null || true
+            changed=1
+            log_ok "Installed user autostart without lxpanel ($user_file)"
+        fi
+    fi
+
+    # Stop panels immediately so this install does not need another reboot.
+    if pgrep -x lxpanel >/dev/null 2>&1; then
+        killall -q lxpanel 2>/dev/null || true
+        changed=1
+        log_ok "Stopped lxpanel"
+    fi
+    if pgrep -x wf-panel-pi >/dev/null 2>&1; then
+        killall -q wf-panel-pi 2>/dev/null || true
+        changed=1
+        log_ok "Stopped wf-panel-pi"
+    fi
+
+    if [ "$changed" -eq 0 ]; then
+        log_ok "Desktop panel already hidden (or not present)"
     fi
 }
 
@@ -1157,6 +1279,7 @@ cmd_install() {
     setup_env_file
     ensure_bluetooth_ready
     suppress_desktop_bluetooth_popups
+    suppress_desktop_panel_for_kiosk
     install_systemd_service
     install_update_sudoers
     fix_repo_permissions
