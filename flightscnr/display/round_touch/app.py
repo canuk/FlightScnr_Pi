@@ -1347,6 +1347,9 @@ class RoundTouchDisplay:
             settings.cycle_vessel_min_speed()
         elif action == "sweep":
             settings.toggle_sweep_line()
+        elif action == "color_by_altitude":
+            settings.toggle_color_by_altitude()
+            radar.invalidate_frame_layer()
         elif action == "precipitation":
             settings.toggle_show_precipitation()
             rainviewer_overlay.invalidate()
