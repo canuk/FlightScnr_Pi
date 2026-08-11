@@ -370,7 +370,7 @@ def square_framebuffer_side() -> int:
 BUTTONS_DIR = os.environ.get("BUTTONS_DIR", "").strip()
 SDL_VIDEODRIVER = os.environ.get("SDL_VIDEODRIVER", "")
 
-DISTANCE_UNITS = os.environ.get("DISTANCE_UNITS", "metric")
+DISTANCE_UNITS = os.environ.get("DISTANCE_UNITS", "imperial")
 CLOCK_FORMAT = os.environ.get("CLOCK_FORMAT", "24hr")
 BRIGHTNESS = int(os.environ.get("BRIGHTNESS", "100"))
 BRIGHTNESS_NIGHT = int(os.environ.get("BRIGHTNESS_NIGHT", "50"))
