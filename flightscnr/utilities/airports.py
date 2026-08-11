@@ -100,9 +100,20 @@ def build_db_from_csv_text(text: str) -> dict:
     return db
 
 
+def _safe_print(msg: str) -> None:
+    """Print without letting a latin-1 stdout abort airport loading."""
+    try:
+        print(msg)
+    except UnicodeEncodeError:
+        try:
+            print(msg.encode("ascii", "replace").decode("ascii"))
+        except Exception:
+            pass
+
+
 def _download_and_build():
     """Download CSV and build IATA/ICAO -> coords lookup."""
-    print("[Airports] Downloading airport database...")
+    _safe_print("[Airports] Downloading airport database...")
     try:
         r = requests.get(CSV_URL, timeout=30)
         r.raise_for_status()
@@ -110,11 +121,14 @@ def _download_and_build():
         cache_data = {"_version": CACHE_VERSION, "airports": db}
         with open(CACHE_FILE, "w", encoding="utf-8") as f:
             json.dump(cache_data, f)
-        print(f"[Airports] Database built — {len(db)} entries cached to airports.json (v{CACHE_VERSION})")
+        _safe_print(
+            f"[Airports] Database built - {len(db)} entries cached to "
+            f"airports.json (v{CACHE_VERSION})"
+        )
         return db
 
     except Exception as e:
-        print(f"[Airports] Download failed: {e}")
+        _safe_print(f"[Airports] Download failed: {e}")
         return {}
 
 
@@ -136,20 +150,23 @@ def _load():
                 _loaded = True
                 return
             else:
-                # Stale or unversioned cache — rebuild
+                # Stale or unversioned cache - rebuild
                 version_found = raw.get("_version", "none") if isinstance(raw, dict) else "legacy"
-                print(f"[Airports] Cache version mismatch (found: {version_found}, need: {CACHE_VERSION}) — rebuilding")
+                _safe_print(
+                    f"[Airports] Cache version mismatch "
+                    f"(found: {version_found}, need: {CACHE_VERSION}) - rebuilding"
+                )
                 if isinstance(raw, dict) and isinstance(raw.get("airports"), dict):
                     stale = raw["airports"]
                 elif isinstance(raw, dict) and "_version" not in raw:
                     stale = raw
         except Exception as e:
-            print(f"[Airports] Cache load failed: {e} — re-downloading")
+            _safe_print(f"[Airports] Cache load failed: {e} - re-downloading")
 
     _db = _download_and_build()
     if not _db and stale:
         # Keep lookups working offline until a typed rebuild succeeds.
-        print("[Airports] Using previous cache without type metadata (degraded)")
+        _safe_print("[Airports] Using previous cache without type metadata (degraded)")
         _db = stale
     _loaded = True
 

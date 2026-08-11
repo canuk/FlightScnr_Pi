@@ -13,6 +13,14 @@ import os
 import sys
 import logging
 
+# systemd / minimal locales often leave stdout as latin-1 or ascii; force UTF-8
+# so print/log lines with em dashes (—) cannot raise UnicodeEncodeError.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 # Configure logging for systemd (no timestamps — journald adds them)
 logging.basicConfig(
     level=logging.INFO,
