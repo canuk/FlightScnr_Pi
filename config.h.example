@@ -6,7 +6,7 @@
 // Edit config.h with any text editor, save, then restart:
 //   sudo systemctl restart flightscnr
 //
-// You can also set keys from the web portal at http://raspberrypi.local
+// You can also set keys from the web portal at http://<hostname>.local
 // (saved to /var/lib/flightscnr/secrets.json).
 //
 // Priority (highest wins): /etc/flightscnr.env → web portal → config.h

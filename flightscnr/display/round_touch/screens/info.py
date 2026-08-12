@@ -36,8 +36,10 @@ except ImportError:
     OPENSKY_API_CLIENT_SECRET = ""
     LOCATION_HOME = [0.0, 0.0]
 
-    def web_portal_url(hostname: str) -> str:
-        name = (hostname or "raspberrypi").split(".")[0].strip() or "raspberrypi"
+    def web_portal_url(hostname: str = "") -> str:
+        name = (hostname or socket.gethostname() or "").split(".")[0].strip()
+        if not name:
+            return "http://localhost"
         return f"http://{name}.local"
 
 from display.round_touch import alert_prefs, draw, nav, settings, theme

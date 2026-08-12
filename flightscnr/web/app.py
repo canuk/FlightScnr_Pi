@@ -1514,6 +1514,16 @@ def system_restart_app():
     return jsonify(system_control.request_app_restart())
 
 
+@app.post("/system/factory-reset")
+def system_factory_reset():
+    from utilities import updater
+
+    result = updater.start_factory_reset()
+    if not result.get("ok"):
+        return jsonify(result), 409
+    return jsonify(result)
+
+
 @app.get("/settings/export")
 def settings_export():
     """Download all user preference JSON as a versioned ``.config`` file.

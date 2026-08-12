@@ -1148,6 +1148,7 @@ fix_repo_permissions() {
     find "$REPO_ROOT" -type f -exec chmod 644 {} +
     chmod 755 "$REPO_ROOT/install-pi.sh"
     chmod 755 "$SETUP_DIR/portal-update.sh" 2>/dev/null || true
+    chmod 755 "$SETUP_DIR/portal-factory-reset.sh" 2>/dev/null || true
     # Preserve +x on release helpers — a blanket chmod 644 leaves git "dirty"
     # (mode 100755→100644) and blocks the next `git pull --ff-only` OTA.
     if [ -d "$REPO_ROOT/scripts" ]; then
@@ -1216,6 +1217,7 @@ install_update_sudoers() {
     local src="$SETUP_DIR/sudoers-flightscnr-update"
     local dest="/etc/sudoers.d/flightscnr-update"
     local update_script="$SETUP_DIR/portal-update.sh"
+    local factory_reset_script="$SETUP_DIR/portal-factory-reset.sh"
 
     if [ ! -f "$src" ]; then
         log_warn "sudoers template missing — portal updates may require manual sudo"
@@ -1224,9 +1226,12 @@ install_update_sudoers() {
 
     log_step "Portal update permissions"
     chmod 0755 "$update_script"
+    chmod 0755 "$factory_reset_script" 2>/dev/null || true
+    # Owner is quoted in the template so hyphenated Imager usernames parse.
     sed \
         -e "s|__REPO_OWNER__|$REPO_OWNER|g" \
         -e "s|__UPDATE_SCRIPT__|$update_script|g" \
+        -e "s|__FACTORY_RESET_SCRIPT__|$factory_reset_script|g" \
         "$src" > "$dest"
     chmod 0440 "$dest"
     if visudo -cf "$dest" >/dev/null 2>&1; then
@@ -1299,7 +1304,13 @@ cmd_install() {
     echo "  Service:   sudo systemctl status flightscnr"
     echo "  Logs:      sudo journalctl -u flightscnr -f"
     echo "  Config:    nano $REPO_ROOT/config.h"
-    echo "             OR web portal → API Keys (http://raspberrypi.local)"
+    _portal_host="$(hostname -s 2>/dev/null || hostname 2>/dev/null || true)"
+    _portal_host="${_portal_host%%.*}"
+    if [ -n "$_portal_host" ]; then
+        echo "             OR web portal → API Keys (http://${_portal_host}.local)"
+    else
+        echo "             OR web portal → API Keys (http://<hostname>.local)"
+    fi
     echo "             (advanced: sudo nano $ENV_DEST)"
     if [ "${NEED_REBOOT_FOR_X11:-0}" -eq 1 ] || [ -f "$REBOOT_X11_FLAG" ]; then
         echo "  Reboot:    AUTO — desktop switched to X11 for pinch-to-zoom"

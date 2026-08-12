@@ -22,6 +22,7 @@ import json
 import logging
 import math
 import os
+import socket
 
 logger = logging.getLogger(__name__)
 
@@ -313,10 +314,15 @@ FORECAST_DAYS = int(os.environ.get("FORECAST_DAYS", "3"))
 WEB_PORT = int(os.environ.get("WEB_PORT", "80"))
 
 
-def web_portal_url(hostname: str) -> str:
-    """LAN URL for the web portal (omits :80)."""
-    name = (hostname or "raspberrypi").split(".")[0].strip() or "raspberrypi"
-    host = f"{name}.local"
+def web_portal_url(hostname: str = "") -> str:
+    """LAN URL for the web portal (omits :80). Uses this device's hostname."""
+    name = (hostname or "").split(".")[0].strip()
+    if not name:
+        try:
+            name = (socket.gethostname() or "").split(".")[0].strip()
+        except OSError:
+            name = ""
+    host = f"{name}.local" if name else "localhost"
     if WEB_PORT == 80:
         return f"http://{host}"
     return f"http://{host}:{WEB_PORT}"

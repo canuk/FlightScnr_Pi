@@ -74,6 +74,16 @@
         .update-ver{font-size:.82rem;color:var(--muted);margin:.15rem 0}
         .btn-danger{background:#4a1515;border-color:#7a2222}
         .btn-danger:hover{background:#5c1a1a}
+        .irreversible-card{background:#161010;border-color:#7a2222}
+        .irreversible-card>summary .ico{background:#2a1212;border-color:#7a2222;color:#f08888}
+        .irreversible-card .body{padding-top:.75rem;border-top-color:#5a2020}
+        .irreversible-row{display:flex;gap:.75rem;align-items:center;
+        justify-content:space-between;flex-wrap:wrap;padding:.2rem 0 .15rem}
+        .irreversible-copy{flex:1;min-width:12rem}
+        .irreversible-copy h3{margin:0;font-size:.95rem;font-weight:700}
+        .irreversible-copy .desc{margin:.3rem 0 0;color:var(--muted);font-size:.78rem}
+        .btn-irreversible{background:#1c1414;border-color:#8a2a2a;color:#f08870;flex:none}
+        .btn-irreversible:hover{background:#2a1414;color:#ff9d88}
         .fav-list{margin-top:.35rem}
         .fav-row{display:flex;gap:.55rem;align-items:flex-start;padding:.65rem 0;
         border-bottom:1px solid rgba(120,120,120,.22)}
@@ -678,6 +688,26 @@
                 <button class="btn" id="btn-system-confirm-no" type="button">Cancel</button>
             </div>
             <div id="system-status" class="status"></div>
+        </div>
+    </details>
+
+    <details class="card irreversible-card">
+        <summary><span class="ico">&#9888;</span>Master Caution<span class="sum">wipe, reinstall</span><span class="chev">&#9656;</span></summary>
+        <div class="body">
+            <p class="hint">Download settings from <strong>System</strong> first if you want to keep radar prefs and API keys. Wi-Fi and dump1090 are not touched. If this button fails with a sudo error, tap <strong>Update Now</strong> or <strong>Finish install</strong> once so sudoers is updated.</p>
+            <div class="irreversible-row" id="irreversible-actions-row">
+                <div class="irreversible-copy">
+                    <h3>Clean install</h3>
+                    <p class="desc">Deletes the FlightScnr checkout, all settings, API keys, watch lists, and maps, then reinstalls from GitHub and reboots. Once you start, there is no going back.</p>
+                </div>
+                <button class="btn btn-irreversible" id="btn-wipe-reinstall" type="button">Wipe &amp; reinstall</button>
+            </div>
+            <div class="track-row hidden" id="irreversible-confirm-row" style="margin-top:.55rem;flex-wrap:wrap;gap:.5rem">
+                <span id="irreversible-confirm-msg" class="hint" style="flex:1 1 100%;margin:0"></span>
+                <button class="btn btn-irreversible" id="btn-irreversible-confirm-yes" type="button">Continue</button>
+                <button class="btn" id="btn-irreversible-confirm-no" type="button">Cancel</button>
+            </div>
+            <div id="irreversible-status" class="status"></div>
         </div>
     </details>
 
@@ -2037,6 +2067,55 @@ function setSystemButtonsDisabled(disabled) {
     $("btn-shutdown").disabled = disabled;
 }
 
+let irreversibleStep = 0;
+
+function showIrreversibleConfirm(step) {
+    irreversibleStep = step || 0;
+    const row = $("irreversible-confirm-row");
+    const actions = $("irreversible-actions-row");
+    const msg = $("irreversible-confirm-msg");
+    const yes = $("btn-irreversible-confirm-yes");
+    if (!irreversibleStep) {
+        row.classList.add("hidden");
+        actions.classList.remove("hidden");
+        return;
+    }
+    actions.classList.add("hidden");
+    row.classList.remove("hidden");
+    if (irreversibleStep === 1) {
+        msg.textContent = "This deletes everything FlightScnr stores on this Pi, then reinstalls from GitHub. The Pi will reboot. Continue?";
+        yes.textContent = "Continue";
+    } else {
+        msg.textContent = "Last chance. This cannot be undone. Wipe everything and reinstall?";
+        yes.textContent = "Wipe & reinstall";
+    }
+}
+
+async function confirmIrreversible() {
+    if (irreversibleStep === 1) {
+        showIrreversibleConfirm(2);
+        return;
+    }
+    if (irreversibleStep !== 2) return;
+    showIrreversibleConfirm(0);
+    $("btn-wipe-reinstall").disabled = true;
+    try {
+        const data = await jsonFetch("/system/factory-reset", { method: "POST" });
+        if (!data.ok) {
+            showStatus("irreversible-status", data.message || "Clean install could not start.", true);
+            $("btn-wipe-reinstall").disabled = false;
+            return;
+        }
+        showStatus(
+            "irreversible-status",
+            data.message || "Clean install started. This page will go offline; wait several minutes for reboot."
+        );
+    } catch (e) {
+        showStatus("irreversible-status", e.message, true);
+        $("btn-wipe-reinstall").disabled = false;
+    }
+}
+
 $("btn-check-updates").addEventListener("click", checkUpdates);
 $("btn-update-now").addEventListener("click", applyUpdate);
 $("btn-repair-update").addEventListener("click", applyRepairConfirmed);
@@ -2051,6 +2130,12 @@ if ($("btn-disclaimer-clear")) {
 }
 $("btn-system-confirm-yes").addEventListener("click", confirmSystemAction);
 $("btn-system-confirm-no").addEventListener("click", () => showSystemConfirm(false));
+$("btn-wipe-reinstall").addEventListener("click", () => {
+    clearStatus("irreversible-status");
+    showIrreversibleConfirm(1);
+});
+$("btn-irreversible-confirm-yes").addEventListener("click", confirmIrreversible);
+$("btn-irreversible-confirm-no").addEventListener("click", () => showIrreversibleConfirm(0));
 
 $("btn-export-settings").addEventListener("click", () => {
     showStatus("export-status", "Downloading settings…");
