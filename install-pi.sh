@@ -1091,7 +1091,7 @@ suppress_openbox_decorations_for_kiosk() {
     local dest="${dest_dir}/rpd-rc.xml"
     local src=""
     local f
-    local marker="flightscnr-kiosk"
+    local marker="flightscnr-kiosk-v2"
 
     log_step "Openbox decorations (hide title bar on round panel)"
 
@@ -1121,13 +1121,18 @@ suppress_openbox_decorations_for_kiosk() {
     elif grep -q '</applications>' "$dest"; then
         local snippet
         snippet="$(cat <<'XML'
-    <!-- flightscnr-kiosk -->
-    <application name="FlightScnr" class="FlightScnr">
+    <!-- flightscnr-kiosk-v2: wildcard match — no hostname/user/path hardcoding -->
+    <application name="*flightscnr*">
       <decor>no</decor>
       <fullscreen>yes</fullscreen>
       <maximized>yes</maximized>
     </application>
-    <application name="SDL_App" class="SDL_App">
+    <application class="*flightscnr*">
+      <decor>no</decor>
+      <fullscreen>yes</fullscreen>
+      <maximized>yes</maximized>
+    </application>
+    <application class="SDL_App">
       <decor>no</decor>
       <fullscreen>yes</fullscreen>
       <maximized>yes</maximized>
@@ -1137,7 +1142,7 @@ suppress_openbox_decorations_for_kiosk() {
       <fullscreen>yes</fullscreen>
       <maximized>yes</maximized>
     </application>
-    <!-- /flightscnr-kiosk -->
+    <!-- /flightscnr-kiosk-v2 -->
 XML
 )"
         python3 - "$dest" "$snippet" <<'PY' || true

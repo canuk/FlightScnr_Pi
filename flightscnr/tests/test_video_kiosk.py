@@ -32,7 +32,8 @@ class TestVideoKioskFlags(unittest.TestCase):
              mock.patch.object(
                  video.pygame.display, "set_mode", return_value=mock.Mock()
              ) as set_mode, \
-             mock.patch.object(video, "_undecorate_x11_window") as undecorate, \
+             mock.patch.object(video.x11_kiosk, "undecorate_pygame_window") as undecorate, \
+             mock.patch.object(video.x11_kiosk, "schedule_undecorate_retries") as schedule, \
              mock.patch.object(
                  video, "_driver_candidates", return_value=["dummy"]
              ):
@@ -41,6 +42,7 @@ class TestVideoKioskFlags(unittest.TestCase):
         self.assertTrue(flags & pygame.FULLSCREEN)
         self.assertTrue(flags & pygame.NOFRAME)
         undecorate.assert_called_once()
+        schedule.assert_called_once()
 
     def test_windowed_omits_fullscreen_flags(self):
         import pygame
@@ -54,7 +56,8 @@ class TestVideoKioskFlags(unittest.TestCase):
              mock.patch.object(
                  video.pygame.display, "set_mode", return_value=mock.Mock()
              ) as set_mode, \
-             mock.patch.object(video, "_undecorate_x11_window") as undecorate, \
+             mock.patch.object(video.x11_kiosk, "undecorate_pygame_window") as undecorate, \
+             mock.patch.object(video.x11_kiosk, "schedule_undecorate_retries") as schedule, \
              mock.patch.object(
                  video, "_driver_candidates", return_value=["dummy"]
              ):
@@ -63,6 +66,7 @@ class TestVideoKioskFlags(unittest.TestCase):
         self.assertFalse(flags & pygame.FULLSCREEN)
         self.assertFalse(flags & pygame.NOFRAME)
         undecorate.assert_not_called()
+        schedule.assert_not_called()
 
 
 if __name__ == "__main__":

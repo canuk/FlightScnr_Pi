@@ -13,9 +13,10 @@ from __future__ import annotations
 
 import logging
 import os
-import subprocess
 
 import pygame
+
+from utilities import x11_kiosk
 
 logger = logging.getLogger("flightscnr.display")
 
@@ -47,51 +48,10 @@ def _set_driver(driver):
         os.environ.pop("SDL_VIDEODRIVER", None)
 
 
-def _undecorate_x11_window() -> None:
-    """Ask Openbox not to draw a title bar (90° round panels show it on the side)."""
-    try:
-        info = pygame.display.get_wm_info() or {}
-    except Exception:
-        return
-    wid = info.get("window") or info.get("wmwindow")
-    if not wid:
-        return
-    try:
-        wid_s = hex(int(wid)) if not isinstance(wid, str) else str(wid)
-    except (TypeError, ValueError):
-        return
-    try:
-        subprocess.run(
-            [
-                "xprop",
-                "-id",
-                wid_s,
-                "-f",
-                "_MOTIF_WM_HINTS",
-                "32c",
-                "-set",
-                "_MOTIF_WM_HINTS",
-                "2, 0, 0, 0, 0",
-            ],
-            check=False,
-            timeout=2,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-    except (OSError, subprocess.SubprocessError):
-        pass
-
-
 def init_display(width: int, height: int, fullscreen: bool) -> pygame.Surface:
     """Initialize pygame and open the display, trying multiple SDL drivers."""
     flags = pygame.FULLSCREEN | pygame.NOFRAME if fullscreen else 0
     last_error = None
-
-    # Desktop Bluetooth / notification dialogs can steal focus; keep the
-    # kiosk surface mapped instead of minimizing exclusive fullscreen.
-    os.environ.setdefault("SDL_VIDEO_MINIMIZE_ON_FOCUS_LOSS", "0")
-    # Stable WM_CLASS so Openbox can match the kiosk window (see install-pi.sh).
-    os.environ.setdefault("SDL_VIDEO_X11_WMCLASS", "FlightScnr,FlightScnr")
 
     for driver in _driver_candidates():
         if pygame.get_init():
@@ -123,7 +83,8 @@ def init_display(width: int, height: int, fullscreen: bool) -> pygame.Surface:
             pygame.display.set_caption("FlightScnr Pi")
             surface = pygame.display.set_mode((width, height), flags)
             if fullscreen:
-                _undecorate_x11_window()
+                x11_kiosk.undecorate_pygame_window()
+                x11_kiosk.schedule_undecorate_retries()
             logger.info("Display opened (%dx%d, driver=%s)", width, height, label)
             return surface
         except pygame.error as exc:
@@ -152,6 +113,7 @@ def reassert_fullscreen(surface: pygame.Surface | None, *, fullscreen: bool) -> 
             pygame.display.raise_window()
         except Exception:
             pass
+        x11_kiosk.undecorate_pygame_window()
         return surface if surface is not None else pygame.display.get_surface()
     except Exception:
         logger.debug("Could not reassert fullscreen", exc_info=True)
