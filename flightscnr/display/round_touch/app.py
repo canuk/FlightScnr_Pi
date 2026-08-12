@@ -179,6 +179,8 @@ class RoundTouchDisplay:
         self._atc_picker_scroll = nav.ScrollState()
         # Finger Y while dragging inside the ATC picker (continuous scroll).
         self._atc_picker_drag_y: int | None = None
+        # Row id under finger before the gesture becomes a scroll.
+        self._atc_picker_pressed_id: str | None = None
         # Same for settings pages, plus whether that drag already scrolled.
         self._settings_drag_y: int | None = None
         self._settings_drag_scrolled = False
@@ -879,6 +881,7 @@ class RoundTouchDisplay:
                 system_confirm=self._system_confirm,
                 atc_picker=self._atc_picker,
                 atc_picker_scroll=self._atc_picker_scroll.offset,
+                atc_picker_pressed_id=self._atc_picker_pressed_id,
             )
             if self._atc_picker:
                 self._atc_picker_scroll.max_offset = drawn_max
@@ -1141,6 +1144,7 @@ class RoundTouchDisplay:
             int(self._display_focus),
             self._atc_picker or "",
             int(self._atc_picker_scroll.offset) if self._atc_picker else 0,
+            self._atc_picker_pressed_id or "",
             self._system_confirm or "",
         )
 
@@ -1460,11 +1464,13 @@ class RoundTouchDisplay:
         self._atc_picker = kind
         self._atc_picker_scroll.reset()
         self._atc_picker_drag_y = None
+        self._atc_picker_pressed_id = None
 
     def _close_atc_picker(self) -> None:
         self._atc_picker = None
         self._atc_picker_scroll.reset()
         self._atc_picker_drag_y = None
+        self._atc_picker_pressed_id = None
         info.invalidate_atc_labels()
 
     def _select_atc_airport(self, icao: str) -> None:
@@ -2593,6 +2599,24 @@ class RoundTouchDisplay:
             if self.input.is_dragging():
                 pos = self.input.drag_pos()
                 if pos is not None:
+                    threshold = float(input_handler.gesture_threshold_px())
+                    if self.input.max_travel() < threshold:
+                        hit = info.atc_picker_hit(pos[0], pos[1])
+                        nxt = (
+                            hit[1]
+                            if hit is not None and hit[0] == "item" and hit[1]
+                            else None
+                        )
+                        if nxt != self._atc_picker_pressed_id:
+                            self._atc_picker_pressed_id = nxt
+                            self._note_activity()
+                            self._safe_draw()
+                        self._atc_picker_drag_y = pos[1]
+                        return
+                    if self._atc_picker_pressed_id is not None:
+                        self._atc_picker_pressed_id = None
+                        self._note_activity()
+                        self._safe_draw()
                     if self._atc_picker_drag_y is not None:
                         dy = pos[1] - self._atc_picker_drag_y
                         if dy:
@@ -3100,6 +3124,7 @@ class RoundTouchDisplay:
             # jump the other direction and hide the rows just revealed.
             if self._atc_picker:
                 self._atc_picker_drag_y = None
+                self._atc_picker_pressed_id = None
                 self._note_activity()
             elif self._settings_drag_scrolled:
                 self._settings_drag_scrolled = False

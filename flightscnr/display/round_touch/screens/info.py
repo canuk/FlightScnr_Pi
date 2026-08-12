@@ -450,6 +450,7 @@ def draw_atc_picker(
     kind: str,
     *,
     scroll_offset: int = 0,
+    pressed_id: str | None = None,
 ) -> int:
     """Modal scrollable list for ATC airport / channel / output. Returns max_scroll."""
     global _atc_picker_hits, _atc_picker_list_rect
@@ -459,6 +460,7 @@ def draw_atc_picker(
     kind = str(kind or "").strip().lower()
     title_text = _ATC_PICKER_TITLES.get(kind, "Select")
     items = atc_picker_items(kind)
+    pressed = str(pressed_id or "").strip()
 
     # Opaque cover — per-pixel SRCALPHA dims often fail on the Pi framebuffer
     # and left ATC settings text bleeding through the picker.
@@ -511,9 +513,13 @@ def draw_atc_picker(
         title.get_rect(midtop=(theme.CENTER_X - close_size // 2, title_y)),
     )
 
-    hint_reserve = theme.s(18)
-    list_top = title_y + title.get_height() + theme.s(10)
-    list_bottom = content.bottom - pad - hint_reserve
+    # Clear the title/close chrome so the first row is easy to tap.
+    title_block_bottom = max(
+        title_y + title.get_height(),
+        close_rect.bottom,
+    )
+    list_top = title_block_bottom + theme.s(26)
+    list_bottom = content.bottom - pad
     list_rect = pygame.Rect(
         content.left + pad,
         list_top,
@@ -543,7 +549,7 @@ def draw_atc_picker(
     for item in items:
         item_id = str(item.get("id") or "")
         label = str(item.get("label") or item_id)
-        selected = bool(item.get("selected"))
+        selected = bool(item.get("selected")) or (bool(pressed) and item_id == pressed)
         row_rect = pygame.Rect(list_rect.left, int(y), list_rect.width, row_h)
         if row_rect.bottom >= list_rect.top and row_rect.top <= list_rect.bottom:
             if selected:
@@ -579,10 +585,9 @@ def draw_atc_picker(
     surface.set_clip(clip_prev)
 
     if max_scroll > 0:
-        hint = hint_font.render("Swipe to scroll", True, theme.HINT)
-        surface.blit(
-            hint,
-            hint.get_rect(midbottom=(theme.CENTER_X, content.bottom - theme.s(2))),
+        # Same thin right-edge scrollbar as Display / Layers settings pages.
+        _draw_scroll_overflow_cues(
+            surface, list_rect.top, list_rect.bottom, scroll, max_scroll
         )
     return max_scroll
 
@@ -2054,6 +2059,7 @@ def draw_info(
     system_confirm: str | None = None,
     atc_picker: str | None = None,
     atc_picker_scroll: int = 0,
+    atc_picker_pressed_id: str | None = None,
 ) -> int:
     draw.fill_background(surface)
     nav.draw_breadcrumb(surface, _breadcrumb(page))
@@ -2274,7 +2280,12 @@ def draw_info(
 
     if page == PAGE_ATC and atc_picker:
         # Full-screen picker; skip footer chrome underneath.
-        return draw_atc_picker(surface, atc_picker, scroll_offset=atc_picker_scroll)
+        return draw_atc_picker(
+            surface,
+            atc_picker,
+            scroll_offset=atc_picker_scroll,
+            pressed_id=atc_picker_pressed_id,
+        )
     if max_scroll > 0 and page != PAGE_MAIN:
         _draw_scroll_overflow_cues(surface, top, bottom, scroll_offset, max_scroll)
     nav.draw_footer_buttons(surface, list(footer_kinds_for_page(page)))
