@@ -1082,6 +1082,95 @@ PY
     fi
 }
 
+suppress_openbox_decorations_for_kiosk() {
+    # Fresh rpd-x (Openbox + PiXtrix) still draws a title bar on the SDL window.
+    # On a 90°-rotated round panel that bar appears on the left with vertical
+    # "FlightScnr Pi" text. Copy the system rc into the user config (Openbox
+    # documents that path) and add undecorate/fullscreen rules.
+    local dest_dir="${REPO_OWNER_HOME}/.config/openbox"
+    local dest="${dest_dir}/rpd-rc.xml"
+    local src=""
+    local f
+    local marker="flightscnr-kiosk"
+
+    log_step "Openbox decorations (hide title bar on round panel)"
+
+    for f in /etc/xdg/openbox/rpd-rc.xml /etc/X11/openbox/rpd-rc.xml \
+             /etc/xdg/openbox/lxde-pi-rc.xml /etc/xdg/openbox/rc.xml; do
+        if [ -f "$f" ]; then
+            src="$f"
+            break
+        fi
+    done
+    if [ -z "$src" ] || [ -z "${REPO_OWNER_HOME:-}" ]; then
+        log_ok "No Openbox rc to patch (or no desktop user home)"
+        return 0
+    fi
+
+    mkdir -p "$dest_dir"
+    if [ ! -f "$dest" ]; then
+        cp -a "$src" "$dest" || {
+            log_warn "Could not copy $src → $dest"
+            return 0
+        }
+        log_ok "Copied $src → $dest"
+    fi
+
+    if grep -q "$marker" "$dest" 2>/dev/null; then
+        log_ok "Openbox kiosk rules already present ($dest)"
+    elif grep -q '</applications>' "$dest"; then
+        local snippet
+        snippet="$(cat <<'XML'
+    <!-- flightscnr-kiosk -->
+    <application name="FlightScnr" class="FlightScnr">
+      <decor>no</decor>
+      <fullscreen>yes</fullscreen>
+      <maximized>yes</maximized>
+    </application>
+    <application name="SDL_App" class="SDL_App">
+      <decor>no</decor>
+      <fullscreen>yes</fullscreen>
+      <maximized>yes</maximized>
+    </application>
+    <application class="pygame">
+      <decor>no</decor>
+      <fullscreen>yes</fullscreen>
+      <maximized>yes</maximized>
+    </application>
+    <!-- /flightscnr-kiosk -->
+XML
+)"
+        python3 - "$dest" "$snippet" <<'PY' || true
+import sys
+path, snippet = sys.argv[1], sys.argv[2]
+with open(path, encoding="utf-8") as fh:
+    text = fh.read()
+needle = "</applications>"
+if needle not in text:
+    raise SystemExit(1)
+text = text.replace(needle, snippet.rstrip() + "\n  " + needle, 1)
+with open(path, "w", encoding="utf-8") as fh:
+    fh.write(text)
+PY
+        if grep -q "$marker" "$dest"; then
+            log_ok "Added Openbox undecorate rules ($dest)"
+        else
+            log_warn "Could not insert Openbox kiosk rules into $dest"
+        fi
+    else
+        log_warn "Openbox rc has no </applications> section — skip ($dest)"
+    fi
+
+    chown -R "$REPO_OWNER:" "$dest_dir" 2>/dev/null || true
+
+    if command -v openbox >/dev/null 2>&1 && id -u "$REPO_OWNER" >/dev/null 2>&1; then
+        sudo -u "$REPO_OWNER" env \
+            DISPLAY="${DISPLAY:-:0}" \
+            XAUTHORITY="${REPO_OWNER_HOME}/.Xauthority" \
+            openbox --reconfigure >/dev/null 2>&1 || true
+    fi
+}
+
 suppress_desktop_panel_for_kiosk() {
     # Under labwc, the panel often yields to fullscreen SDL. On X11 (rpd-x /
     # Openbox) lxpanel stays on the "above" layer, so the menu bar remains
@@ -1315,6 +1404,7 @@ cmd_install() {
     ensure_bluetooth_ready
     suppress_desktop_bluetooth_popups
     suppress_desktop_panel_for_kiosk
+    suppress_openbox_decorations_for_kiosk
     install_systemd_service
     install_update_sudoers
     fix_repo_permissions
