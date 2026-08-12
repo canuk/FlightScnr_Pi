@@ -31,6 +31,31 @@
 #
 set -euo pipefail
 
+# Snapshot to /tmp before doing work. Bash keeps reading this file as it runs;
+# if git/an editor rewrites it mid-install, the tail can hit a stray `;;` (exit 2).
+# `install-pi.sh update` still re-execs the on-disk script after pull (new steps).
+if [ -z "${FLIGHTSCNR_INSTALL_SNAPSHOT:-}" ] \
+    && [ "${FLIGHTSCNR_NO_INSTALL_SNAPSHOT:-}" != "1" ]; then
+    _install_src="$0"
+    if [ "${_install_src#/}" = "$_install_src" ]; then
+        _install_src="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+    fi
+    if [ ! -f "$_install_src" ]; then
+        echo "install-pi.sh not found: $_install_src" >&2
+        exit 1
+    fi
+    _install_snap="$(mktemp /tmp/flightscnr-install-pi.XXXXXX.sh)"
+    cp "$_install_src" "$_install_snap"
+    chmod 700 "$_install_snap"
+    export FLIGHTSCNR_INSTALL_SNAPSHOT=1
+    export FLIGHTSCNR_INSTALL_PI="$_install_src"
+    export FLIGHTSCNR_INSTALL_SNAPSHOT_PATH="$_install_snap"
+    exec bash "$_install_snap" "$@"
+fi
+if [ -n "${FLIGHTSCNR_INSTALL_SNAPSHOT_PATH:-}" ]; then
+    trap 'rm -f "${FLIGHTSCNR_INSTALL_SNAPSHOT_PATH:-}"' EXIT
+fi
+
 ENV_DEST="/etc/flightscnr.env"
 DATA_DIR="/var/lib/flightscnr"
 SERVICE_NAME="flightscnr.service"
@@ -49,7 +74,12 @@ BOOT_CMDLINE=""
 NEED_REBOOT_FOR_X11=0
 
 setup_paths() {
-    REPO_ROOT="$(cd "$(dirname "$0")" && pwd)"
+    # Prefer the real checkout path when running from a /tmp snapshot.
+    local src="${FLIGHTSCNR_INSTALL_PI:-$0}"
+    if [ "${src#/}" = "$src" ]; then
+        src="$(cd "$(dirname "$src")" && pwd)/$(basename "$src")"
+    fi
+    REPO_ROOT="$(cd "$(dirname "$src")" && pwd)"
     SETUP_DIR="$REPO_ROOT/flightscnr/setup"
     APP_DIR="$REPO_ROOT/flightscnr"
     VENV_DIR="$REPO_ROOT/flightscnr-venv"
@@ -1375,6 +1405,8 @@ cmd_update() {
     # from an old build would skip new steps (X11 session, 720x720, fan guards).
     echo ""
     echo "Re-syncing with updated installer..."
+    # Drop snapshot env so the post-pull file copies itself to /tmp again.
+    unset FLIGHTSCNR_INSTALL_SNAPSHOT FLIGHTSCNR_INSTALL_SNAPSHOT_PATH
     if [ "$(id -u)" -ne 0 ]; then
         exec sudo bash "$REPO_ROOT/install-pi.sh" install "${install_args[@]}"
     else
