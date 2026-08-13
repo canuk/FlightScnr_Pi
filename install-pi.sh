@@ -11,7 +11,7 @@
 #   cd ~/FlightScnr_Pi
 #   sudo bash install-pi.sh
 #
-# Update (git pull + re-sync, skips apt for speed):
+# Update (sync origin/main + re-sync, skips apt for speed):
 #   bash ~/FlightScnr_Pi/install-pi.sh update
 #
 # After an OTA from builds that still ran install in-process (pre-re-exec),
@@ -1283,7 +1283,20 @@ fix_repo_permissions() {
     log_ok "Repo owned by $REPO_OWNER"
 }
 
-# Drop install-induced dirt that would abort `git pull --ff-only` (notably
+# Run git as the checkout owner so root-run portal updates do not leave
+# root-owned index/refs. setup_paths must have set REPO_ROOT / REPO_OWNER.
+run_repo_git() {
+    local git_safe=(git -c "safe.directory=${REPO_ROOT}" -C "$REPO_ROOT")
+    if [ "$(id -u)" -eq 0 ] && [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ]; then
+        sudo -u "$SUDO_USER" "${git_safe[@]}" "$@"
+    elif [ "$(id -u)" -eq 0 ] && [ -n "${REPO_OWNER:-}" ] && [ "$REPO_OWNER" != "root" ]; then
+        sudo -u "$REPO_OWNER" "${git_safe[@]}" "$@"
+    else
+        "${git_safe[@]}" "$@"
+    fi
+}
+
+# Drop install-induced dirt that would abort a checkout (notably
 # scripts/release.sh executable-bit flips from older fix_repo_permissions).
 prepare_repo_for_pull() {
     local git_safe=("$@")
@@ -1296,6 +1309,23 @@ prepare_repo_for_pull() {
                 || true
         fi
     done
+}
+
+# Fleet OTA: fetch GitHub main and check it out. Works from a branch, a missing
+# upstream, or detached HEAD (tag/commit checkout, e.g. 2026.8.10.2 / 7381c3f).
+# `git pull --ff-only` cannot do this — with no branch it errors, and
+# `reset --hard origin/main` while detached stays detached.
+# -B recreates local main at origin/main and leaves HEAD on the branch.
+# -f overwrites the worktree so leftover mode dirt cannot block the switch.
+sync_to_origin_main() {
+    log_step "Syncing to origin/main"
+    run_repo_git fetch --tags origin
+    if ! run_repo_git show-ref --verify --quiet refs/remotes/origin/main; then
+        echo "origin/main not found after fetch" >&2
+        return 1
+    fi
+    run_repo_git checkout -f -B main origin/main
+    log_ok "Synced to origin/main ($(run_repo_git log --oneline -1 2>/dev/null || true))"
 }
 
 start_service() {
@@ -1476,19 +1506,9 @@ cmd_update() {
         exit 1
     fi
 
-    log_step "Pulling latest changes"
-    # Match utilities/updater.py: always pass safe.directory so root-run portal
-    # updates can read a pi-owned checkout (Git 2.35+ dubious-ownership checks).
     local git_safe=(git -c "safe.directory=${REPO_ROOT}" -C "$REPO_ROOT")
     prepare_repo_for_pull "${git_safe[@]}"
-    if [ "$(id -u)" -eq 0 ] && [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ]; then
-        sudo -u "$SUDO_USER" "${git_safe[@]}" pull --ff-only
-    elif [ "$(id -u)" -eq 0 ]; then
-        sudo -u "$REPO_OWNER" "${git_safe[@]}" pull --ff-only
-    else
-        "${git_safe[@]}" pull --ff-only
-    fi
-    log_ok "Git pull complete ($("${git_safe[@]}" log --oneline -1 2>/dev/null || true))"
+    sync_to_origin_main
 
     local install_args=(--skip-apt)
     if [ "$no_start" -eq 1 ]; then
@@ -1515,7 +1535,7 @@ Usage:
   sudo bash install-pi.sh [install] [--no-start] [--skip-apt]
       First install or full re-sync (includes apt packages)
   bash install-pi.sh update [--no-start]
-      git pull + re-sync + restart (skips apt for speed)
+      fetch origin/main, check it out (reattaches detached HEAD), re-sync, restart
       --no-start  skip service restart (portal update schedules it after status write)
 
 If apt fails with MergeList / "no Package: header" (corrupt index cache):
