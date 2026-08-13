@@ -414,11 +414,11 @@ PYROT
             desk_uid="$(id -u "$desk_user")"
             sudo -u "$desk_user" env DISPLAY="${DISPLAY:-:0}" \
                 XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$desk_uid}" \
-                pcmanfm --set-wallpaper="$wall_splash" --wallpaper-mode=crop \
+                timeout -k 5 10 pcmanfm --set-wallpaper="$wall_splash" --wallpaper-mode=crop \
                 >/dev/null 2>&1 || true
             sudo -u "$desk_user" env DISPLAY="${DISPLAY:-:0}" \
                 XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$desk_uid}" \
-                pcmanfm --reconfigure >/dev/null 2>&1 || true
+                timeout -k 5 10 pcmanfm --reconfigure >/dev/null 2>&1 || true
         }
 
         local profile
@@ -447,11 +447,11 @@ PYROT
         if [ "$(id -u)" -eq 0 ]; then
             env DISPLAY="${DISPLAY:-:0}" \
                 XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/0}" \
-                pcmanfm --set-wallpaper="$wall_splash" --wallpaper-mode=crop \
+                timeout -k 5 10 pcmanfm --set-wallpaper="$wall_splash" --wallpaper-mode=crop \
                 >/dev/null 2>&1 || true
             env DISPLAY="${DISPLAY:-:0}" \
                 XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/0}" \
-                pcmanfm --reconfigure >/dev/null 2>&1 || true
+                timeout -k 5 10 pcmanfm --reconfigure >/dev/null 2>&1 || true
         fi
 
         unset -f _set_pcmanfm_wallpaper_conf _refresh_pcmanfm_wallpaper
