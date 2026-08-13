@@ -55,6 +55,7 @@ CONFIG_H_SETTINGS = MANAGED_KEYS + (
     "VESSEL_PARKED_SOG_KT",
     "DUMP1090_ENABLED",
     "DUMP1090_URL",
+    "ROUTE_SOURCE_ORDER"
 )
 
 TOGGLE_KEYS = (
@@ -70,6 +71,7 @@ TOGGLE_KEYS = (
 SOURCE_SETTING_KEYS = (
     "DUMP1090_ENABLED",
     "DUMP1090_URL",
+    "ROUTE_SOURCE_ORDER",
 )
 
 
@@ -239,6 +241,29 @@ def dump1090_settings() -> dict:
         "DUMP1090_URL": url or "http://127.0.0.1:8080/data/aircraft.json",
     }
 
+def route_source_order_setting() -> dict:
+    """Current route-source-order portal/settings value.
+
+    Prefer secrets.json over process env — same reasoning as
+    dump1090_settings(): the display process reads this on every
+    enrichment cycle (not just once at import time), so a portal save
+    must be visible immediately without a service restart.
+    """
+    bootstrap_secrets()
+    file_vals = load_secrets_json()
+    if "ROUTE_SOURCE_ORDER" in file_vals and str(file_vals.get("ROUTE_SOURCE_ORDER") or "").strip():
+        raw = str(file_vals.get("ROUTE_SOURCE_ORDER")).strip()
+    else:
+        raw = os.environ.get("ROUTE_SOURCE_ORDER", "").strip()
+
+    from config import _parse_route_source_order
+
+    effective = _parse_route_source_order(raw)
+    return {
+        "ROUTE_SOURCE_ORDER": raw,
+        "ROUTE_SOURCE_ORDER_EFFECTIVE": ",".join(effective),
+    }
+
 
 def apply_dump1090_to_runtime(enabled: bool, url: str) -> None:
     """Update process env + config module so the next overhead cycle picks this up."""
@@ -252,7 +277,6 @@ def apply_dump1090_to_runtime(enabled: bool, url: str) -> None:
         cfg.DUMP1090_URL = url
     except Exception:
         pass
-
 
 def mask_secret(value: str) -> str:
     value = (value or "").strip()
@@ -290,6 +314,7 @@ def secrets_status() -> dict:
     status["config_h_path"] = CONFIG_H_PATH
     status["secrets_json_path"] = SECRETS_JSON_PATH
     status["dump1090"] = dump1090_settings()
+    status["route_source_order"] = route_source_order_setting()
     try:
         from utilities.flightaware_client import usage_status
 
@@ -374,6 +399,16 @@ def save_secrets_from_portal(payload: dict) -> dict[str, str]:
         updated["DUMP1090_ENABLED"] = "True" if enabled else "False"
         updated["DUMP1090_URL"] = url
         apply_dump1090_to_runtime(enabled, url)
+
+    if "route_source_order" in payload:
+        raw = str(payload.get("route_source_order") or "").strip()
+        if raw:
+            updated["ROUTE_SOURCE_ORDER"] = raw
+        else:
+            # Clearing to default: remove the key entirely rather than
+            # writing "" — keeps secrets.json free of no-op entries and
+            # matches how an unset .env var behaves.
+            updated.pop("ROUTE_SOURCE_ORDER", None)
 
     os.makedirs(DATA_DIR, exist_ok=True)
     tmp = SECRETS_JSON_PATH + ".tmp"
