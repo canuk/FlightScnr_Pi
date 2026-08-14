@@ -148,14 +148,20 @@ def refresh(force: bool = False) -> dict | None:
         from utilities.temperature import (
             allow_immediate_fetch,
             consume_manual_refresh_request,
-            invalidate_caches,
         )
 
         if consume_manual_refresh_request():
             force = True
             allow_immediate_fetch()
-            invalidate_caches()
-            invalidate_cache()
+            # Do NOT invalidate_caches()/invalidate_cache() here: force=True
+            # already makes grab_temperature_and_humidity()/grab_forecast()
+            # bypass their TTL and attempt a real fetch. Wiping the cache
+            # first only destroys the fallback data those functions (and
+            # this one, a few lines down) rely on if the forced fetch hits
+            # another 429 - which is common right after a manual refresh
+            # while still rate-limited, since allow_immediate_fetch() only
+            # clears our own local backoff timer, not Tomorrow.io's actual
+            # server-side quota.
             logger.info("Manual weather refresh requested")
     except Exception:
         pass
