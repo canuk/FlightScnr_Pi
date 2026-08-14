@@ -245,6 +245,8 @@ _defaults = {
     "show_sweep": True,
     "show_precipitation": True,
     "show_wildfires": False,
+    "show_earthquakes": False,
+    "earthquake_voice_enabled": False,
     # OurAirports runway centerlines on dark/light maps (not VFR).
     "show_airport_centerlines": True,
     # airport.png pins for large/medium/small airports in range.
@@ -303,6 +305,7 @@ _defaults = {
     "traffic_sfx_volume": 80,
     "military_sfx_enabled": True,
     "military_sfx_volume": 80,
+    "earthquake_voice_volume": 80,
     # Master mute for ATC / chime / alert SFX (radar HUD volume icon).
     "master_sound_enabled": True,
     # Master gain (0–100%); multiplies every HUD audio path when unmuted.
@@ -685,6 +688,16 @@ def _load():
         migrated = True
     else:
         state["show_wildfires"] = bool(state.get("show_wildfires"))
+    if "show_earthquakes" not in data:
+        state["show_earthquakes"] = False
+        migrated = True
+    else:
+        state["show_earthquakes"] = bool(state.get("show_earthquakes"))
+    if "earthquake_voice_enabled" not in data:
+        state["earthquake_voice_enabled"] = False
+        migrated = True
+    else:
+        state["earthquake_voice_enabled"] = bool(state.get("earthquake_voice_enabled"))
     # Split legacy show_airports into centerlines + icons (old toggle did both).
     legacy_airports = bool(data.get("show_airports", False)) if "show_airports" in data else False
     if "show_airport_centerlines" not in data:
@@ -818,7 +831,11 @@ def _load():
     if not bool(state.get("atc_sound_enabled", True)):
         state["atc_sound_enabled"] = True
         migrated = True
-    for _sfx_vol_key in ("traffic_sfx_volume", "military_sfx_volume"):
+    for _sfx_vol_key in (
+        "traffic_sfx_volume",
+        "military_sfx_volume",
+        "earthquake_voice_volume",
+    ):
         try:
             if _sfx_vol_key not in data:
                 state[_sfx_vol_key] = 80
@@ -912,6 +929,8 @@ def _settings_snapshot(state: dict) -> tuple:
         state.get("show_sweep"),
         state.get("show_precipitation"),
         state.get("show_wildfires"),
+        state.get("show_earthquakes"),
+        state.get("earthquake_voice_enabled"),
         state.get("show_airport_centerlines"),
         state.get("show_airport_icons"),
         state.get("show_ground_vehicles"),
@@ -968,6 +987,7 @@ def _settings_snapshot(state: dict) -> tuple:
         clamp_sfx_volume(state.get("traffic_sfx_volume", 80)),
         bool(state.get("military_sfx_enabled", True)),
         clamp_sfx_volume(state.get("military_sfx_volume", 80)),
+        clamp_sfx_volume(state.get("earthquake_voice_volume", 80)),
         bool(state.get("master_sound_enabled", True)),
         clamp_master_sound_volume(state.get("master_sound_volume", 100)),
         bool(state.get("atc_sound_enabled", True)),
@@ -1255,6 +1275,50 @@ def toggle_show_wildfires():
 def set_show_wildfires(enabled: bool):
     _state["show_wildfires"] = bool(enabled)
     _save(_state)
+
+
+def show_earthquakes() -> bool:
+    return bool(_state.get("show_earthquakes", False))
+
+
+def toggle_show_earthquakes():
+    _state["show_earthquakes"] = not show_earthquakes()
+    _save(_state)
+
+
+def set_show_earthquakes(enabled: bool):
+    _state["show_earthquakes"] = bool(enabled)
+    _save(_state)
+
+
+def earthquake_voice_enabled() -> bool:
+    return bool(_state.get("earthquake_voice_enabled", False))
+
+
+def toggle_earthquake_voice_enabled():
+    _state["earthquake_voice_enabled"] = not earthquake_voice_enabled()
+    _save(_state)
+    return earthquake_voice_enabled()
+
+
+def set_earthquake_voice_enabled(enabled: bool):
+    _state["earthquake_voice_enabled"] = bool(enabled)
+    _save(_state)
+
+
+def earthquake_voice_volume() -> int:
+    return clamp_sfx_volume(_state.get("earthquake_voice_volume", 80))
+
+
+def set_earthquake_voice_volume(value: int, *, persist: bool = True) -> int:
+    global _disk_synced
+    vol = clamp_sfx_volume(value)
+    _state["earthquake_voice_volume"] = vol
+    if persist:
+        _rmw_save({"earthquake_voice_volume": vol})
+    else:
+        _disk_synced = False
+    return vol
 
 
 def show_airport_centerlines() -> bool:

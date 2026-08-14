@@ -31,7 +31,7 @@ SETTINGS_PAGES = (
     "ATC",
     "Quiet",
     "Display",
-    "HUD",
+    "HUD & Volume",
     "Options",
     "Layers",
     "Theme",
