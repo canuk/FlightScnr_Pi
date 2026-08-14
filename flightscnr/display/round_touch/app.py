@@ -48,6 +48,7 @@ from display.round_touch import (
     touch_debug,
     video,
     wildfire_overlay,
+    earthquake_overlay,
     update_bubble,
 )
 from utilities import aircraft_alert
@@ -58,6 +59,7 @@ from display.round_touch.screens import (
     details,
     disclaimer,
     fire_detail,
+    earthquake_detail,
     flight_detail,
     forecast,
     info,
@@ -72,6 +74,7 @@ logger = logging.getLogger("flightscnr.display")
 SCREEN_RADAR = "radar"
 SCREEN_FLIGHT = "flight_detail"
 SCREEN_FIRE = "fire_detail"
+SCREEN_QUAKE = "earthquake_detail"
 SCREEN_SETTINGS = "settings"
 SCREEN_DETAILS = "details"
 SCREEN_CLOCK = "clock"
@@ -143,6 +146,7 @@ class RoundTouchDisplay:
         self._position_smoother = position_smooth.PositionSmoother()
         self._last_ais_poll = 0.0
         self._last_firms_poll = 0.0
+        self._last_quake_poll = 0.0
         self.flight_index = 0
         # Stable identity for the open detail page (index alone drifts as traffic changes).
         self._selected_flight_id: str | None = None
@@ -150,6 +154,10 @@ class RoundTouchDisplay:
         self._selected_fire_id: str | None = None
         self._fire_maps: dict[str, str] = {}
         self._fire_map_redraw = False
+        self.quake_index = 0
+        self._selected_quake_id: str | None = None
+        self._quake_maps: dict[str, str] = {}
+        self._quake_map_redraw = False
         self._secondary_activity = time.time()
         self._boot_until = time.time() + BOOT_SPLASH_S
         self._wifi_setup_mode = False
@@ -422,6 +430,7 @@ class RoundTouchDisplay:
         map_bg.prewarm_all_scales()
         rainviewer_overlay.request_overlay()
         wildfire_overlay.request_refresh(force=True)
+        earthquake_overlay.request_refresh(force=True)
         self._open_screen(SCREEN_RADAR)
 
     def _disclaimer_countdown_remaining(self) -> int | None:
@@ -513,6 +522,7 @@ class RoundTouchDisplay:
             map_bg.prewarm_all_scales()
             rainviewer_overlay.request_overlay()
             wildfire_overlay.request_refresh(force=True)
+            earthquake_overlay.request_refresh(force=True)
             self._open_screen(SCREEN_RADAR)
         self._safe_draw()
 
@@ -872,6 +882,13 @@ class RoundTouchDisplay:
                 self.fire_index,
                 self._scroll.offset,
             )
+        elif self.screen == SCREEN_QUAKE:
+            self._scroll.max_offset = earthquake_detail.draw_earthquake_detail(
+                self.surface,
+                self._quakes_for_detail(),
+                self.quake_index,
+                self._scroll.offset,
+            )
         elif self.screen == SCREEN_SETTINGS:
             drawn_max = info.draw_info(
                 self.surface,
@@ -956,6 +973,8 @@ class RoundTouchDisplay:
         if self.screen == SCREEN_FLIGHT:
             return float(settings.flight_detail_timeout_s())
         if self.screen == SCREEN_FIRE:
+            return float(settings.flight_detail_timeout_s())
+        if self.screen == SCREEN_QUAKE:
             return float(settings.flight_detail_timeout_s())
         return float(SECONDARY_TIMEOUT_S)
 
@@ -1340,6 +1359,8 @@ class RoundTouchDisplay:
             rainviewer_overlay.request_overlay()
             wildfire_overlay.invalidate()
             wildfire_overlay.request_refresh(force=True)
+            earthquake_overlay.invalidate()
+            earthquake_overlay.request_refresh(force=True)
         elif action == "rotate":
             settings.cycle_display_rotation()
         elif action == "compass":
@@ -1377,6 +1398,11 @@ class RoundTouchDisplay:
             wildfire_overlay.invalidate()
             if settings.show_wildfires():
                 wildfire_overlay.request_refresh(force=True)
+        elif action == "earthquakes":
+            settings.toggle_show_earthquakes()
+            earthquake_overlay.invalidate()
+            if settings.show_earthquakes():
+                earthquake_overlay.request_refresh(force=True)
         elif action == "airport_centerlines":
             from display.round_touch import airport_overlay
 
@@ -1429,6 +1455,7 @@ class RoundTouchDisplay:
             "chime_volume",
             "traffic_sfx_volume",
             "military_sfx_volume",
+            "earthquake_voice_volume",
         ):
             # Switch and slider are hit-tested directly on the row.
             return
@@ -1765,6 +1792,7 @@ class RoundTouchDisplay:
             "hourly_chime": "chime_volume",
             "traffic_sfx": "traffic_sfx_volume",
             "military_sfx": "military_sfx_volume",
+            "earthquake_voice": "earthquake_voice_volume",
         }.get(action)
         if volume_action is None:
             return False
@@ -1773,6 +1801,10 @@ class RoundTouchDisplay:
             radar.invalidate_frame_layer()
         elif action == "traffic_sfx":
             settings.toggle_traffic_sfx_enabled()
+        elif action == "earthquake_voice":
+            settings.toggle_earthquake_voice_enabled()
+            if settings.earthquake_voice_enabled():
+                earthquake_overlay.prime_voice_seen()
         else:
             settings.toggle_military_sfx_enabled()
         self._display_focus = info.hud_volume_row_index(volume_action)
@@ -1961,6 +1993,8 @@ class RoundTouchDisplay:
         rainviewer_overlay.request_overlay()
         wildfire_overlay.invalidate()
         wildfire_overlay.request_refresh(force=True)
+        earthquake_overlay.invalidate()
+        earthquake_overlay.request_refresh(force=True)
         self._position_smoother.reset()
 
         def _after_recenter():
@@ -2031,6 +2065,8 @@ class RoundTouchDisplay:
         rainviewer_overlay.request_overlay()
         wildfire_overlay.invalidate()
         wildfire_overlay.request_refresh(force=True)
+        earthquake_overlay.invalidate()
+        earthquake_overlay.request_refresh(force=True)
         self._position_smoother.reset()
 
         def _after_favourite():
@@ -2307,6 +2343,8 @@ class RoundTouchDisplay:
         rainviewer_overlay.request_overlay()
         wildfire_overlay.invalidate()
         wildfire_overlay.request_refresh(force=True)
+        earthquake_overlay.invalidate()
+        earthquake_overlay.request_refresh(force=True)
         airport_overlay.clear_callout()
         self._safe_draw()
 
@@ -2698,6 +2736,8 @@ class RoundTouchDisplay:
         if self.screen == SCREEN_FLIGHT:
             self._apply_scroll_delta(-dy)
         elif self.screen == SCREEN_FIRE:
+            self._apply_scroll_delta(-dy)
+        elif self.screen == SCREEN_QUAKE:
             self._apply_scroll_delta(-dy)
         elif self.screen == SCREEN_DETAILS:
             self._apply_scroll_delta(-dy)
@@ -3115,6 +3155,11 @@ class RoundTouchDisplay:
             self._scroll.step(delta)
             self._note_activity()
             self._safe_draw()
+        elif self.screen == SCREEN_QUAKE and swipe in (input_handler.SWIPE_UP, input_handler.SWIPE_DOWN):
+            delta = -nav.scroll_step() if swipe == input_handler.SWIPE_UP else nav.scroll_step()
+            self._scroll.step(delta)
+            self._note_activity()
+            self._safe_draw()
         elif swipe in (input_handler.SWIPE_UP, input_handler.SWIPE_DOWN) and self.screen == SCREEN_DETAILS:
             delta = -nav.scroll_step() if swipe == input_handler.SWIPE_UP else nav.scroll_step()
             self._scroll.step(delta)
@@ -3231,6 +3276,26 @@ class RoundTouchDisplay:
                 self._select_fire_at_index(self.fire_index + 1, ordered)
                 self._scroll.reset()
                 self._maybe_fetch_fire_map()
+                self._safe_draw()
+            elif action == "radar":
+                self._return_to_radar()
+                self._safe_draw()
+            else:
+                self._safe_draw()
+        elif tap and self.screen == SCREEN_QUAKE:
+            self._note_activity()
+            self._sync_selected_quake_index()
+            ordered = earthquake_overlay.quakes_by_distance()
+            action = earthquake_detail.tap_footer_action(tap[0], tap[1], ordered)
+            if action == "prev" and ordered:
+                self._select_quake_at_index(self.quake_index - 1, ordered)
+                self._scroll.reset()
+                self._maybe_fetch_quake_map()
+                self._safe_draw()
+            elif action == "next" and ordered:
+                self._select_quake_at_index(self.quake_index + 1, ordered)
+                self._scroll.reset()
+                self._maybe_fetch_quake_map()
                 self._safe_draw()
             elif action == "radar":
                 self._return_to_radar()
@@ -3464,6 +3529,7 @@ class RoundTouchDisplay:
         map_bg.prewarm_all_scales()
         rainviewer_overlay.request_overlay()
         wildfire_overlay.request_refresh(force=True)
+        earthquake_overlay.request_refresh(force=True)
         self._apply_brightness()
         try:
             from utilities.ais_client import sync_ais_client
@@ -3472,6 +3538,7 @@ class RoundTouchDisplay:
             # Force an AIS snapshot soon after enable/disable or range changes.
             self._last_ais_poll = 0.0
             self._last_firms_poll = 0.0
+            self._last_quake_poll = 0.0
         except Exception:
             logger.debug("AIS sync after settings reload failed", exc_info=True)
         # Weather units live in weather_prefs.json (portal Weather card) — refresh
@@ -3512,6 +3579,8 @@ class RoundTouchDisplay:
             rainviewer_overlay.request_overlay()
             wildfire_overlay.invalidate()
             wildfire_overlay.request_refresh(force=True)
+            earthquake_overlay.invalidate()
+            earthquake_overlay.request_refresh(force=True)
             self._position_smoother.reset()
             self.overhead.grab_data()
             lat, lon = float(LOCATION_HOME[0]), float(LOCATION_HOME[1])
@@ -3558,6 +3627,98 @@ class RoundTouchDisplay:
         if self.screen == SCREEN_WIFI_SETUP or self._radar_modal_active():
             return
         wildfire_overlay.request_refresh()
+
+    def _tick_quakes(self):
+        if self.screen == SCREEN_WIFI_SETUP or self._radar_modal_active():
+            return
+        earthquake_overlay.request_refresh()
+
+    def _quake_identity(self, quake: dict | None) -> str | None:
+        if not quake:
+            return None
+        qid = str(quake.get("id") or "").strip()
+        if qid:
+            return qid
+        try:
+            return f"{float(quake['lat']):.4f},{float(quake['lon']):.4f}"
+        except Exception:
+            return None
+
+    def _sync_selected_quake_index(self) -> bool:
+        ordered = earthquake_overlay.quakes_by_distance()
+        if not ordered:
+            self.quake_index = 0
+            return False
+        if self._selected_quake_id:
+            for i, quake in enumerate(ordered):
+                if self._quake_identity(quake) == self._selected_quake_id:
+                    self.quake_index = i
+                    return True
+        self.quake_index = max(0, min(self.quake_index, len(ordered) - 1))
+        self._selected_quake_id = self._quake_identity(ordered[self.quake_index])
+        return True
+
+    def _select_quake(self, quake: dict, ordered: list | None = None) -> None:
+        ordered = ordered if ordered is not None else earthquake_overlay.quakes_by_distance()
+        self._selected_quake_id = self._quake_identity(quake)
+        try:
+            self.quake_index = ordered.index(quake)
+        except ValueError:
+            for i, item in enumerate(ordered):
+                if self._quake_identity(item) == self._selected_quake_id:
+                    self.quake_index = i
+                    return
+            self.quake_index = 0
+            if ordered:
+                self._selected_quake_id = self._quake_identity(ordered[0])
+
+    def _select_quake_at_index(self, index: int, ordered: list | None = None) -> None:
+        ordered = ordered if ordered is not None else earthquake_overlay.quakes_by_distance()
+        if not ordered:
+            return
+        self.quake_index = index % len(ordered)
+        self._selected_quake_id = self._quake_identity(ordered[self.quake_index])
+
+    def _open_picked_quake(self, picked: dict | None) -> bool:
+        ordered = earthquake_overlay.quakes_by_distance()
+        if not picked or not ordered:
+            return False
+        self._select_quake(picked, ordered)
+        self._open_screen(SCREEN_QUAKE)
+        self._note_activity()
+        self._maybe_fetch_quake_map()
+        return True
+
+    def _quakes_for_detail(self) -> list:
+        quakes = earthquake_overlay.quakes_by_distance()
+        out = []
+        for quake in quakes:
+            item = dict(quake)
+            qid = self._quake_identity(quake)
+            if qid and qid in self._quake_maps:
+                item["map_path"] = self._quake_maps[qid]
+            out.append(item)
+        return out
+
+    def _maybe_fetch_quake_map(self) -> None:
+        if self.screen != SCREEN_QUAKE:
+            return
+        ordered = earthquake_overlay.quakes_by_distance()
+        if not ordered:
+            return
+        self._sync_selected_quake_index()
+        quake = ordered[self.quake_index]
+        qid = self._quake_identity(quake)
+        if not qid or qid in self._quake_maps:
+            return
+
+        def _on_done(path: str | None) -> None:
+            if path:
+                self._bound(self._quake_maps)
+                self._quake_maps[qid] = path
+                self._quake_map_redraw = True
+
+        earthquake_overlay.request_map(quake, on_done=_on_done)
 
     def _fire_identity(self, fire: dict | None) -> str | None:
         if not fire:
@@ -3664,15 +3825,17 @@ class RoundTouchDisplay:
     def _open_flight_or_fire_at(
         self, x: int, y: int, alt_x: int | None = None, alt_y: int | None = None
     ) -> bool:
-        """Open the nearer of a flight, fire, or airport under the tap.
+        """Open the nearer of a flight, fire, quake, or airport under the tap.
 
         Dense traffic (and beyond-range rim blips) used to always win over a
         fire even when the finger was clearly on the flame icon. Airports are
         secondary to both: they only win when clearly nearer than a flight,
         and never beat a fire that already wins the fire-vs-flight bias.
+        Earthquakes use the same bias as fires; a fire still wins when both hit.
         """
         flight, flight_d2 = radar.pick_flight_at(self._radar_flights(), x, y, alt_x, alt_y)
         fire, fire_d2 = wildfire_overlay.pick_fire_at(x, y, alt_x, alt_y)
+        quake, quake_d2 = earthquake_overlay.pick_quake_at(x, y, alt_x, alt_y)
         airport, airport_d2 = airport_overlay.pick_airport_at(x, y, alt_x, alt_y)
         # Prefer the fire when it is as close or only slightly farther — fires
         # are sparse and easy to miss under Oshkosh-density aircraft.
@@ -3683,6 +3846,12 @@ class RoundTouchDisplay:
             if airport is None or fire_d2 is None or airport_d2 is None or fire_d2 <= airport_d2:
                 airport_overlay.clear_callout()
                 return self._open_picked_fire(fire)
+        if quake is not None and (
+            flight is None or quake_d2 is None or flight_d2 is None or quake_d2 <= flight_d2 + fire_bias
+        ):
+            if airport is None or quake_d2 is None or airport_d2 is None or quake_d2 <= airport_d2:
+                airport_overlay.clear_callout()
+                return self._open_picked_quake(quake)
         # Prefer aircraft over airports when distances are close.
         flight_bias = theme.s(12) ** 2
         if flight is not None and (
@@ -3942,6 +4111,14 @@ class RoundTouchDisplay:
                     self._tick_firms()
                     self._last_firms_poll = now
 
+                if (
+                    self.screen not in (SCREEN_WIFI_SETUP, SCREEN_DISCLAIMER)
+                    and not self._radar_modal_active()
+                    and now - self._last_quake_poll >= earthquake_overlay.POLL_TTL_S
+                ):
+                    self._tick_quakes()
+                    self._last_quake_poll = now
+
                 grab_seq = self.overhead.grab_seq
                 if grab_seq != self._last_grab_seq:
                     self._last_grab_seq = grab_seq
@@ -4003,6 +4180,10 @@ class RoundTouchDisplay:
 
                 if self._fire_map_redraw and self.screen == SCREEN_FIRE:
                     self._fire_map_redraw = False
+                    self._safe_draw()
+
+                if self._quake_map_redraw and self.screen == SCREEN_QUAKE:
+                    self._quake_map_redraw = False
                     self._safe_draw()
 
                 if self._weather_redraw_pending and self.screen in (
@@ -4109,7 +4290,7 @@ class RoundTouchDisplay:
                     if (now - self._last_static_draw) >= interval:
                         self._safe_draw()
                         self._last_static_draw = now
-                elif self.screen in (SCREEN_FLIGHT, SCREEN_FIRE, SCREEN_SETTINGS, SCREEN_DETAILS):
+                elif self.screen in (SCREEN_FLIGHT, SCREEN_FIRE, SCREEN_QUAKE, SCREEN_SETTINGS, SCREEN_DETAILS):
                     ring_on = self._timeout_remaining_fraction() is not None
                     if ring_on:
                         # Never timer-refresh content while the ring is crawling —

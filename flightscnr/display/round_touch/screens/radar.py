@@ -26,6 +26,7 @@ from display.round_touch import (
     settings,
     theme,
     wildfire_overlay,
+    earthquake_overlay,
 )
 from display.round_touch import alert_prefs, frame_debug
 from display.round_touch import vessel_declutter
@@ -192,6 +193,7 @@ def _build_frame_layer(build: pygame.Surface, backdrop, flights, offset) -> bool
     build.blit(backdrop, (0, 0))
     _t = _rebuild_stage("2r_blit", _t)
     wildfire_overlay.draw_fires(build, pan_offset=offset)
+    earthquake_overlay.draw_quakes(build, pan_offset=offset)
     _t = _rebuild_stage("2r_fires", _t)
     _draw_flights(build, flights)
     _t = _rebuild_stage("2r_flights", _t)
@@ -418,6 +420,7 @@ def draw_radar(
     map_bg.request_background()
     rainviewer_overlay.request_overlay()
     wildfire_overlay.request_refresh()
+    earthquake_overlay.request_refresh()
 
     if pan_mode:
         _draw_map_pan_overlay(
@@ -464,6 +467,7 @@ def draw_radar(
         else:
             airport_overlay.draw_airports(surface, pan_offset=offset)
             wildfire_overlay.draw_fires(surface, pan_offset=offset)
+            earthquake_overlay.draw_quakes(surface, pan_offset=offset)
             _draw_flights(surface, flights)
             _draw_status(surface, flights)
             _draw_map_attribution(surface)
@@ -1172,6 +1176,9 @@ def _draw_map_attribution(surface):
     firms_text = wildfire_overlay.attribution_text()
     if firms_text:
         parts.append(firms_text)
+    quake_text = earthquake_overlay.attribution_text()
+    if quake_text:
+        parts.append(quake_text)
     if not parts:
         return
     text = " · ".join(parts)
