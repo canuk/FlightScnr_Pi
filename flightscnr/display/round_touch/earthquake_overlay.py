@@ -10,7 +10,7 @@
 """USGS earthquake epicenters for the circular radar.
 
 Primary: FDSN Event query around the radar center (global, no API key).
-Fallback: USGS 2.5_day GeoJSON feed, filtered to the visible radius.
+Fallback: USGS 2.5_week GeoJSON feed, filtered to the visible radius.
 https://earthquake.usgs.gov/fdsnws/event/1/
 https://earthquake.usgs.gov/earthquakes/feed/v1.0/geojson.php
 """
@@ -35,7 +35,7 @@ logger = logging.getLogger("flightscnr.display")
 
 QUERY_URL = "https://earthquake.usgs.gov/fdsnws/event/1/query"
 FEED_URL = (
-    "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/2.5_day.geojson"
+    "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/2.5_week.geojson"
 )
 USER_AGENT = (
     "FlightScnrPi/1.0 (USGS earthquake overlay; "
@@ -47,7 +47,7 @@ POLL_TTL_S = 60
 BBOX_MARGIN = 1.15
 MIN_MAGNITUDE = 2.5
 VOICE_MIN_MAG = 3.0
-MAX_AGE_DAYS = 1
+MAX_AGE_DAYS = 1.5  # 36 hours
 MAX_RESULTS = 200
 # USGS "type" values to keep. Drop quarry blasts, explosions, ice quakes, etc.
 _KEEP_TYPES = frozenset({"", "earthquake"})

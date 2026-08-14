@@ -134,7 +134,7 @@ class TestEarthquakeOverlay(unittest.TestCase):
         ids = [q["id"] for q in quakes]
         self.assertEqual(ids, ["near"])
 
-    def test_parse_hides_older_than_one_day(self):
+    def test_parse_hides_older_than_36_hours(self):
         from display.round_touch.earthquake_overlay import parse_usgs_geojson
 
         now = datetime(2026, 8, 13, 22, 0, tzinfo=timezone.utc)
@@ -148,15 +148,22 @@ class TestEarthquakeOverlay(unittest.TestCase):
                 time_ms=now_ms - 12 * 3600_000,
             ),
             _feature(
+                eid="still_in_window",
+                lat=37.485,
+                lon=-122.215,
+                mag=3.5,
+                time_ms=now_ms - 30 * 3600_000,
+            ),
+            _feature(
                 eid="stale",
                 lat=37.49,
                 lon=-122.22,
                 mag=4.0,
-                time_ms=now_ms - 25 * 3600_000,
+                time_ms=now_ms - 37 * 3600_000,
             ),
         )
         ids = [q["id"] for q in parse_usgs_geojson(payload, now=now.timestamp())]
-        self.assertEqual(ids, ["fresh"])
+        self.assertEqual(ids, ["fresh", "still_in_window"])
 
     def test_bbox_around_center(self):
         from display.round_touch.earthquake_overlay import bbox_around

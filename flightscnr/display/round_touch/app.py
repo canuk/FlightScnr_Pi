@@ -2711,7 +2711,12 @@ class RoundTouchDisplay:
                 if pos and info.atc_volume_slider_at(pos[0], pos[1], self._scroll.offset):
                     self.input.consume_scroll_drag()
                     return
-        if self.screen == SCREEN_SETTINGS:
+        if self.screen in (
+            SCREEN_SETTINGS,
+            SCREEN_FLIGHT,
+            SCREEN_FIRE,
+            SCREEN_QUAKE,
+        ):
             # Same trap as the ATC picker: scroll_dy stops accumulating once the
             # drag passes the swipe threshold, and the release swipe then scrolled
             # back the other way. Follow the finger for the whole drag instead.
@@ -2733,13 +2738,7 @@ class RoundTouchDisplay:
         dy = self.input.consume_scroll_drag()
         if not dy:
             return
-        if self.screen == SCREEN_FLIGHT:
-            self._apply_scroll_delta(-dy)
-        elif self.screen == SCREEN_FIRE:
-            self._apply_scroll_delta(-dy)
-        elif self.screen == SCREEN_QUAKE:
-            self._apply_scroll_delta(-dy)
-        elif self.screen == SCREEN_DETAILS:
+        if self.screen == SCREEN_DETAILS:
             self._apply_scroll_delta(-dy)
 
     def _apply_theme_slider(
@@ -3145,21 +3144,22 @@ class RoundTouchDisplay:
         elif swipe == input_handler.SWIPE_UP and self.screen == SCREEN_CLOCK:
             self._return_to_radar()
             self._safe_draw()
-        elif self.screen == SCREEN_FLIGHT and swipe in (input_handler.SWIPE_UP, input_handler.SWIPE_DOWN):
-            delta = -nav.scroll_step() if swipe == input_handler.SWIPE_UP else nav.scroll_step()
-            self._scroll.step(delta)
-            self._note_activity()
-            self._safe_draw()
-        elif self.screen == SCREEN_FIRE and swipe in (input_handler.SWIPE_UP, input_handler.SWIPE_DOWN):
-            delta = -nav.scroll_step() if swipe == input_handler.SWIPE_UP else nav.scroll_step()
-            self._scroll.step(delta)
-            self._note_activity()
-            self._safe_draw()
-        elif self.screen == SCREEN_QUAKE and swipe in (input_handler.SWIPE_UP, input_handler.SWIPE_DOWN):
-            delta = -nav.scroll_step() if swipe == input_handler.SWIPE_UP else nav.scroll_step()
-            self._scroll.step(delta)
-            self._note_activity()
-            self._safe_draw()
+        elif (
+            self.screen in (SCREEN_FLIGHT, SCREEN_FIRE, SCREEN_QUAKE)
+            and swipe in (input_handler.SWIPE_UP, input_handler.SWIPE_DOWN)
+        ):
+            # The list already scrolled with the finger; a follow-up swipe would
+            # jump the other direction and hide the rows just revealed.
+            if self._settings_drag_scrolled:
+                self._settings_drag_scrolled = False
+                self._note_activity()
+            else:
+                delta = (
+                    nav.scroll_step()
+                    if swipe == input_handler.SWIPE_UP
+                    else -nav.scroll_step()
+                )
+                self._apply_scroll_delta(delta)
         elif swipe in (input_handler.SWIPE_UP, input_handler.SWIPE_DOWN) and self.screen == SCREEN_DETAILS:
             delta = -nav.scroll_step() if swipe == input_handler.SWIPE_UP else nav.scroll_step()
             self._scroll.step(delta)
