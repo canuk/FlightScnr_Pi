@@ -439,17 +439,14 @@ def _slot_includes_forecast(slot_key: str) -> bool:
 def _run_current_slot_refresh(*, include_forecast: bool) -> dict | None:
     try:
         if include_forecast:
-            from utilities.temperature import allow_immediate_fetch, invalidate_caches
+            from utilities.temperature import allow_immediate_fetch
 
             allow_immediate_fetch()
-            invalidate_caches()
-            invalidate_cache()
             return refresh(force=True)
 
-        from utilities.temperature import allow_temp_fetch, invalidate_temp_cache
+        from utilities.temperature import allow_temp_fetch
 
         allow_temp_fetch()
-        invalidate_temp_cache()
         return refresh_current(force=True)
     except Exception:
         logger.debug("Scheduled weather refresh failed", exc_info=True)

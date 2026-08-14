@@ -3450,9 +3450,9 @@ class RoundTouchDisplay:
 
             if not consume_manual_refresh_request():
                 return
-            # request_fetch_now clears temperature module caches + rate budget.
-            # invalidate_cache()+refresh(force) alone is not enough — grab_* still
-            # returns the 30m/1h in-process cache and the HUD never changes.
+            # Unlock the local rate budget and fetch. Do not wipe caches first:
+            # force=True already bypasses TTL, and grab_* needs the last reading
+            # if Tomorrow.io still returns 429.
             weather_data.request_fetch_now()
             radar_hud.rebuild_overlay()
             self._weather_redraw_pending = True
