@@ -243,6 +243,8 @@ _defaults = {
     # Real-world direction at the top of the screen (0=north-up).
     "facing_deg": 0.0,
     "show_sweep": True,
+    # Hockey-stick underline + diagonal from tag to blip.
+    "show_tag_leaders": True,
     "show_precipitation": True,
     "show_wildfires": False,
     "show_earthquakes": False,
@@ -927,6 +929,7 @@ def _settings_snapshot(state: dict) -> tuple:
         state.get("traffic_labels"),
         _normalize_facing(state.get("facing_deg", 0)),
         state.get("show_sweep"),
+        state.get("show_tag_leaders"),
         state.get("show_precipitation"),
         state.get("show_wildfires"),
         state.get("show_earthquakes"),
@@ -1246,6 +1249,28 @@ def toggle_sweep_line():
 
 def set_show_sweep_line(enabled: bool):
     _state["show_sweep"] = bool(enabled)
+    _save(_state)
+
+
+def tag_leaders_preferred() -> bool:
+    """Stored Tag Leaders preference, even when traffic labels are off."""
+    return bool(_state.get("show_tag_leaders", True))
+
+
+def show_tag_leaders() -> bool:
+    """Hockey-stick connectors only when a label mode is actually drawing tags."""
+    return tag_leaders_preferred() and show_aircraft_tag()
+
+
+def toggle_tag_leaders():
+    if not show_aircraft_tag():
+        return
+    _state["show_tag_leaders"] = not tag_leaders_preferred()
+    _save(_state)
+
+
+def set_show_tag_leaders(enabled: bool):
+    _state["show_tag_leaders"] = bool(enabled)
     _save(_state)
 
 

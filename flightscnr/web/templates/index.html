@@ -53,6 +53,7 @@
         .btn:disabled{opacity:.6;cursor:wait}
         .chk{display:flex;align-items:center;gap:.6rem;padding:.7rem 0;border-bottom:1px solid rgba(120,120,120,.22);}
         .chk:last-of-type{border-bottom:none;}
+        .chk.is-disabled{opacity:.45;pointer-events:none;}
         .chk label{margin:0;font-size:.9rem;color:var(--text);flex:1;}
         .switch{position:relative;width:2.6rem;height:1.5rem;flex:none;}
         .switch input{position:absolute;opacity:0;width:100%;height:100%;margin:0;cursor:pointer;}
@@ -218,6 +219,11 @@
                 <option value="off">OFF</option>
             </select>
             <p class="hint">Callsign/type/altitude on aircraft, and vessel name tags. Turn off to declutter a busy radar; tap a symbol for details.</p>
+            <div class="chk" id="show_tag_leaders_row">
+                <label for="show_tag_leaders">Show tag leaders</label>
+                <span class="switch"><input id="show_tag_leaders" type="checkbox"><span class="track"></span></span>
+            </div>
+            <p class="hint">Hockey-stick underline and diagonal from each callsign tag to its aircraft or vessel. Same color as the blip. Only drawn when traffic labels are on.</p>
             <label for="facing_deg">Facing direction (degrees)</label>
             <input id="facing_deg" type="number" min="0" max="359" step="1" value="0">
             <p class="hint">Real-world direction at the top of the screen (0 = north, 90 = east, 180 = south, 270 = west). You can also set this on the device under Settings → Display → Facing.</p>
@@ -1068,6 +1074,8 @@ async function loadAll() {
         if ($("traffic_labels")) $("traffic_labels").value = r.traffic_labels || (r.show_aircraft_tag === false ? "off" : "both");
         $("facing_deg").value = String(Math.round(Number(r.facing_deg) || 0) % 360);
         $("show_sweep").checked = !!r.show_sweep_line;
+        if ($("show_tag_leaders")) $("show_tag_leaders").checked = r.show_tag_leaders !== false;
+        syncTagLeadersControl();
         $("show_precip").checked = r.show_precipitation !== false;
         if ($("show_wildfires")) $("show_wildfires").checked = !!r.show_wildfires;
         if ($("show_earthquakes")) $("show_earthquakes").checked = !!r.show_earthquakes;
@@ -1233,6 +1241,14 @@ function syncVfrOpacityLabel() {
     if (el && $("vfr_opacity")) el.textContent = `${$("vfr_opacity").value}%`;
 }
 
+function syncTagLeadersControl() {
+    const labelsOn = $("traffic_labels") ? $("traffic_labels").value !== "off" : true;
+    const input = $("show_tag_leaders");
+    const row = $("show_tag_leaders_row");
+    if (input) input.disabled = !labelsOn;
+    if (row) row.classList.toggle("is-disabled", !labelsOn);
+}
+
 /** Match device speed labels from unit preset (…_kts / …_mph / …_kph). */
 function legacyUnitPreset(distanceUnits) {
     if (distanceUnits === "mi") return "mi_mph";
@@ -1309,6 +1325,7 @@ async function saveRadar() {
                 traffic_labels: $("traffic_labels") ? $("traffic_labels").value : "both",
                 facing_deg: Number($("facing_deg").value),
                 show_sweep_line: $("show_sweep").checked,
+                show_tag_leaders: $("show_tag_leaders") ? $("show_tag_leaders").checked : true,
                 show_precipitation: $("show_precip").checked,
                 show_wildfires: $("show_wildfires") ? $("show_wildfires").checked : false,
                 show_earthquakes: $("show_earthquakes") ? $("show_earthquakes").checked : false,
@@ -1401,6 +1418,7 @@ async function saveAndReloadSettings() {
                 traffic_labels: $("traffic_labels") ? $("traffic_labels").value : "both",
                 facing_deg: Number($("facing_deg").value),
                 show_sweep_line: $("show_sweep").checked,
+                show_tag_leaders: $("show_tag_leaders") ? $("show_tag_leaders").checked : true,
                 show_precipitation: $("show_precip").checked,
                 show_wildfires: $("show_wildfires") ? $("show_wildfires").checked : false,
                 show_earthquakes: $("show_earthquakes") ? $("show_earthquakes").checked : false,
@@ -2605,6 +2623,8 @@ if ($("btn-bt-scan")) $("btn-bt-scan").addEventListener("click", bluetoothScan);
 if ($("btn-bt-use")) $("btn-bt-use").addEventListener("click", bluetoothUsePreferred);
 if ($("btn-bt-usb")) $("btn-bt-usb").addEventListener("click", bluetoothUseUsb);
 if ($("btn-bt-disconnect")) $("btn-bt-disconnect").addEventListener("click", bluetoothDisconnect);
+
+if ($("traffic_labels")) $("traffic_labels").addEventListener("change", syncTagLeadersControl);
 
 document.addEventListener("DOMContentLoaded", () => {
     wireRgbGroup("theme");
