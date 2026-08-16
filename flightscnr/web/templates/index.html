@@ -1222,6 +1222,8 @@ function syncChimeVolumeLabel() {
     if (el && $("hourly_chime_volume")) el.textContent = `${$("hourly_chime_volume").value}%`;
     const tel = $("traffic_sfx_volume_label");
     if (tel && $("traffic_sfx_volume")) tel.textContent = `${$("traffic_sfx_volume").value}%`;
+    const mel = $("military_sfx_volume_label");
+    if (mel && $("military_sfx_volume")) mel.textContent = `${$("military_sfx_volume").value}%`;
     const qel = $("earthquake_voice_volume_label");
     if (qel && $("earthquake_voice_volume")) qel.textContent = `${$("earthquake_voice_volume").value}%`;
 }
