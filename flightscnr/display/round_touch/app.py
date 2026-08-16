@@ -18,6 +18,7 @@ from threading import Thread
 import pygame
 
 from utilities.overhead import Overhead
+from utilities import x11_kiosk
 from utilities.route_enrichment import (
     fetch_route_enrichment,
     lookup_callsign,
@@ -123,7 +124,7 @@ class RoundTouchDisplay:
                 pygame.display.quit()
                 self._display = video.init_display(fit_side, fit_side, self._fullscreen)
         self.surface = pygame.Surface((theme.SIZE, theme.SIZE))
-        pygame.mouse.set_visible(False)
+        x11_kiosk.hide_kiosk_cursor(reason="app_init")
         pygame.event.set_allowed(
             None
         )  # allow all; we filter QUIT manually
@@ -1386,6 +1387,9 @@ class RoundTouchDisplay:
             settings.cycle_vessel_min_speed()
         elif action == "sweep":
             settings.toggle_sweep_line()
+        elif action == "tag_leaders":
+            settings.toggle_tag_leaders()
+            radar.invalidate_frame_layer()
         elif action == "color_by_altitude":
             settings.toggle_color_by_altitude()
             radar.invalidate_frame_layer()
@@ -3902,6 +3906,12 @@ class RoundTouchDisplay:
         if os.environ.get("FLIGHTSCNR_PAUSE_GRAB", "").lower() in ("1", "true", "yes"):
             logger.warning("FLIGHTSCNR_PAUSE_GRAB=1 — overhead pipeline disabled")
         touch_debug.log_startup()
+        if x11_kiosk.cursor_debug_enabled():
+            logger.info(
+                "cursor-debug on — swipe the radar, then: "
+                "journalctl -u flightscnr -f | grep cursor-debug   "
+                "or   tail -f /tmp/flightscnr-cursor.log"
+            )
         running = True
         last_data_poll = 0
         last_location_check = 0
@@ -3930,6 +3940,30 @@ class RoundTouchDisplay:
                         )
                 _lt = time.perf_counter()
                 for event in pygame.event.get():
+                    if event.type in (
+                        pygame.MOUSEMOTION,
+                        pygame.MOUSEBUTTONDOWN,
+                        pygame.MOUSEBUTTONUP,
+                        pygame.FINGERDOWN,
+                        pygame.FINGERMOTION,
+                        pygame.FINGERUP,
+                        pygame.ACTIVEEVENT,
+                    ) or (
+                        getattr(pygame, "WINDOWFOCUSLOST", None) is not None
+                        and event.type == pygame.WINDOWFOCUSLOST
+                    ) or (
+                        getattr(pygame, "WINDOWFOCUSGAINED", None) is not None
+                        and event.type == pygame.WINDOWFOCUSGAINED
+                    ):
+                        x11_kiosk.log_pointer_event(event)
+                        if event.type == pygame.MOUSEMOTION:
+                            try:
+                                if not pygame.mouse.get_focused():
+                                    x11_kiosk.hide_kiosk_cursor(
+                                        reason="pointer_left_window"
+                                    )
+                            except Exception:
+                                pass
                     if event.type == pygame.QUIT:
                         # Touch drivers / compositors sometimes emit spurious QUIT.
                         logger.warning("Ignoring pygame QUIT event")
@@ -3952,6 +3986,15 @@ class RoundTouchDisplay:
                     # Do not recreate the display on WINDOWEXPOSED / FOCUSGAINED —
                     # that races the render loop and can black-screen the kiosk.
                     if gesture_handler.RadarGestureHandler.is_touch_event(event):
+                        if (
+                            gesture_handler.RadarGestureHandler.is_pointer_down(event)
+                            or event.type == pygame.FINGERDOWN
+                        ):
+                            x11_kiosk.hide_kiosk_cursor(reason="pointer_down")
+                        elif event.type == pygame.FINGERUP or (
+                            gesture_handler.RadarGestureHandler.is_pointer_up(event)
+                        ):
+                            x11_kiosk.hide_kiosk_cursor(reason="pointer_up")
                         if not self._ghost_filter.allow(
                             event,
                             self.gestures.touch.cancel_gesture,

@@ -78,6 +78,7 @@ DISPLAY_ACTIONS = (
     "compass",
     "range_rings",
     "sweep",
+    "tag_leaders",
     "color_by_altitude",
     "units",
     "range",
@@ -1624,6 +1625,11 @@ def _display_row_labels() -> list[str]:
         "Compass Rose",
         "Radar Range Rings",
         "Radar Sweep Line",
+        (
+            "Tag Leaders"
+            if settings.show_aircraft_tag()
+            else "Tag Leaders (labels off)"
+        ),
         "Color by Altitude",
         f"Units: {settings.unit_preset_label()}",
         f"Radar Range: {settings.scale_label()}",
@@ -1687,6 +1693,7 @@ _TOGGLE_ROW_STATE = {
     "compass": settings.show_compass_rose,
     "range_rings": settings.show_range_rings,
     "sweep": settings.show_sweep_line,
+    "tag_leaders": settings.show_tag_leaders,
     "color_by_altitude": settings.color_by_altitude,
     "radar_hud": settings.radar_hud_enabled,
     "precipitation": settings.show_precipitation,

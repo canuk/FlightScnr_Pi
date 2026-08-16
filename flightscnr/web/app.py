@@ -1091,6 +1091,7 @@ def radar_json():
             "traffic_labels": settings.traffic_labels(),
             "facing_deg": settings.facing_deg(),
             "show_sweep_line": settings.show_sweep_line(),
+            "show_tag_leaders": settings.tag_leaders_preferred(),
             "show_precipitation": settings.show_precipitation(),
             "show_wildfires": settings.show_wildfires(),
             "show_earthquakes": settings.show_earthquakes(),
@@ -1195,6 +1196,8 @@ def radar_save():
         settings.set_facing_deg(data.get("facing_deg"))
     if "show_sweep_line" in data:
         settings.set_show_sweep_line(bool(data.get("show_sweep_line")))
+    if "show_tag_leaders" in data:
+        settings.set_show_tag_leaders(bool(data.get("show_tag_leaders")))
     if "show_precipitation" in data:
         settings.set_show_precipitation(bool(data.get("show_precipitation")))
         rainviewer_overlay.invalidate()
