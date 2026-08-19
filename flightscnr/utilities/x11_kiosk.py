@@ -15,6 +15,7 @@ import ctypes
 import ctypes.util
 import logging
 import os
+import threading
 import time
 from typing import Any
 
@@ -30,12 +31,19 @@ _XFIXES: Any | None = None
 _XFIXES_OK: bool | None = None
 _LAST_MOTION_LOG = 0.0
 _LAST_CONFINE = 0.0
-_CURSOR_LOG = os.environ.get("FLIGHTSCNR_CURSOR_LOG", "/tmp/flightscnr-cursor.log")
+_HIDE_LOCK = threading.Lock()
+# Opt-in only. A default log path used to write every swipe to the SD card.
+_CURSOR_LOG = os.environ.get("FLIGHTSCNR_CURSOR_LOG", "").strip()
+# These reasons used to spawn a hide thread on every contact and wedged
+# SDL mouse emulation until restart. Init / fullscreen / WM retries only.
+_PER_TOUCH_HIDE_REASONS = frozenset(
+    {"pointer_down", "pointer_up", "pointer_left_window", "finger_up"}
+)
 
 
 def cursor_debug_enabled() -> bool:
-    """On by default so a swipe can be traced without editing env first."""
-    return os.environ.get("FLIGHTSCNR_CURSOR_DEBUG", "1").strip().lower() in (
+    """True when FLIGHTSCNR_CURSOR_DEBUG is explicitly enabled."""
+    return os.environ.get("FLIGHTSCNR_CURSOR_DEBUG", "").strip().lower() in (
         "1",
         "true",
         "yes",
@@ -446,24 +454,38 @@ def hide_x11_cursor(*, include_frame: bool = True, confine: bool = False) -> boo
 
 
 def hide_kiosk_cursor(*, reason: str = "unspecified") -> None:
-    """Hide pygame + X11 pointers. X11 work runs off the display thread."""
-    _cursor_dbg(f"hide enter reason={reason}")
+    """Hide pygame + X11 pointers on the calling thread.
+
+    Do not spawn X11 worker threads. libX11 is not safe for concurrent
+    XDefineCursor on a shared Display, and pygame.display.get_wm_info() is
+    not safe off the SDL thread. Per-touch threads were wedging the X
+    pointer so SDL stopped synthesizing MOUSE* from the panel until restart.
+    """
+    thread = threading.current_thread().name
+    logger.info(
+        "Kiosk cursor hide reason=%s thread=%s sync=True",
+        reason,
+        thread,
+    )
+    _cursor_dbg(f"hide enter reason={reason} thread={thread} sync=True")
+    if reason in _PER_TOUCH_HIDE_REASONS:
+        logger.warning(
+            "Kiosk cursor: skipped per-touch hide reason=%s "
+            "(this path wedged SDL mouse emulation on fleet devices)",
+            reason,
+        )
+        return
     try:
         import pygame
 
         pygame.mouse.set_visible(False)
     except Exception:
         pass
-
-    def _x11_later() -> None:
+    with _HIDE_LOCK:
         try:
             hide_x11_cursor()
         except Exception:
             logger.debug("Could not hide X11 cursor", exc_info=True)
-
-    import threading
-
-    threading.Thread(target=_x11_later, name="hide-x11-cursor", daemon=True).start()
 
 
 def log_pointer_event(event: Any) -> None:

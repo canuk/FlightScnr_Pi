@@ -187,7 +187,8 @@ def flights_share_identity(a: dict, b: dict) -> bool:
 
 
 # FR24 zone positions often lag ADS-B by several km; allow a wider match when
-# altitude agrees and hard identities do not conflict.
+# hard identities do not conflict. Altitude is a cue, not a requirement, when
+# both sides share an ICAO type and one side has no callsign (departure climb).
 _CROSS_FEED_THRESHOLD_KM = 15.0
 _ALT_MATCH_FT = 500.0
 
@@ -239,12 +240,22 @@ def _callsign_keys(flight: dict) -> frozenset[str]:
     return frozenset(keys)
 
 
+def _normalized_type(flight: dict) -> str:
+    return "".join(str(flight.get("plane") or "").upper().split())
+
+
 def _types_compatible(a: dict, b: dict) -> bool:
-    type_a = "".join(str(a.get("plane") or "").upper().split())
-    type_b = "".join(str(b.get("plane") or "").upper().split())
+    type_a = _normalized_type(a)
+    type_b = _normalized_type(b)
     if type_a and type_b and type_a != type_b:
         return False
     return True
+
+
+def _same_aircraft_type(a: dict, b: dict) -> bool:
+    type_a = _normalized_type(a)
+    type_b = _normalized_type(b)
+    return bool(type_a and type_b and type_a == type_b)
 
 
 def position_merge_threshold_km(a: dict, b: dict, *, near_km: float = 1.2) -> float:
@@ -253,8 +264,6 @@ def position_merge_threshold_km(a: dict, b: dict, *, near_km: float = 1.2) -> fl
         return near_km
     if identity_hard_conflict(a, b):
         return near_km
-    if not _altitudes_match(a, b):
-        return near_km
     if not _types_compatible(a, b):
         return near_km
     keys_a = _callsign_keys(a)
@@ -262,6 +271,14 @@ def position_merge_threshold_km(a: dict, b: dict, *, near_km: float = 1.2) -> fl
     # Extended radius only when at least one side lacks a callsign, or they agree.
     # Disagreeing callsigns (QTR5Q vs N653ND) stay on the tight threshold.
     if keys_a and keys_b and keys_a.isdisjoint(keys_b):
+        return near_km
+    # Departure/climb: FR24 can sit at 600 ft near the runway while ADS-B is
+    # already at 2,000+ ft a few km out. Same ICAO type + a blank ident is
+    # enough to use the wide radius without an altitude gate.
+    blank_ident = not keys_a or not keys_b
+    if blank_ident and _same_aircraft_type(a, b):
+        return _CROSS_FEED_THRESHOLD_KM
+    if not _altitudes_match(a, b):
         return near_km
     return _CROSS_FEED_THRESHOLD_KM
 
@@ -290,9 +307,7 @@ def flights_match_by_position(
     # Tight proximity alone is enough (classic dual-feed overlap).
     if dist_km <= 0.45:
         return True
-    type_a = "".join(str(a.get("plane") or "").upper().split())
-    type_b = "".join(str(b.get("plane") or "").upper().split())
-    if type_a and type_b and type_a == type_b:
+    if _same_aircraft_type(a, b):
         return True
     if _altitudes_match(a, b):
         return True
@@ -424,15 +439,36 @@ def dedupe_flights(flights: list[dict], *, threshold_km: float = 1.2) -> list[di
                         flight, kept[idx], near_km=threshold_km
                     ):
                         return idx
-        # Wide cross-feed: blank-callsign ADS-B vs lagged FR24 (up to ~15 km).
-        if _needs_wide(flight) or _is_fr24(flight):
-            flight_fr24 = _is_fr24(flight)
+        # Wide cross-feed: blank-callsign vs lagged opposite feed (up to ~15 km).
+        # Identified ADS-B is kept off wide_idxs (avoids FR24×ADS-B O(n·m)), so
+        # also pair identified ADS-B with blank FR24 ghosts in both input orders.
+        flight_fr24 = _is_fr24(flight)
+        flight_blank = _needs_wide(flight)
+        if flight_blank or flight_fr24:
             for idx in wide_idxs:
                 if idx in checked:
                     continue
                 other = kept[idx]
                 if flight_fr24 == _is_fr24(other):
                     continue  # same feed — tight grid already covered
+                if flights_match_by_position(flight, other, near_km=threshold_km):
+                    return idx
+            if flight_fr24 and flight_blank:
+                for idx, other in enumerate(kept):
+                    if idx in checked:
+                        continue
+                    if _source_kind(other) != "adsb":
+                        continue
+                    checked.add(idx)
+                    if flights_match_by_position(flight, other, near_km=threshold_km):
+                        return idx
+        elif _source_kind(flight) == "adsb":
+            for idx in wide_idxs:
+                if idx in checked:
+                    continue
+                other = kept[idx]
+                if not _is_fr24(other) or _callsign_keys(other):
+                    continue
                 if flights_match_by_position(flight, other, near_km=threshold_km):
                     return idx
         return None

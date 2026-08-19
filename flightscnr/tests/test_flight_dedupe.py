@@ -204,6 +204,145 @@ class TestFlightDedupe(unittest.TestCase):
         self.assertEqual(out[0].get("plane"), "GLF5")
         self.assertEqual(out[0].get("icao_hex"), "A27ABC")
 
+    def test_dedupe_merges_blank_glf5_during_climb(self):
+        """KSNA departure: unlabeled GLF5 / 600 ft vs N888HE / 2,150 ft."""
+        from utilities import aircraft_alert
+
+        unlabeled = {
+            "callsign": "",
+            "registration": "",
+            "plane": "GLF5",
+            "plane_latitude": 33.676,
+            "plane_longitude": -117.868,
+            "altitude": 600,
+            "data_source": "fr24_grpc",
+        }
+        identified = {
+            "callsign": "N888HE",
+            "registration": "N888HE",
+            "plane": "GLF5",
+            "plane_latitude": 33.620,
+            "plane_longitude": -117.870,
+            "altitude": 2150,
+            "data_source": "adsb_fi",
+            "icao_hex": "ABC123",
+        }
+        for pair in ([unlabeled, identified], [identified, unlabeled]):
+            with self.subTest(order=[p.get("callsign") or "blank" for p in pair]):
+                with mock.patch.object(aircraft_alert.geo, "distance_km", return_value=6.2):
+                    out = aircraft_alert.dedupe_flights([dict(p) for p in pair])
+                self.assertEqual(len(out), 1)
+                merged = out[0]
+                self.assertEqual(merged.get("registration") or merged.get("callsign"), "N888HE")
+                self.assertEqual(merged.get("plane"), "GLF5")
+                self.assertEqual(merged.get("icao_hex"), "ABC123")
+                # Live ADS-B kinematics win over the lagged 600 ft ghost.
+                self.assertEqual(merged.get("altitude"), 2150)
+
+    def test_dedupe_merges_identified_fr24_with_blank_adsb_climb(self):
+        """Same climb lag when FR24 has the N-number and ADS-B is unlabeled."""
+        from utilities import aircraft_alert
+
+        fr24 = {
+            "callsign": "N888HE",
+            "registration": "N888HE",
+            "plane": "GLF5",
+            "plane_latitude": 33.676,
+            "plane_longitude": -117.868,
+            "altitude": 600,
+            "data_source": "fr24_grpc",
+        }
+        adsb = {
+            "callsign": "",
+            "plane": "GLF5",
+            "plane_latitude": 33.620,
+            "plane_longitude": -117.870,
+            "altitude": 2150,
+            "data_source": "adsb_fi",
+            "icao_hex": "ABC123",
+        }
+        with mock.patch.object(aircraft_alert.geo, "distance_km", return_value=6.2):
+            out = aircraft_alert.dedupe_flights([fr24, adsb])
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0].get("registration") or out[0].get("callsign"), "N888HE")
+        self.assertEqual(out[0].get("altitude"), 2150)
+
+    def test_dedupe_keeps_two_identified_glf5s_during_climb(self):
+        """Two labeled Gulfstreams a few km apart must not collapse."""
+        from utilities import aircraft_alert
+
+        a = {
+            "callsign": "N888HE",
+            "registration": "N888HE",
+            "plane": "GLF5",
+            "plane_latitude": 33.676,
+            "plane_longitude": -117.868,
+            "altitude": 600,
+            "data_source": "fr24_grpc",
+        }
+        b = {
+            "callsign": "N999HE",
+            "registration": "N999HE",
+            "plane": "GLF5",
+            "plane_latitude": 33.620,
+            "plane_longitude": -117.870,
+            "altitude": 2150,
+            "data_source": "adsb_fi",
+            "icao_hex": "DEF456",
+        }
+        with mock.patch.object(aircraft_alert.geo, "distance_km", return_value=6.2):
+            out = aircraft_alert.dedupe_flights([a, b])
+        self.assertEqual(len(out), 2)
+
+    def test_dedupe_keeps_blank_climb_ghost_when_types_differ(self):
+        from utilities import aircraft_alert
+
+        unlabeled = {
+            "callsign": "",
+            "plane": "C172",
+            "plane_latitude": 33.676,
+            "plane_longitude": -117.868,
+            "altitude": 600,
+            "data_source": "fr24_grpc",
+        }
+        identified = {
+            "callsign": "N888HE",
+            "plane": "GLF5",
+            "plane_latitude": 33.620,
+            "plane_longitude": -117.870,
+            "altitude": 2150,
+            "data_source": "adsb_fi",
+            "icao_hex": "ABC123",
+        }
+        with mock.patch.object(aircraft_alert.geo, "distance_km", return_value=6.2):
+            out = aircraft_alert.dedupe_flights([unlabeled, identified])
+        self.assertEqual(len(out), 2)
+
+    def test_dedupe_keeps_blank_untyped_climb_ghost(self):
+        """Empty type + altitude mismatch must not wide-merge with a labeled jet."""
+        from utilities import aircraft_alert
+
+        unlabeled = {
+            "callsign": "",
+            "plane": "",
+            "plane_latitude": 33.676,
+            "plane_longitude": -117.868,
+            "altitude": 600,
+            "data_source": "fr24_grpc",
+        }
+        identified = {
+            "callsign": "N888HE",
+            "plane": "GLF5",
+            "plane_latitude": 33.620,
+            "plane_longitude": -117.870,
+            "altitude": 2150,
+            "data_source": "adsb_fi",
+            "icao_hex": "ABC123",
+        }
+        with mock.patch.object(aircraft_alert.geo, "distance_km", return_value=6.2):
+            out = aircraft_alert.dedupe_flights([unlabeled, identified])
+        self.assertEqual(len(out), 2)
+
     def test_cross_feed_wide_merge_requires_fr24_data_source(self):
         """Without data_source on the FR24 shell, 15 km lag merge must not run."""
         from utilities import aircraft_alert
