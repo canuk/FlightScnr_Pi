@@ -82,10 +82,13 @@ class TestHideKioskCursor(unittest.TestCase):
         self._prev_log = x11_kiosk._CURSOR_LOG
         x11_kiosk._BLANK_CURSOR = None
         x11_kiosk._CURSOR_LOG = ""
+        self._prev_retries = list(x11_kiosk._RETRY_DUE)
+        x11_kiosk._RETRY_DUE.clear()
 
     def tearDown(self):
         self._x11_kiosk._BLANK_CURSOR = self._prev_cursor
         self._x11_kiosk._CURSOR_LOG = self._prev_log
+        self._x11_kiosk._RETRY_DUE[:] = self._prev_retries
 
     def test_hide_kiosk_cursor_hides_pygame_and_x11(self):
         x11_kiosk = self._x11_kiosk
@@ -125,7 +128,8 @@ class TestHideKioskCursor(unittest.TestCase):
         app_src = (
             Path(__file__).resolve().parents[1] / "display" / "round_touch" / "app.py"
         ).read_text(encoding="utf-8")
-        self.assertIn("init-only sync hide", app_src)
+        self.assertIn("SDL-thread hide only", app_src)
+        self.assertIn("tick_kiosk_chrome", app_src)
         for reason in ("pointer_down", "pointer_up", "pointer_left_window"):
             self.assertNotIn(f'reason="{reason}"', app_src)
             self.assertNotIn(f"reason='{reason}'", app_src)
@@ -158,7 +162,7 @@ class TestHideKioskCursor(unittest.TestCase):
             os.environ.pop("FLIGHTSCNR_CURSOR_DEBUG", None)
             self.assertFalse(x11_kiosk.cursor_debug_enabled())
 
-    def test_hide_x11_cursor_defines_on_root_window_and_frame(self):
+    def test_hide_x11_cursor_defines_on_window_and_frame_not_root(self):
         x11_kiosk = self._x11_kiosk
         x11 = mock.Mock()
         x11.XDefaultRootWindow.return_value = 1
@@ -171,7 +175,8 @@ class TestHideKioskCursor(unittest.TestCase):
              mock.patch("pygame.display.get_wm_info", return_value={"window": 2}):
             self.assertTrue(x11_kiosk.hide_x11_cursor())
         defined = [call.args[1] for call in x11.XDefineCursor.call_args_list]
-        self.assertEqual(defined, [1, 2, 3])
+        self.assertEqual(defined, [2, 3])
+        x11.XDefaultRootWindow.assert_not_called()
         xfixes.assert_not_called()
 
     def test_confine_does_not_call_xfixes(self):
@@ -188,6 +193,54 @@ class TestHideKioskCursor(unittest.TestCase):
             self.assertTrue(x11_kiosk.hide_x11_cursor(confine=True))
         xfixes.assert_not_called()
         confine.assert_not_called()
+
+    def test_schedule_undecorate_retries_does_not_start_timers(self):
+        x11_kiosk = self._x11_kiosk
+        with mock.patch("threading.Timer") as timer_cls:
+            x11_kiosk.schedule_undecorate_retries((0.5, 2.0, 8.0))
+        timer_cls.assert_not_called()
+        self.assertEqual(len(x11_kiosk._RETRY_DUE), 3)
+
+    def test_tick_kiosk_chrome_runs_due_retry_on_caller(self):
+        x11_kiosk = self._x11_kiosk
+        x11_kiosk.schedule_undecorate_retries((0.0,))
+        with mock.patch.object(x11_kiosk, "undecorate_pygame_window") as und, \
+             mock.patch.object(x11_kiosk, "hide_kiosk_cursor") as hide:
+            x11_kiosk.tick_kiosk_chrome()
+        und.assert_called_once()
+        hide.assert_called_once()
+        self.assertEqual(hide.call_args.kwargs["reason"], "undecorate_retry_0s")
+        self.assertEqual(x11_kiosk._RETRY_DUE, [])
+
+    def test_hide_kiosk_cursor_queues_off_main_thread(self):
+        import threading
+
+        x11_kiosk = self._x11_kiosk
+        called = {"x11": False}
+
+        def worker():
+            with mock.patch.object(
+                x11_kiosk, "hide_x11_cursor", side_effect=lambda: called.__setitem__("x11", True)
+            ), mock.patch("pygame.mouse.set_visible"):
+                x11_kiosk.hide_kiosk_cursor(reason="undecorate_retry_0.5s")
+
+        thread = threading.Thread(target=worker)
+        thread.start()
+        thread.join()
+        self.assertFalse(called["x11"])
+        self.assertEqual(len(x11_kiosk._RETRY_DUE), 1)
+        self.assertEqual(x11_kiosk._RETRY_DUE[0][1], "undecorate_retry_0.5s")
+
+    def test_schedule_source_has_no_timer(self):
+        from pathlib import Path
+
+        src = (
+            Path(__file__).resolve().parents[1] / "utilities" / "x11_kiosk.py"
+        ).read_text(encoding="utf-8")
+        self.assertNotIn("threading.Timer(", src)
+        self.assertNotIn("timer.daemon", src)
+        self.assertIn("tick_kiosk_chrome", src)
+        self.assertIn("queued on the SDL thread (no Timer)", src)
 
 
 if __name__ == "__main__":

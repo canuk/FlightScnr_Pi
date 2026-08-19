@@ -183,10 +183,10 @@ class RoundTouchDisplay:
         self._prev_timeout_ring_frac: float | None = None
         self._display_focus = 0
         self._system_confirm: str | None = None
-        # ATC settings list picker: "airport" | "channel" | "output" | None.
+        # Settings list picker kind (ATC + other multi-option rows), or None.
         self._atc_picker: str | None = None
         self._atc_picker_scroll = nav.ScrollState()
-        # Finger Y while dragging inside the ATC picker (continuous scroll).
+        # Finger Y while dragging inside the list picker (continuous scroll).
         self._atc_picker_drag_y: int | None = None
         # Row id under finger before the gesture becomes a scroll.
         self._atc_picker_pressed_id: str | None = None
@@ -1344,26 +1344,16 @@ class RoundTouchDisplay:
             return
         self._display_focus = row
         if action == "traffic":
-            settings.cycle_traffic_mode()
-            self._last_ais_poll = 0.0
-            self._tick_ais()
-            self._refresh_flights()
+            self._open_atc_picker("traffic")
         elif action == "brightness":
             # Brightness is a drag slider; taps are handled via brightness_slider_at.
             return
         elif action == "units":
-            settings.toggle_distance_units()
+            self._open_atc_picker("units")
         elif action == "range":
-            settings.cycle_scale()
-            scale.select(settings.scale_index())
-            map_bg.request_background()
-            rainviewer_overlay.request_overlay()
-            wildfire_overlay.invalidate()
-            wildfire_overlay.request_refresh(force=True)
-            earthquake_overlay.invalidate()
-            earthquake_overlay.request_refresh(force=True)
+            self._open_atc_picker("range")
         elif action == "rotate":
-            settings.cycle_display_rotation()
+            self._open_atc_picker("rotate")
         elif action == "compass":
             settings.toggle_compass_rose()
         elif action == "range_rings":
@@ -1373,18 +1363,17 @@ class RoundTouchDisplay:
         elif action == "recenter":
             self._begin_map_pan()
         elif action == "favourite":
-            self._cycle_favourite_location()
+            self._open_atc_picker("favourite")
         elif action == "aircraft_tag":
-            settings.cycle_traffic_labels()
-            radar.invalidate_frame_layer()
+            self._open_atc_picker("aircraft_tag")
         elif action == "min_height":
-            settings.cycle_min_height()
+            self._open_atc_picker("min_height")
         elif action == "max_height":
-            settings.cycle_max_height()
+            self._open_atc_picker("max_height")
         elif action == "aircraft_min_speed":
-            settings.cycle_aircraft_min_speed()
+            self._open_atc_picker("aircraft_min_speed")
         elif action == "vessel_min_speed":
-            settings.cycle_vessel_min_speed()
+            self._open_atc_picker("vessel_min_speed")
         elif action == "sweep":
             settings.toggle_sweep_line()
         elif action == "tag_leaders":
@@ -1420,10 +1409,7 @@ class RoundTouchDisplay:
         elif action == "ground_vehicles":
             settings.toggle_show_ground_vehicles()
         elif action == "map_style":
-            settings.cycle_map_style()
-            from display.round_touch import airport_overlay
-
-            airport_overlay.invalidate()
+            self._open_atc_picker("map_style")
         elif action == "vfr_opacity":
             # VFR opacity is a drag slider; taps are handled via vfr_opacity_slider_at.
             return
@@ -1448,11 +1434,9 @@ class RoundTouchDisplay:
             settings.toggle_radar_hud_enabled()
             radar.invalidate_frame_layer()
         elif action == "hud_position":
-            settings.toggle_radar_hud_position()
-            radar.invalidate_frame_layer()
+            self._open_atc_picker("hud_position")
         elif action == "hud_dark":
-            settings.toggle_radar_hud_dark()
-            radar.invalidate_frame_layer()
+            self._open_atc_picker("hud_dark")
         elif action == "hud_opacity":
             return
         elif action in (
@@ -1473,9 +1457,9 @@ class RoundTouchDisplay:
         elif action == "quiet":
             settings.set_atc_quiet_hours_enabled(not settings.atc_quiet_hours_enabled())
         elif action == "quiet_start":
-            settings.cycle_atc_quiet_time("start")
+            self._open_atc_picker("quiet_start")
         elif action == "quiet_end":
-            settings.cycle_atc_quiet_time("end")
+            self._open_atc_picker("quiet_end")
         elif action == "airport":
             self._open_atc_picker("airport")
         elif action == "channel":
@@ -1487,7 +1471,7 @@ class RoundTouchDisplay:
 
     def _open_atc_picker(self, kind: str) -> None:
         kind = str(kind or "").strip().lower()
-        if kind not in ("airport", "channel", "output"):
+        if kind not in info.LIST_PICKER_KINDS:
             return
         if kind == "channel" and not settings.atc_airport():
             return
@@ -1612,6 +1596,121 @@ class RoundTouchDisplay:
             self._select_atc_channel(value)
         elif kind == "output":
             self._select_audio_output(value)
+        else:
+            self._apply_list_picker_choice(kind, value)
+
+    def _apply_list_picker_choice(self, kind: str | None, value: str) -> None:
+        """Apply a non-ATC settings picker row."""
+        kind = str(kind or "").strip().lower()
+        choice = str(value or "").strip()
+        if not kind or not choice:
+            return
+        if kind == "favourite":
+            self._select_favourite_location(choice)
+            return
+        if kind == "range":
+            try:
+                self._apply_radar_range(int(choice))
+            except (TypeError, ValueError):
+                return
+            return
+        if kind == "units":
+            settings.set_unit_preset(choice)
+            return
+        if kind == "rotate":
+            try:
+                settings.set_display_rotation(int(choice))
+            except (TypeError, ValueError):
+                return
+            return
+        if kind == "aircraft_tag":
+            settings.set_traffic_labels(choice)
+            radar.invalidate_frame_layer()
+            return
+        if kind == "min_height":
+            try:
+                settings.set_min_height_ft(int(choice))
+            except (TypeError, ValueError):
+                return
+            return
+        if kind == "max_height":
+            try:
+                settings.set_max_height_ft(int(choice))
+            except (TypeError, ValueError):
+                return
+            return
+        if kind == "aircraft_min_speed":
+            try:
+                settings.set_aircraft_min_speed_kt(int(choice))
+            except (TypeError, ValueError):
+                return
+            return
+        if kind == "vessel_min_speed":
+            try:
+                settings.set_vessel_min_speed_kt(int(choice))
+            except (TypeError, ValueError):
+                return
+            return
+        if kind == "map_style":
+            settings.set_map_style(choice)
+            from display.round_touch import airport_overlay
+
+            airport_overlay.invalidate()
+            return
+        if kind == "traffic":
+            settings.set_traffic_mode(choice)
+            self._last_ais_poll = 0.0
+            self._tick_ais()
+            self._refresh_flights()
+            return
+        if kind == "quiet_start":
+            settings.set_atc_quiet_start(choice)
+            return
+        if kind == "quiet_end":
+            settings.set_atc_quiet_end(choice)
+            return
+        if kind == "hud_position":
+            settings.set_radar_hud_position(choice)
+            radar.invalidate_frame_layer()
+            return
+        if kind == "hud_dark":
+            settings.set_radar_hud_dark(choice == "dark")
+            radar.invalidate_frame_layer()
+
+    def _apply_radar_range(self, index: int) -> None:
+        idx = max(0, min(int(index), len(scale.SCALE_BANDS) - 1))
+        if idx == settings.scale_index():
+            scale.select(idx)
+            return
+        settings.set_scale_index(idx)
+        scale.select(idx)
+        map_bg.request_background()
+        rainviewer_overlay.request_overlay()
+        wildfire_overlay.invalidate()
+        wildfire_overlay.request_refresh(force=True)
+        earthquake_overlay.invalidate()
+        earthquake_overlay.request_refresh(force=True)
+
+    def _select_favourite_location(self, value: str) -> None:
+        from utilities import favourite_locations
+
+        choice = str(value or "").strip()
+        if not choice or choice == "custom":
+            return
+        if choice == "home":
+            if favourite_locations.active_index() == favourite_locations.HOME_INDEX:
+                return
+            favourite_locations.clear_active()
+            lat, lon = favourite_locations.home_coords()
+            self._apply_favourite_center(lat, lon)
+            return
+        current = favourite_locations.active_favorite()
+        if current and str(current.get("id") or "") == choice:
+            return
+        entry = favourite_locations.select_location(choice)
+        if not entry:
+            return
+        self._apply_favourite_center(float(entry["lat"]), float(entry["lon"]))
 
     def _apply_atc_volume_slider(self, x: int, *, persist: bool = True) -> bool:
         from utilities import atc_audio
@@ -2053,15 +2152,11 @@ class RoundTouchDisplay:
         else:
             favourite_locations.set_custom_active()
 
-    def _cycle_favourite_location(self):
-        """Touch cycle: Home → favourites → Home; persist so reboot keeps it."""
+    def _apply_favourite_center(self, lat: float, lon: float) -> None:
+        """Move the live radar center and refresh overlays / weather."""
         from config import set_location_home
         from display.round_touch import weather_data
-        from utilities import favourite_locations
 
-        if not favourite_locations.locations():
-            return
-        _idx, lat, lon, _label = favourite_locations.cycle_active()
         set_location_home(lat, lon)
         map_bg.invalidate()
         map_bg.prewarm_all_scales()
@@ -2077,13 +2172,22 @@ class RoundTouchDisplay:
             try:
                 weather_data.after_radar_center_changed(lat, lon)
             except Exception:
-                logger.exception("Weather/timezone refresh after favourite cycle failed")
+                logger.exception("Weather/timezone refresh after location change failed")
             else:
                 self._weather_redraw_pending = True
 
         Thread(target=_after_favourite, daemon=True).start()
         self.overhead.grab_data()
         self._refresh_flights()
+
+    def _cycle_favourite_location(self):
+        """Touch cycle: Home → favourites → Home; persist so reboot keeps it."""
+        from utilities import favourite_locations
+
+        if not favourite_locations.locations():
+            return
+        _idx, lat, lon, _label = favourite_locations.cycle_active()
+        self._apply_favourite_center(lat, lon)
 
     def _intentional_hold_active(self) -> bool:
         """Ghost filter: allow still finger during long-press candidate / pan."""
@@ -2341,14 +2445,7 @@ class RoundTouchDisplay:
         new_idx = max(0, min(len(scale.SCALE_BANDS) - 1, idx + delta))
         if new_idx == idx:
             return
-        settings.set_scale_index(new_idx)
-        scale.select(new_idx)
-        map_bg.request_background()
-        rainviewer_overlay.request_overlay()
-        wildfire_overlay.invalidate()
-        wildfire_overlay.request_refresh(force=True)
-        earthquake_overlay.invalidate()
-        earthquake_overlay.request_refresh(force=True)
+        self._apply_radar_range(new_idx)
         airport_overlay.clear_callout()
         self._safe_draw()
 
@@ -2617,11 +2714,7 @@ class RoundTouchDisplay:
     def _apply_scroll_delta(self, delta: int):
         if not delta:
             return
-        if (
-            self.screen == SCREEN_SETTINGS
-            and self.settings_page == info.PAGE_ATC
-            and self._atc_picker
-        ):
+        if self.screen == SCREEN_SETTINGS and self._atc_picker:
             self._atc_picker_scroll.step(delta)
         else:
             self._scroll.step(delta)
@@ -2629,11 +2722,7 @@ class RoundTouchDisplay:
         self._safe_draw()
 
     def _handle_scroll_drag(self):
-        if (
-            self.screen == SCREEN_SETTINGS
-            and self.settings_page == info.PAGE_ATC
-            and self._atc_picker
-        ):
+        if self.screen == SCREEN_SETTINGS and self._atc_picker:
             # input_handler only accumulates scroll_dy before the swipe
             # threshold, then converts the rest to a swipe (which snapped the
             # picker back). Track finger Y for the whole drag instead.
@@ -3907,9 +3996,9 @@ class RoundTouchDisplay:
             logger.warning("FLIGHTSCNR_PAUSE_GRAB=1 — overhead pipeline disabled")
         touch_debug.log_startup()
         logger.info(
-            "Kiosk cursor: init-only sync hide (no per-touch X11 threads). "
+            "Kiosk cursor: SDL-thread hide only (no Timer/per-touch X11). "
             "Confirm in journalctl: 'Kiosk cursor hide reason=app_init' "
-            "and 'sync=True'. "
+            "thread=MainThread, and 'retries queued on the SDL thread'. "
             "Set FLIGHTSCNR_CURSOR_DEBUG=1 only to trace the desktop arrow."
         )
         if x11_kiosk.cursor_debug_enabled():
@@ -3931,6 +4020,7 @@ class RoundTouchDisplay:
 
         try:
             while running:
+                x11_kiosk.tick_kiosk_chrome()
                 if (
                     not pinch_diag_logged
                     and time.time() >= pinch_diag_deadline
