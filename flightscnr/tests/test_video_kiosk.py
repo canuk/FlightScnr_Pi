@@ -79,19 +79,84 @@ class TestHideKioskCursor(unittest.TestCase):
 
         self._x11_kiosk = x11_kiosk
         self._prev_cursor = x11_kiosk._BLANK_CURSOR
+        self._prev_log = x11_kiosk._CURSOR_LOG
         x11_kiosk._BLANK_CURSOR = None
+        x11_kiosk._CURSOR_LOG = ""
 
     def tearDown(self):
         self._x11_kiosk._BLANK_CURSOR = self._prev_cursor
+        self._x11_kiosk._CURSOR_LOG = self._prev_log
 
     def test_hide_kiosk_cursor_hides_pygame_and_x11(self):
         x11_kiosk = self._x11_kiosk
         with mock.patch("pygame.mouse.set_visible") as set_visible, \
-             mock.patch("threading.Thread") as thread_cls:
-            thread_cls.return_value = mock.Mock()
-            x11_kiosk.hide_kiosk_cursor(reason="test")
+             mock.patch.object(x11_kiosk, "hide_x11_cursor") as hide_x11, \
+             mock.patch("threading.Thread") as thread_cls, \
+             mock.patch.object(x11_kiosk.logger, "info") as info:
+            x11_kiosk.hide_kiosk_cursor(reason="app_init")
         set_visible.assert_called_with(False)
-        thread_cls.assert_called()
+        hide_x11.assert_called_once()
+        thread_cls.assert_not_called()
+        info.assert_called()
+        fmt, reason, thread_name = info.call_args[0][:3]
+        self.assertIn("Kiosk cursor hide reason=%s", fmt)
+        self.assertIn("sync=True", fmt)
+        self.assertEqual(reason, "app_init")
+        self.assertTrue(thread_name)
+
+    def test_per_touch_hide_is_skipped(self):
+        """pointer_down/up must not talk to X11 — that wedged fleet touch."""
+        x11_kiosk = self._x11_kiosk
+        with mock.patch("pygame.mouse.set_visible") as set_visible, \
+             mock.patch.object(x11_kiosk, "hide_x11_cursor") as hide_x11, \
+             mock.patch.object(x11_kiosk.logger, "warning") as warn, \
+             mock.patch.object(x11_kiosk.logger, "info"):
+            x11_kiosk.hide_kiosk_cursor(reason="pointer_down")
+            x11_kiosk.hide_kiosk_cursor(reason="pointer_up")
+        hide_x11.assert_not_called()
+        set_visible.assert_not_called()
+        self.assertGreaterEqual(warn.call_count, 2)
+        self.assertIn("skipped per-touch", warn.call_args_list[0][0][0])
+
+    def test_event_loop_does_not_hide_cursor_on_touch(self):
+        """Regression: 8.15.1 hid on every FINGER/MOUSE down/up via a worker thread."""
+        from pathlib import Path
+
+        app_src = (
+            Path(__file__).resolve().parents[1] / "display" / "round_touch" / "app.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn("init-only sync hide", app_src)
+        for reason in ("pointer_down", "pointer_up", "pointer_left_window"):
+            self.assertNotIn(f'reason="{reason}"', app_src)
+            self.assertNotIn(f"reason='{reason}'", app_src)
+
+    def test_log_pointer_event_silent_when_debug_off(self):
+        x11_kiosk = self._x11_kiosk
+        event = mock.Mock()
+        event.type = 1024
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("FLIGHTSCNR_CURSOR_DEBUG", None)
+            with mock.patch.object(x11_kiosk.logger, "info") as info:
+                x11_kiosk.log_pointer_event(event)
+        info.assert_not_called()
+
+    def test_cursor_log_defaults_empty(self):
+        from pathlib import Path
+
+        src = (
+            Path(__file__).resolve().parents[1] / "utilities" / "x11_kiosk.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            '_CURSOR_LOG = os.environ.get("FLIGHTSCNR_CURSOR_LOG", "").strip()',
+            src,
+        )
+        self.assertNotIn('"/tmp/flightscnr-cursor.log"', src)
+
+    def test_cursor_debug_defaults_off(self):
+        x11_kiosk = self._x11_kiosk
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("FLIGHTSCNR_CURSOR_DEBUG", None)
+            self.assertFalse(x11_kiosk.cursor_debug_enabled())
 
     def test_hide_x11_cursor_defines_on_root_window_and_frame(self):
         x11_kiosk = self._x11_kiosk
