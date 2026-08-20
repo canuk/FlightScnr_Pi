@@ -1147,6 +1147,25 @@ class RoundTouchDisplay:
             except Exception:
                 logger.exception("Could not render error screen")
 
+    def _maybe_auto_ota(self) -> None:
+        """Install a scheduled / off-hours update when the panel is idle."""
+        if self.screen not in (SCREEN_RADAR, SCREEN_CLOCK, SCREEN_FORECAST):
+            return
+        try:
+            from utilities import atc_audio, updater
+
+            idle_s = time.time() - float(self._secondary_activity or 0.0)
+            result = updater.maybe_start_scheduled_update(
+                idle_s=idle_s,
+                atc_playing=bool(atc_audio.is_playing()),
+            )
+        except Exception:
+            logger.debug("Scheduled OTA check failed", exc_info=True)
+            return
+        if result and result.get("ok"):
+            update_bubble.invalidate_cache()
+            radar.invalidate_frame_layer()
+
     def _note_activity(self):
         self._secondary_activity = time.time()
 
@@ -3333,6 +3352,10 @@ class RoundTouchDisplay:
                         self._note_activity()
                         radar.invalidate_frame_layer()
                         self._safe_draw()
+                    elif bubble_action == "tonight":
+                        self._note_activity()
+                        radar.invalidate_frame_layer()
+                        self._safe_draw()
                     elif bubble_action == "progress":
                         # In-progress bubble is not dismissible; ignore underlying taps.
                         self._note_activity()
@@ -4030,6 +4053,7 @@ class RoundTouchDisplay:
         running = True
         last_data_poll = 0
         last_location_check = 0
+        last_ota_auto = 0.0
         pinch_diag_deadline = time.time() + 25.0
         pinch_diag_logged = False
         try:
@@ -4287,6 +4311,11 @@ class RoundTouchDisplay:
                         self._maybe_reload_location()
                     self._loop_stage("loop_location", _lt)
                     last_location_check = now
+
+                if now - last_ota_auto >= 30.0:
+                    if self._session_unlocked:
+                        self._maybe_auto_ota()
+                    last_ota_auto = now
 
                 if now - self._last_settings_reload >= 0.5:
                     _lt = time.perf_counter()
