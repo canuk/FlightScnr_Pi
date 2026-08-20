@@ -2079,6 +2079,7 @@ class RoundTouchDisplay:
         self._pan_drag_start = None
         self._pan_drag_was_active = False
         airport_overlay.clear_callout()
+        radar.clear_location_toast()
         self._long_press_pan.clear_candidate()
         if from_long_press:
             self._long_press_pan.begin_from_long_press()
@@ -2198,15 +2199,42 @@ class RoundTouchDisplay:
         Thread(target=_after_favourite, daemon=True).start()
         self.overhead.grab_data()
         self._refresh_flights()
+        airport_overlay.invalidate()
+        radar.invalidate_frame_layer()
 
-    def _cycle_favourite_location(self):
+    def _cycle_favourite_location(self) -> bool:
         """Touch cycle: Home → favourites → Home; persist so reboot keeps it."""
         from utilities import favourite_locations
 
         if not favourite_locations.locations():
-            return
-        _idx, lat, lon, _label = favourite_locations.cycle_active()
+            return False
+        _idx, lat, lon, label = favourite_locations.cycle_active()
         self._apply_favourite_center(lat, lon)
+        radar.show_location_toast(label)
+        return True
+
+    def _radar_swipe_committed(self, swipe_start, swipe_end) -> bool:
+        """True when a radar swipe traveled far enough to mean navigation."""
+        if not swipe_start or not swipe_end:
+            return False
+        travel = math.hypot(
+            swipe_end[0] - swipe_start[0],
+            swipe_end[1] - swipe_start[1],
+        )
+        return travel >= input_handler.gesture_threshold_px()
+
+    def _open_radar_swipe_target(self, swipe_start, swipe_end) -> bool:
+        """Treat a short radar flick as a tap on aircraft / fire / quake."""
+        opened = False
+        if swipe_end:
+            opened = self._open_flight_or_fire_at(swipe_end[0], swipe_end[1])
+        if not opened and swipe_start and swipe_end:
+            opened = self._open_flight_or_fire_at(
+                swipe_start[0], swipe_start[1], swipe_end[0], swipe_end[1],
+            )
+        elif not opened and swipe_start:
+            opened = self._open_flight_or_fire_at(swipe_start[0], swipe_start[1])
+        return opened
 
     def _intentional_hold_active(self) -> bool:
         """Ghost filter: allow still finger during long-press candidate / pan."""
@@ -3184,32 +3212,24 @@ class RoundTouchDisplay:
         ):
             return
 
-        # Tracked sits left of radar: swipe right on radar opens it; swipe left returns.
+        # Tracked sits left of radar: swipe right on radar opens it; swipe left
+        # cycles favorite locations (Home → saved → Home). Short flicks still
+        # pick aircraft / fires like a tap.
         if swipe == input_handler.SWIPE_RIGHT and self.screen == SCREEN_RADAR:
-            travel = 0.0
-            if swipe_start and swipe_end:
-                travel = math.hypot(
-                    swipe_end[0] - swipe_start[0],
-                    swipe_end[1] - swipe_start[1],
-                )
-            threshold = input_handler.gesture_threshold_px()
-            opened = False
-            if travel >= threshold:
+            if self._radar_swipe_committed(swipe_start, swipe_end):
                 self._open_screen(SCREEN_TRACKED)
                 self._scroll.reset()
                 self._note_activity()
                 self._safe_draw()
-            else:
-                if swipe_end:
-                    opened = self._open_flight_or_fire_at(swipe_end[0], swipe_end[1])
-                if not opened and swipe_start and swipe_end:
-                    opened = self._open_flight_or_fire_at(
-                        swipe_start[0], swipe_start[1], swipe_end[0], swipe_end[1],
-                    )
-                elif not opened and swipe_start:
-                    opened = self._open_flight_or_fire_at(swipe_start[0], swipe_start[1])
-                if opened:
+            elif self._open_radar_swipe_target(swipe_start, swipe_end):
+                self._safe_draw()
+        elif swipe == input_handler.SWIPE_LEFT and self.screen == SCREEN_RADAR:
+            if self._radar_swipe_committed(swipe_start, swipe_end):
+                if self._cycle_favourite_location():
+                    self._note_activity()
                     self._safe_draw()
+            elif self._open_radar_swipe_target(swipe_start, swipe_end):
+                self._safe_draw()
         elif swipe == input_handler.SWIPE_LEFT and self.screen == SCREEN_TRACKED:
             self._return_to_radar()
             self._safe_draw()
@@ -3240,7 +3260,7 @@ class RoundTouchDisplay:
             self._return_to_radar()
             self._safe_draw()
         elif swipe == input_handler.SWIPE_LEFT and self.screen == SCREEN_DETAILS:
-            # Settings sits beside About; Radar swipe-left stays free for apps.
+            # Settings sits beside About; radar swipe-left cycles favorites.
             self._open_screen(SCREEN_SETTINGS)
             self.settings_page = info.PAGE_MAIN
             self._note_activity()
