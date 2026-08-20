@@ -300,6 +300,10 @@ def _compose_basemap(
 ) -> pygame.Surface | None:
     """Fetch and stitch map tiles for the route bounding box."""
     style = map_bg.normalize_map_style(style)
+    if style == "black":
+        surf = pygame.Surface((max(1, int(width)), max(1, int(height))))
+        surf.fill(map_bg.FLAT_BLACK)
+        return surf
     zoom = _pick_zoom(min_lat, max_lat, min_lon, max_lon, width, height, style)
     # VFR sectionals can't cover long-haul routes at usable zoom — fall back.
     if zoom is None and style == "vfr":
@@ -389,6 +393,11 @@ def _request_basemap(
         hit = _basemap_cache.get(key)
         if hit is not None:
             return hit
+        if style == "black":
+            surf = pygame.Surface((max(1, int(width)), max(1, int(height))))
+            surf.fill(map_bg.FLAT_BLACK)
+            _basemap_cache[key] = surf
+            return surf
         if key in _basemap_inflight:
             return None
         _basemap_inflight.add(key)
@@ -536,11 +545,12 @@ def render_route_map(data: dict, width: int, height: int) -> pygame.Surface | No
     surf.fill(_PANEL_BG)
     if basemap is not None:
         surf.blit(basemap, (map_left, map_top))
-        # Mild darken so path/labels pop (lighter styles need less).
-        dim = pygame.Surface((map_w, map_h), pygame.SRCALPHA)
-        dim_alpha = 40 if style in ("light", "voyager", "vfr") else 70
-        dim.fill((0, 0, 0, dim_alpha))
-        surf.blit(dim, (map_left, map_top))
+        if style != "black":
+            # Mild darken so path/labels pop (lighter styles need less).
+            dim = pygame.Surface((map_w, map_h), pygame.SRCALPHA)
+            dim_alpha = 40 if style in ("light", "voyager", "vfr") else 70
+            dim.fill((0, 0, 0, dim_alpha))
+            surf.blit(dim, (map_left, map_top))
     # Border: darker on light maps for contrast.
     border = (40, 60, 80) if style in ("light", "voyager") else _PANEL_BORDER
     pygame.draw.rect(

@@ -191,11 +191,12 @@
             <label for="map_style">Map style</label>
             <select id="map_style">
                 <option value="dark">Dark (CARTO)</option>
+                <option value="black">Flat black</option>
                 <option value="light">Light (CARTO)</option>
                 <option value="voyager">Voyager (CARTO)</option>
                 <option value="vfr">VFR sectional (FAA)</option>
             </select>
-            <p class="hint">VFR sectionals are free public-domain FAA charts (US coverage). Outside the US, use dark, light, or Voyager.</p>
+            <p class="hint">VFR sectionals are free public-domain FAA charts (US coverage). Outside the US, use dark, light, Voyager, or flat black.</p>
             <label for="vfr_opacity">VFR map opacity <span id="vfr_opacity_label">45%</span></label>
             <input id="vfr_opacity" type="range" min="15" max="100" step="1" value="45">
             <p class="hint">How strong the VFR chart appears under traffic (lower = paler). Applies when map style is VFR.</p>

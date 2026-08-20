@@ -485,12 +485,7 @@ def _build_settings_picker_items(kind: str) -> list[dict]:
         return _enum_picker_items(
             settings.MAP_STYLES,
             settings.map_style(),
-            lambda style: {
-                "dark": "Dark",
-                "light": "Light",
-                "voyager": "Voyager",
-                "vfr": "VFR Sectional",
-            }.get(style, str(style)),
+            lambda style: settings.MAP_STYLE_LABELS.get(style, str(style)),
         )
     if kind == "traffic":
         return _enum_picker_items(

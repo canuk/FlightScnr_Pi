@@ -11,6 +11,7 @@
 
 Styles (settings map_style, fallback RADAR_MAP_PROVIDER):
   dark — CARTO Dark Matter, no labels (default)
+  black — solid black circle (no tiles)
   light — CARTO Positron light, no labels
   voyager — CARTO Voyager (color street map), no labels
   vfr  — FAA VFR sectional charts (US coverage, public domain)
@@ -58,7 +59,8 @@ TILE_SIZE = 256
 EARTH_RADIUS_M = 6378137.0
 
 # UI-facing styles (Options / portal cycle). Legacy "osm" remains via env.
-MAP_STYLES = ("dark", "light", "voyager", "vfr")
+MAP_STYLES = ("dark", "black", "light", "voyager", "vfr")
+FLAT_BLACK = (0, 0, 0)
 
 OSM_TILE_URL = "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
 CARTO_SUBDOMAINS = "abcd"
@@ -94,6 +96,8 @@ def normalize_map_style(raw: str | None) -> str:
     provider = (raw or "dark").strip().lower() or "dark"
     if provider in ("dark", "carto", "cartodb", "carto_dark", "dark_matter"):
         return "dark"
+    if provider in ("black", "flat", "flat_black", "solid_black"):
+        return "black"
     if provider in ("light", "carto_light", "positron"):
         return "light"
     if provider in ("voyager", "carto_voyager", "rastertiles/voyager"):
@@ -132,6 +136,8 @@ def _resolved_provider() -> str:
 
 def _tile_url(z: int, x: int, y: int, style: str | None = None) -> str:
     style = normalize_map_style(style) if style else _resolved_style()
+    if style == "black":
+        return ""
     if style == "dark":
         sub = CARTO_SUBDOMAINS[(x + y) % len(CARTO_SUBDOMAINS)]
         return CARTO_TILE_URL.format(sub=sub, style="dark_nolabels", z=z, x=x, y=y)
@@ -301,6 +307,8 @@ def _fetch_tile_coords(
         return {}
 
     style = normalize_map_style(style)
+    if style == "black":
+        return {}
     workers = min(_tile_workers(style), len(coords))
     results: dict[tuple[int, int], pygame.Surface] = {}
 
@@ -506,6 +514,8 @@ def _style_osm(surface: pygame.Surface) -> pygame.Surface:
 
 def _style_for_radar(surface: pygame.Surface, style: str | None = None) -> pygame.Surface:
     style = normalize_map_style(style) if style else _resolved_style()
+    if style == "black":
+        return _as_display_surface(surface)
     if style == "dark":
         return _style_carto(surface)
     if style == "light":
@@ -529,6 +539,14 @@ def _apply_circle_mask(surface: pygame.Surface) -> pygame.Surface:
     return masked
 
 
+def _build_flat_black_background() -> pygame.Surface:
+    """Solid black circle — same diameter as tile composites so pan coverage matches."""
+    diameter = theme.VISIBLE_RADIUS * 2 + TILE_SIZE
+    canvas = pygame.Surface((diameter, diameter))
+    canvas.fill(FLAT_BLACK)
+    return _apply_circle_mask(canvas)
+
+
 def _build_background(scale_index: int, style: str | None = None) -> pygame.Surface | None:
     try:
         from config import LOCATION_HOME, location_configured
@@ -542,6 +560,8 @@ def _build_background(scale_index: int, style: str | None = None) -> pygame.Surf
     # Pin style for the whole build — never re-read settings mid-fetch.
     # Otherwise switching Map while prewarm runs can save light tiles under a dark key.
     provider = normalize_map_style(style) if style else _resolved_style()
+    if provider == "black":
+        return _build_flat_black_background()
     home_lat, home_lon = LOCATION_HOME[0], LOCATION_HOME[1]
     outer_km = scale.SCALE_BANDS[scale_index]["label_km"]
     px_per_km = theme.GRID_OUTER_RADIUS / outer_km
@@ -705,7 +725,8 @@ def _fetch_worker(key: tuple):
         surface = _build_background(key[2], style=key[3])
         if surface is None:
             return
-        _save_cache(surface, key)
+        if key[3] != "black":
+            _save_cache(surface, key)
         _remember_surface(key, surface)
     except Exception:
         logger.exception("Radar map background fetch failed for scale %s", key[2])
@@ -735,6 +756,11 @@ def request_background_for_key(key: tuple, force: bool = False):
         if not force and key in _surfaces:
             return
     if _fetch_running(key):
+        return
+
+    style = key[3] if len(key) > 3 else _resolved_style()
+    if normalize_map_style(style) == "black":
+        _remember_surface(key, _build_flat_black_background())
         return
 
     if not force:
@@ -807,6 +833,11 @@ def get_background() -> pygame.Surface | None:
     key = _cache_key()
     if key is None:
         return None
+    if len(key) > 3 and key[3] == "black":
+        with _lock:
+            surface = _surfaces.get(key)
+        if surface is None:
+            _remember_surface(key, _build_flat_black_background())
     with _lock:
         surface = _surfaces.get(key)
         if surface is None:
@@ -1039,6 +1070,8 @@ def attribution_text() -> str | None:
     if not _enabled() or get_background() is None:
         return None
     style = _resolved_style()
+    if style == "black":
+        return None
     if style == "vfr":
         return "© FAA"
     if style == "osm":
