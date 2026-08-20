@@ -129,7 +129,7 @@ def _update_notice_text() -> str | None:
         if not should_show_update_banner():
             return None
         if update_is_scheduled():
-            return "Tonight during off-hours"
+            return "Firmware will update tonight during off-hours"
         remote = remote_release_label()
     except Exception:
         return None

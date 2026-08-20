@@ -787,9 +787,26 @@ def _in_ota_night_window() -> bool:
 
 
 def _origin_reachable() -> bool:
-    """True when ``origin`` answers ``ls-remote`` (auto OTA preflight)."""
-    remote = _remote_commit_via_git()
-    return bool(remote.get("commit"))
+    """True when a recent GitHub check already proved the remote exists.
+
+    Auto-install runs on the display loop. Do not ``git ls-remote`` here:
+    on a Pi 3 that call often exceeds the 10s git timeout, hitching radar
+    and false-skipping Later tonight every minute even when GitHub is up.
+    """
+    state = _read_notify()
+    last = float(state.get("last_check_ts") or 0.0)
+    if (
+        last > 0
+        and (time.time() - last) < _REMOTE_CACHE_STALE_S
+        and state.get("update_available")
+        and str(state.get("remote_id") or "")
+    ):
+        return True
+    cached, cached_ts = _read_remote_cache()
+    age = time.time() - float(cached_ts or 0.0)
+    if cached_ts > 0 and age < _REMOTE_CACHE_STALE_S:
+        return bool(cached.get("release_tag") or cached.get("commit"))
+    return False
 
 
 def should_auto_install() -> bool:

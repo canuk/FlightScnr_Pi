@@ -35,6 +35,11 @@ class TestUpdateNotify(unittest.TestCase):
             mock.patch.object(
                 updater, "LOCK_PATH", os.path.join(self.data_dir, "update.lock")
             ),
+            mock.patch.object(
+                updater,
+                "_REMOTE_CACHE_PATH",
+                os.path.join(self.data_dir, "github-remote-cache.json"),
+            ),
             mock.patch.object(updater, "update_running", return_value=False),
         ]
         for p in self._patches:
@@ -231,6 +236,17 @@ class TestUpdateNotify(unittest.TestCase):
             )
         self.assertEqual(started, {"ok": True})
         self.assertFalse(self.updater.update_is_scheduled())
+
+    def test_origin_reachable_uses_recent_notify_not_ls_remote(self):
+        self._available()
+        with mock.patch.object(self.updater, "_remote_commit_via_git") as ls:
+            self.assertTrue(self.updater._origin_reachable())
+            ls.assert_not_called()
+
+    def test_origin_reachable_false_when_never_checked(self):
+        with mock.patch.object(self.updater, "_remote_commit_via_git") as ls:
+            self.assertFalse(self.updater._origin_reachable())
+            ls.assert_not_called()
 
     def test_maybe_start_skips_when_origin_down(self):
         self._available()
