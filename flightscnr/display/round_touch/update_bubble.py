@@ -18,7 +18,8 @@ import pygame
 
 from display.round_touch import draw, radar_hud, theme
 
-_LABEL_AVAILABLE = "Firmware Update Available"
+_LABEL_AVAILABLE = "Update available — tap for tonight"
+_LABEL_SCHEDULED = "Tonight during off-hours"
 _LABEL_PROGRESS = "Update in progress — do not turn off"
 _MODE_NONE = "none"
 _MODE_AVAILABLE = "available"
@@ -90,6 +91,14 @@ def _geometry(
         glyph, fill_rgba = (28, 30, 34), (255, 255, 255, 180)
 
     label = _LABEL_PROGRESS if progress else _LABEL_AVAILABLE
+    if not progress:
+        try:
+            from utilities.updater import update_is_scheduled
+
+            if update_is_scheduled():
+                label = _LABEL_SCHEDULED
+        except Exception:
+            pass
     font_px = max(10, theme.s(12)) if progress else max(11, theme.s(13))
     font = draw.load_font(font_px, bold=True)
     # Progress notice is critical — use amber TAG_TYPE; available stays TAG_TYPE too.
@@ -103,13 +112,13 @@ def _geometry(
     height = max(label_surf.get_height(), close_size or label_surf.get_height()) + pad_y * 2
     # Cap width so a long progress string still fits the round bezel.
     max_w = max(theme.s(120), int(theme.VISIBLE_RADIUS * 1.55))
-    if width > max_w and progress:
+    if width > max_w:
         # Truncate with ellipsis until it fits.
         text = label
         while len(text) > 8 and width > max_w:
             text = text[:-2]
             label_surf = font.render(text.rstrip() + "…", True, theme.TAG_TYPE)
-            width = pad_x + label_surf.get_width() + pad_x
+            width = pad_x + label_surf.get_width() + gap + close_size + pad_x
     bubble = pygame.Rect(0, 0, width, height)
     bubble.center = (cx, cy)
 
@@ -192,7 +201,7 @@ def draw_bubble(surface: pygame.Surface) -> pygame.Rect | None:
 
 
 def handle_tap(x: int, y: int) -> str | None:
-    """Return ``\"dismiss\"`` for available-banner taps; ignore progress taps."""
+    """Return dismiss / tonight / progress; ignore misses."""
     mode = _current_mode()
     if mode == _MODE_NONE:
         return None
@@ -217,7 +226,7 @@ def handle_tap(x: int, y: int) -> str | None:
     else:
         hit_bubble, hit_close = _bubble_rect, _close_rect
 
-    if hit_close.collidepoint(x, y) or hit_bubble.collidepoint(x, y):
+    if hit_close.collidepoint(x, y):
         try:
             from utilities.updater import dismiss_update_banner
 
@@ -226,4 +235,14 @@ def handle_tap(x: int, y: int) -> str | None:
             pass
         invalidate_cache()
         return "dismiss"
+    if hit_bubble.collidepoint(x, y):
+        try:
+            from utilities.updater import schedule_update_tonight, update_is_scheduled
+
+            if not update_is_scheduled():
+                schedule_update_tonight()
+        except Exception:
+            pass
+        invalidate_cache()
+        return "tonight"
     return None
