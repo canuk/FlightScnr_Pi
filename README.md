@@ -5,8 +5,13 @@ A [round **4″ touch display**](https://www.waveshare.com/4inch-dsi-lcd-c.htm?&
 ![FlightScnr Pi on a round display](docs/images/flightscnrpi.jpg)
 
 <div align="center">
-<a href="https://discord.gg/wjqgUjv8Re"><img src="https://cdn.simpleicons.org/discord/5865F2" alt="Discord" height="40" width="40"></a><!--
---><a href="https://buymeacoffee.com/yashmulgaonkar"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me a Coffee" height="35"></a>
+<table border="0" cellspacing="0" cellpadding="0" align="center">
+<tr>
+<td align="center"><a href="https://discord.gg/wjqgUjv8Re"><img src="https://cdn.simpleicons.org/discord/5865F2" alt="Discord" height="40" width="40"></a></td>
+<td width="16"></td>
+<td align="center"><a href="https://buymeacoffee.com/yashmulgaonkar"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me a Coffee" height="35"></a></td>
+</tr>
+</table>
 <br><br>
 <strong><a href="https://discord.gg/wjqgUjv8Re">FlightScnrPi Discord</a></strong> — community help, builds, and troubleshooting
 </div>
