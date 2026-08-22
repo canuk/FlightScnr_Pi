@@ -5,20 +5,27 @@ A [round **4″ touch display**](https://www.waveshare.com/4inch-dsi-lcd-c.htm?&
 ![FlightScnr Pi on a round display](docs/images/flightscnrpi.jpg)
 
 <p align="center">
+  <a href="https://discord.gg/wjqgUjv8Re" target="_blank" rel="noopener noreferrer" title="Join FlightScnrPi on Discord">
+    <img src="https://cdn.simpleicons.org/discord/5865F2" alt="Join FlightScnrPi on Discord" height="40">
+  </a>
+  &nbsp;&nbsp;
   <a href="https://buymeacoffee.com/yashmulgaonkar" target="_blank">
     <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me a Coffee" style="height: 35px;">
   </a>
 </p>
+<p align="center"><a href="https://discord.gg/wjqgUjv8Re"><strong>FlightScnrPi Discord</strong></a> — community help, builds, and troubleshooting</p>
 
 ---
 
 ## Features
 
-Live aircraft (and optional marine traffic) on a circular radar, with rich detail screens when you tap. Powered by **FR24**, **[adsb.fi](https://adsb.fi)**, optional local dump1090/readsb, **Tomorrow.io** weather, and optional route enrichment. Configure everything from the web portal. Full detail: [Features wiki](https://github.com/yashmulgaonkar/FlightScnr_Pi/wiki/Features).
+Live aircraft (and optional marine traffic) on a circular radar, with rich detail screens when you tap. Powered by **FR24**, **[adsb.fi](https://adsb.fi)**, optional local dump1090/readsb, **Tomorrow.io** weather, optional route enrichment, **USGS earthquakes**, and wildfire layers (CAL FIRE / NIFC / NASA FIRMS). Configure everything from the web portal. Full detail: [Features wiki](https://github.com/yashmulgaonkar/FlightScnr_Pi/wiki/Features).
+
+Current release: **2026.8.21.2** on `main`.
 
 ### Screens
 
-Radar home, flight detail, tracked flight with route map, and clock / weather — swipe between them on the 720×720 round touch display.
+Radar home, flight detail, **tracked flight** with route map, **Follow / Live** map, and clock / weather — swipe between them on the 720×720 round touch display. **Swipe right** on radar opens Tracked (when a track is active), then again for Follow / Live. **Swipe left** cycles Home and saved favorite locations.
 
 <table>
 <tr>
@@ -57,7 +64,7 @@ Radar home, flight detail, tracked flight with route map, and clock / weather �
 
 ### Map layers
 
-Dark and Voyager CARTO street maps, plus free FAA VFR sectionals (US). Light CARTO is also available on-device.
+Ten basemap styles: CARTO dark/light/Voyager, OSM dark, **Dark Flat** (solid black), Stadia dark + Toner (free `STADIA_MAPS_API_KEY`), Esri streets/satellite, and free FAA VFR sectionals (US). Optional **tag leaders**, **color by altitude**, precipitation, airport overlays, wildfires, and earthquakes.
 
 <table>
 <tr>
@@ -90,7 +97,7 @@ Dark and Voyager CARTO street maps, plus free FAA VFR sectionals (US). Light CAR
 
 ### Radar clock HUD
 
-Optional frosted HUD on the radar: time, weather, wind, and US AQI. Light or dark pill, adjustable opacity, and per-channel audio controls (chime, tracked, military, ATC).
+Optional frosted HUD on the radar: time, weather, wind, and US AQI. Light or dark pill, adjustable opacity, and per-channel audio controls (chime, tracked, military, **earthquake voice**, ATC).
 
 <table>
 <tr>
@@ -123,7 +130,7 @@ Optional frosted HUD on the radar: time, weather, wind, and US AQI. Light or dar
 
 ### Aircraft photos & marine AIS
 
-Flight detail can show aircraft photos ([planespotters.net](https://www.planespotters.net/) / Wikimedia). Optional marine AIS from [aisstream.io](https://aisstream.io/) puts vessels on the same radar, with ship photos from Wikimedia Commons.
+Flight detail can show aircraft photos ([planespotters.net](https://www.planespotters.net/) / Wikimedia). Optional marine AIS from [aisstream.io](https://aisstream.io/) puts vessels on the same radar, with ship photos from Wikimedia Commons. **Note:** aisstream.io is known to be unreliable — if marine traffic disappears, check your portal settings and the [upstream status monitors](https://github.com/yashmulgaonkar/FlightScnr_Pi/wiki/Troubleshooting#13-marine-ais-traffic-not-visible-on-radar) before assuming a FlightScnr Pi bug.
 
 <table>
 <tr>
@@ -177,7 +184,7 @@ Optional **LiveATC** streams to a USB or Bluetooth speaker — pick airport and 
 </tr>
 </table>
 
-Also included: wildfire markers (CAL FIRE / NIFC / NASA FIRMS), global earthquake epicenters (USGS), alert mode, facing / orientation, favorite locations, and a boot safety disclaimer. See the [Features wiki](https://github.com/yashmulgaonkar/FlightScnr_Pi/wiki/Features) for the full list.
+Also included: scrollable **list pickers** for on-device settings, portal **Route Sources** / **Position Sources**, alert mode, facing / orientation, favorite locations (swipe-left cycle), a boot safety disclaimer, and portal OTA (**Update Now**, **Later tonight**, **Finish install**, **Repair & Update**). See the [Features wiki](https://github.com/yashmulgaonkar/FlightScnr_Pi/wiki/Features) for the full list.
 
 ---
 
@@ -193,11 +200,11 @@ Also included: wildfire markers (CAL FIRE / NIFC / NASA FIRMS), global earthquak
 | OS, display overlay, install, Wi‑Fi, config | [Software Setup](https://github.com/yashmulgaonkar/FlightScnr_Pi/wiki/Software-Setup) |
 | Portal sections and settings | [Web Portal](https://github.com/yashmulgaonkar/FlightScnr_Pi/wiki/Web-Portal) |
 | FR24, adsb.fi, weather, AIS, and more | [Data Sources](https://github.com/yashmulgaonkar/FlightScnr_Pi/wiki/Data-Sources) |
-| Touch, pinch-zoom, common fixes | [Troubleshooting](https://github.com/yashmulgaonkar/FlightScnr_Pi/wiki/Troubleshooting) |
-| Updating from the portal | [Updates](https://github.com/yashmulgaonkar/FlightScnr_Pi/wiki/Updates) |
+| Touch, pinch-zoom (X11), AIS outages, common fixes | [Troubleshooting](https://github.com/yashmulgaonkar/FlightScnr_Pi/wiki/Troubleshooting) |
+| Updating from the portal (Later tonight, off-hours auto-install) | [Updates](https://github.com/yashmulgaonkar/FlightScnr_Pi/wiki/Updates) |
 | Credits and license details | [Credits and License](https://github.com/yashmulgaonkar/FlightScnr_Pi/wiki/Credits-and-License) |
 
-**Upgrading from older builds:** one **Update Now** is enough. If an OTA pulled a newer installer but could not run it (pre-re-exec path), the device **auto-finishes** install steps after restart — or use **Finish install** in the portal. If LightDM is switched to X11 for pinch-zoom, the Pi **reboots automatically**.
+**Upgrading from older builds:** one **Update Now** is usually enough. Portal options also include **Later tonight**, **Auto-install during off-hours**, **Finish install**, and **Repair & Update**. If an OTA pulled a newer installer but could not run it (pre-re-exec path), the device **auto-finishes** install steps after restart — or use **Finish install** in the portal. If LightDM is switched to X11 for pinch-zoom, the Pi **reboots automatically**.
 
 **Stuck on `2026.8.5.x` (Update fails silently):** an older install step flipped permissions on `scripts/release.sh`, which used to block the update pull. That file is now frozen upstream, so pressing **Update Now** once more in the portal should work — no terminal needed. If it still fails (other local edits, corrupted git store), run on the Pi:
 
@@ -220,7 +227,7 @@ cd ~/FlightScnr_Pi
 sudo bash install-pi.sh
 ```
 
-The installer forces the desktop to **X11** (needed for pinch-to-zoom) and **reboots automatically** when that switch is pending. It also enables the enclosure cooling fan via the kernel `gpio-fan` overlay (**GPIO 14**, on at **60°C**).
+The installer forces the desktop to **X11** (needed for pinch-to-zoom) and **reboots automatically** when that switch is pending. It also enables the enclosure cooling fan via the kernel `gpio-fan` overlay (**GPIO 14**, on at **60°C**), disables Wi‑Fi power save for kiosk reliability, and enables Bluetooth for speaker pairing.
 
 3. Open the web portal at `http://<hostname>.local` and add API keys.
 
@@ -232,7 +239,13 @@ Step-by-step instructions: [Software Setup](https://github.com/yashmulgaonkar/Fl
 
 Contributions are welcome. If you find a bug, have an idea, or want to improve the project, open a [pull request](https://github.com/yashmulgaonkar/FlightScnr_Pi/pulls). For larger changes, opening an [issue](https://github.com/yashmulgaonkar/FlightScnr_Pi/issues) first is helpful so we can discuss the approach.
 
-Join the [FlightScnrPi community on Discord](https://discord.gg/wjqgUjv8Re) for questions or troubleshooting help.
+Questions or setup help? Join the **FlightScnrPi Discord**:
+
+<p align="center">
+  <a href="https://discord.gg/wjqgUjv8Re" target="_blank" rel="noopener noreferrer" title="Join FlightScnrPi on Discord">
+    <img src="https://cdn.simpleicons.org/discord/5865F2" alt="Join FlightScnrPi on Discord" height="40">
+  </a>
+</p>
 
 ---
 
