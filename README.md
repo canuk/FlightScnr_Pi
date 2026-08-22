@@ -5,11 +5,10 @@ A [round **4″ touch display**](https://www.waveshare.com/4inch-dsi-lcd-c.htm?&
 ![FlightScnr Pi on a round display](docs/images/flightscnrpi.jpg)
 
 <div align="center">
-
-[![Discord](https://cdn.simpleicons.org/discord/5865F2)](https://discord.gg/wjqgUjv8Re) [![Buy Me a Coffee](https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png)](https://buymeacoffee.com/yashmulgaonkar)
-
-**[FlightScnrPi Discord](https://discord.gg/wjqgUjv8Re)** — community help, builds, and troubleshooting
-
+<a href="https://discord.gg/wjqgUjv8Re"><img src="https://cdn.simpleicons.org/discord/5865F2" alt="Discord" height="40" width="40"></a><!--
+--><a href="https://buymeacoffee.com/yashmulgaonkar"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me a Coffee" height="35"></a>
+<br><br>
+<strong><a href="https://discord.gg/wjqgUjv8Re">FlightScnrPi Discord</a></strong> — community help, builds, and troubleshooting
 </div>
 
 ---
@@ -239,9 +238,7 @@ Contributions are welcome. If you find a bug, have an idea, or want to improve t
 Questions or setup help? Join the **FlightScnrPi Discord**:
 
 <div align="center">
-
-[![Discord](https://cdn.simpleicons.org/discord/5865F2)](https://discord.gg/wjqgUjv8Re)
-
+<a href="https://discord.gg/wjqgUjv8Re"><img src="https://cdn.simpleicons.org/discord/5865F2" alt="Discord" height="40" width="40"></a>
 </div>
 
 ---
