@@ -55,7 +55,13 @@
         .chk:last-of-type{border-bottom:none;}
         .chk.is-disabled{opacity:.45;pointer-events:none;}
         .chk label{margin:0;font-size:.9rem;color:var(--text);flex:1;}
-        .switch{position:relative;width:2.6rem;height:1.5rem;flex:none;}
+        .drag-list{list-style:none;margin:.5rem 0 0;padding:0;}
+        .drag-item{display:flex;align-items:center;gap:.6rem;padding:.6rem .5rem;margin-bottom:.4rem;
+          background:var(--card2);border:1px solid var(--fline);border-radius:.5rem;
+          font-size:.88rem;color:var(--text);cursor:grab;user-select:none;}
+        .drag-item.dragging{opacity:.4;cursor:grabbing;}
+        .drag-handle{color:var(--fline);font-size:1rem;line-height:1;}
+	.switch{position:relative;width:2.6rem;height:1.5rem;flex:none;}
         .switch input{position:absolute;opacity:0;width:100%;height:100%;margin:0;cursor:pointer;}
         .switch .track{position:absolute;inset:0;border-radius:999px;background:#333;
         border:1px solid var(--fline);transition:.18s;pointer-events:none;}
@@ -358,6 +364,23 @@
     </details>
 
     <details class="card">
+        <summary><span class="ico">&#128506;</span>Position Sources<span class="sum">extended tracking map</span><span class="chev">&#9656;</span></summary>
+        <div class="body">
+            <p class="hint">Fallback order for the live-centered map (Radar &gt; Track &gt; Live). First source that has a fresh position for the tracked aircraft wins. Drag to reorder; a source with no key/URL configured is skipped automatically even if left in the list.</p>
+            <ul id="position-source-list" class="drag-list">
+                <!-- populated by loadPositionSourceOrder() -->
+            </ul>
+            <div class="chk" style="margin-top:.75rem">
+                <label for="live_map_heading_up">Rotate map to heading (default: north-up)</label>
+                <span class="switch"><input id="live_map_heading_up" type="checkbox"><span class="track"></span></span>
+            </div>
+            <button class="btn btn-primary" id="btn-position-sources" style="margin-top:.7rem" type="button">Save position sources</button>
+            <button class="btn" id="btn-position-sources-reset" style="margin-top:.4rem" type="button">Reset to default order</button>
+            <div id="position-sources-status" class="status"></div>
+        </div>
+    </details>
+
+    <details class="card">
         <summary><span class="ico">&#9888;</span>Alerts<span class="sum">flight #, type, registration</span><span class="chev">&#9656;</span></summary>
         <div class="body">
             <div class="chk"><label for="alert-mil">Alert on military aircraft</label><span class="switch"><input id="alert-mil" type="checkbox"><span class="track"></span></span></div>
@@ -637,7 +660,7 @@
             <p class="hint">Route enrichment only when FR24/AirLabs lack origin/destination — not a live radar feed. Soft monthly spend ceiling protects free credit.</p>
             <p class="hint" id="flightaware-usage"></p>
             <div class="chk">
-                <label for="use-opensky-api">Use OpenSky Network (route fallback)</label>
+                <label for="use-opensky-api">Use OpenSky Network (route + live position)</label>
                 <span class="switch"><input id="use-opensky-api" type="checkbox" checked><span class="track"></span></span>
             </div>
             <label for="opensky-client-id">OpenSky API client ID (optional)</label>
@@ -646,7 +669,15 @@
             <label for="opensky-client-secret">OpenSky API client secret (optional)</label>
             <input type="password" id="opensky-client-secret" placeholder="client_secret" autocomplete="off">
             <p class="hint" id="opensky-client-secret-hint"></p>
-            <p class="hint">Further route fallback when FR24/AirLabs/FlightAware lack origin/destination. Create an API client under Account → API Client on <a href="https://opensky-network.org/" target="_blank" rel="noopener">opensky-network.org</a> (separate from feeder credentials). Destination is often empty while airborne.</p>
+            <p class="hint">Route enrichment fallback when FR24/AirLabs/FlightAware lack origin/destination, and optional live-position source for extended tracking. Create an API client under Account → API Client on <a href="https://opensky-network.org/" target="_blank" rel="noopener">opensky-network.org</a> (separate from feeder credentials). Destination is often empty while airborne.</p>
+            <div class="chk">
+                <label for="use-adsbexchange-api">Use ADS-B Exchange (live position)</label>
+                <span class="switch"><input id="use-adsbexchange-api" type="checkbox"><span class="track"></span></span>
+            </div>
+            <label for="adsbexchange-key">ADS-B Exchange RapidAPI key (optional)</label>
+            <input type="password" id="adsbexchange-key" placeholder="API key" autocomplete="off">
+            <p class="hint" id="adsbexchange-hint"></p>
+            <p class="hint">Optional live-position fallback for extended tracking (after OpenSky in the default order). RapidAPI plan/quota varies — leave empty to skip. See <a href="https://rapidapi.com/adsbx/api/adsb-exchange" target="_blank" rel="noopener">ADS-B Exchange on RapidAPI</a>.</p>
             <div class="chk">
                 <label for="use-aisstream-api">Use aisstream.io API key</label>
                 <span class="switch"><input id="use-aisstream-api" type="checkbox" checked><span class="track"></span></span>
@@ -767,7 +798,7 @@
 <script>
 let pendingCallsign = "";
 let currentScaleIndex = 1;
-let rangePresetsMi = [2, 3, 5, 8, 10, 20, 30];
+let rangePresetsMi = [2, 3, 5, 8, 10, 20, 30, 50];
 const STATUTE_MILE_KM = 1.609344;
 const NM_PER_KM = 1 / 1.852;
 const $ = (id) => document.getElementById(id);
@@ -852,11 +883,14 @@ function applyKeyHints(keys) {
         FLIGHTAWARE_API_KEY: "flightaware-hint",
         OPENSKY_API_CLIENT_ID: "opensky-client-id-hint",
         OPENSKY_API_CLIENT_SECRET: "opensky-client-secret-hint",
+        ADSBEXCHANGE_API_KEY: "adsbexchange-hint",
         FIRMS_MAP_KEY: "firms-hint",
     };
     Object.entries(map).forEach(([key, id]) => {
+        const el = $(id);
+        if (!el) return;
         const info = keys[key] || {};
-        $(id).textContent = info.configured ? `Current: ${info.masked} (${info.source})` : "Not set";
+        el.textContent = info.configured ? `Current: ${info.masked} (${info.source})` : "Not set";
     });
 }
 
@@ -1107,6 +1141,9 @@ async function loadAll() {
             $("vfr_opacity").value = String(r.vfr_map_opacity ?? 45);
             syncVfrOpacityLabel();
         }
+        if ($("live_map_heading_up")) {
+            $("live_map_heading_up").checked = !!r.live_map_heading_up;
+        }
         $("show_compass").checked = !!r.show_compass_rose;
         if ($("show_range_rings")) $("show_range_rings").checked = r.show_range_rings !== false;
         if ($("color_by_altitude")) $("color_by_altitude").checked = !!r.color_by_altitude;
@@ -1230,10 +1267,14 @@ async function loadAll() {
         if ($("use-opensky-api")) {
             $("use-opensky-api").checked = toggles.USE_OPENSKY_API !== false;
         }
+        if ($("use-adsbexchange-api")) {
+            $("use-adsbexchange-api").checked = !!toggles.USE_ADSBEXCHANGE_API;
+        }
         const rso = keys.route_source_order || {};
         if ($("route_source_order")) {
             $("route_source_order").value = rso.ROUTE_SOURCE_ORDER || "";
         }
+        renderPositionSourceList(keys.position_source_order || DEFAULT_POSITION_SOURCE_ORDER);
         const faUsage = keys.flightaware_usage;
         if ($("flightaware-usage") && faUsage) {
             $("flightaware-usage").textContent =
@@ -1423,18 +1464,105 @@ async function saveRouteSourceOrder() {
                 route_source_order: raw,
             }),
         });
-        // Show the *effective* (parsed/filtered) order, not just what was typed.
+	// Show the *effective* (parsed/filtered) order, not just what was typed.
         // Unknown or misspelled entries are silently dropped, so this is the
         // only way to notice a typo actually did something.
         const effective =
             (resp.keys && resp.keys.route_source_order &&
                 resp.keys.route_source_order.ROUTE_SOURCE_ORDER_EFFECTIVE) ||
             "airlabs,flightaware,opensky";
-        showStatus("route-source-order-status", `Saved — effective order: ${effective}`);
+	showStatus("route-source-order-status", `Saved — effective order: ${effective}`);
         await loadAll();
     } catch (e) {
         showStatus("route-source-order-status", e.message, true);
     }
+}
+const DEFAULT_POSITION_SOURCE_ORDER = ["dump1090", "adsbfi", "opensky", "adsbexchange", "fr24"];
+const POSITION_SOURCE_LABELS = {
+    dump1090: "Local (dump1090 / readsb)",
+    adsbfi: "adsb.fi",
+    opensky: "OpenSky",
+    adsbexchange: "ADS-B Exchange",
+    fr24: "FlightRadar24",
+};
+
+function renderPositionSourceList(order) {
+    const list = $("position-source-list");
+    if (!list) return;
+    const known = (order && order.length ? order : DEFAULT_POSITION_SOURCE_ORDER)
+        .filter((s) => POSITION_SOURCE_LABELS[s]);
+    // Any source missing from the saved order (e.g. after an update adds
+    // a new one) still shows up at the end, same "unknown/omitted entries
+    // fall back gracefully" behavior as config.py's parser.
+    for (const s of DEFAULT_POSITION_SOURCE_ORDER) {
+        if (!known.includes(s)) known.push(s);
+    }
+    list.innerHTML = "";
+    for (const source of known) {
+        const li = document.createElement("li");
+        li.draggable = true;
+        li.dataset.source = source;
+        li.className = "drag-item";
+        li.innerHTML = `<span class="drag-handle">&#9776;</span> <span>${POSITION_SOURCE_LABELS[source]}</span>`;
+        list.appendChild(li);
+    }
+    attachDragReorder(list);
+}
+
+function attachDragReorder(list) {
+    let dragEl = null;
+    list.querySelectorAll(".drag-item").forEach((item) => {
+        item.addEventListener("dragstart", () => {
+            dragEl = item;
+            item.classList.add("dragging");
+        });
+        item.addEventListener("dragend", () => {
+            item.classList.remove("dragging");
+            dragEl = null;
+        });
+    });
+    list.addEventListener("dragover", (e) => {
+        e.preventDefault();
+        const after = [...list.querySelectorAll(".drag-item:not(.dragging)")].find(
+            (sib) => e.clientY <= sib.getBoundingClientRect().top + sib.offsetHeight / 2
+        );
+        if (dragEl) {
+            if (after) list.insertBefore(dragEl, after);
+            else list.appendChild(dragEl);
+        }
+    });
+}
+
+async function savePositionSources() {
+    clearStatus("position-sources-status");
+    try {
+        const order = [...document.querySelectorAll("#position-source-list .drag-item")]
+            .map((li) => li.dataset.source);
+        const headingUp = $("live_map_heading_up") ? $("live_map_heading_up").checked : false;
+        await jsonFetch("/api-keys", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ position_source_order: order }),
+        });
+        await jsonFetch("/radar", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ live_map_heading_up: headingUp }),
+        });
+        // Show the effective/parsed order after save (same PR #69 review
+        // feedback applied here too: confirm what was actually persisted,
+        // in case any dragged-in entry was somehow invalid).
+        const keys = await jsonFetch("/api-keys/json");
+        const effective = keys.position_source_order || order;
+        showStatus("position-sources-status", `Saved: ${effective.join(" \u2192 ")}`);
+    } catch (e) {
+        showStatus("position-sources-status", e.message, true);
+    }
+}
+
+async function resetPositionSources() {
+    renderPositionSourceList(DEFAULT_POSITION_SOURCE_ORDER);
+    await savePositionSources();
 }
 
 async function saveAndReloadSettings() {
@@ -1712,6 +1840,7 @@ async function saveApiKeys(restart) {
                 flightaware_api_key: $("flightaware-key") ? $("flightaware-key").value : "",
                 opensky_api_client_id: $("opensky-client-id") ? $("opensky-client-id").value : "",
                 opensky_api_client_secret: $("opensky-client-secret") ? $("opensky-client-secret").value : "",
+                adsbexchange_api_key: $("adsbexchange-key") ? $("adsbexchange-key").value : "",
                 firms_map_key: $("firms-key") ? $("firms-key").value : "",
                 use_fr24_api: $("use-fr24-api").checked,
                 use_tomorrow_weather: $("use-tomorrow-weather").checked,
@@ -1719,6 +1848,7 @@ async function saveApiKeys(restart) {
                 use_aisstream_api: $("use-aisstream-api").checked,
                 use_flightaware_api: $("use-flightaware-api") ? $("use-flightaware-api").checked : false,
                 use_opensky_api: $("use-opensky-api") ? $("use-opensky-api").checked : true,
+                use_adsbexchange_api: $("use-adsbexchange-api") ? $("use-adsbexchange-api").checked : false,
                 restart: !!restart,
             }),
         });
@@ -1729,6 +1859,7 @@ async function saveApiKeys(restart) {
         if ($("flightaware-key")) $("flightaware-key").value = "";
         if ($("opensky-client-id")) $("opensky-client-id").value = "";
         if ($("opensky-client-secret")) $("opensky-client-secret").value = "";
+        if ($("adsbexchange-key")) $("adsbexchange-key").value = "";
         if ($("firms-key")) $("firms-key").value = "";
         if (data.keys) applyKeyHints(data.keys);
         showStatus("api-keys-status", data.message || "API keys saved.");
@@ -2328,6 +2459,8 @@ $("btn-import-settings").addEventListener("click", async () => {
 $("btn-radar").addEventListener("click", saveRadar);
 $("btn-dump1090").addEventListener("click", saveDump1090);
 $("btn-route-source-order").addEventListener("click", saveRouteSourceOrder);
+$("btn-position-sources").addEventListener("click", savePositionSources);
+$("btn-position-sources-reset").addEventListener("click", resetPositionSources);
 $("btn-save-reload").addEventListener("click", saveAndReloadSettings);
 $("btn-offhours").addEventListener("click", saveOffHours);
 $("btn-weather").addEventListener("click", saveWeather);

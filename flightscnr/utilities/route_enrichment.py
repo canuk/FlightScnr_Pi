@@ -116,7 +116,6 @@ def fetch_route_enrichment(flight: dict) -> dict | None:
     destination are present. Omitting a source from ROUTE_SOURCE_ORDER
     disables it entirely (e.g. ROUTE_SOURCE_ORDER=opensky for a fully
     free/open-source lookup that never calls AirLabs or FlightAware).
-
     Reads the order fresh from secrets_store on every call (same as
     dump1090_settings() for DUMP1090_URL) rather than the config module
     value captured at process start, so a portal save takes effect
@@ -132,7 +131,6 @@ def fetch_route_enrichment(flight: dict) -> dict | None:
 
     try:
         from secrets_store import route_source_order_setting
-
         ROUTE_SOURCE_ORDER = route_source_order_setting()["ROUTE_SOURCE_ORDER_EFFECTIVE"]
         ROUTE_SOURCE_ORDER = tuple(
             p for p in ROUTE_SOURCE_ORDER.split(",") if p

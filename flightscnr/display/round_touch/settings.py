@@ -288,6 +288,7 @@ _defaults = {
     "theme_custom": True,
     "custom_theme_rgb": list(color_presets.DEFAULT_CUSTOM_RGB),
     "runway_darkmap_rgb": list(color_presets.DEFAULT_RUNWAY_DARKMAP_RGB),
+    "runway_light_rgb": list(color_presets.DEFAULT_RUNWAY_LIGHT_RGB),
     "theme_palette_v": color_presets.THEME_PALETTE_V,
     "clock_12hr": True,
     "auto_timezone": True,
@@ -952,6 +953,7 @@ def _settings_snapshot(state: dict) -> tuple:
         state.get("theme_custom"),
         tuple(color_presets.normalize_rgb(state.get("custom_theme_rgb"))),
         tuple(color_presets.normalize_rgb(state.get("runway_darkmap_rgb"))),
+        tuple(color_presets.normalize_rgb(state.get("runway_light_rgb"))),
         state.get("show_compass_rose"),
         state.get("show_range_rings"),
         state.get("color_by_altitude"),
@@ -1306,6 +1308,17 @@ def set_show_tag_leaders(enabled: bool):
 
 def show_precipitation() -> bool:
     return bool(_state.get("show_precipitation", True))
+
+def live_map_heading_up() -> bool:
+    """Extended-tracking live map orientation. False (default) = north-up,
+    per the design decision to keep it consistently readable when swiping
+    back and forth from the route map (which is also north-up)."""
+    return bool(_state.get("live_map_heading_up", False))
+
+
+def set_live_map_heading_up(enabled: bool):
+    _state["live_map_heading_up"] = bool(enabled)
+    _save(_state)
 
 
 def toggle_show_precipitation():
@@ -1865,6 +1878,22 @@ def set_runway_darkmap_rgb(r: int, g: int, b: int, *, persist: bool = True):
     apply_theme_colors()
 
 
+def runway_light_rgb() -> tuple[int, int, int]:
+    return color_presets.normalize_rgb(
+        _state.get("runway_light_rgb", color_presets.DEFAULT_RUNWAY_LIGHT_RGB)
+    )
+
+
+def set_runway_light_rgb(r: int, g: int, b: int, *, persist: bool = True):
+    global _disk_synced
+    _state["runway_light_rgb"] = list(color_presets.normalize_rgb((r, g, b)))
+    if persist:
+        _save(_state)
+    else:
+        _disk_synced = False
+    apply_theme_colors()
+
+
 def persist_theme_settings():
     """Flush in-memory theme edits (used after RGB slider release)."""
     _save(_state)
@@ -1956,6 +1985,7 @@ def apply_theme_colors():
     theme.TAG_ALT_ASCEND = (0, 255, 255)
     theme.TAG_ALT_DESCEND = (255, 0, 255)
     theme.RUNWAY_DARKMAP = runway_darkmap_rgb()
+    theme.RUNWAY_LIGHT = runway_light_rgb()
 
 
 def _night_quiet_defaults() -> tuple[str, str]:

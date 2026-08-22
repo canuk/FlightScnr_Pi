@@ -29,6 +29,7 @@ from display.round_touch import (
     airport_overlay,
     disclaimer_acceptance,
     draw,
+    follow_overlays,
     frame_debug,
     ghost_touch_filter,
     gesture_handler,
@@ -68,7 +69,10 @@ from display.round_touch.screens import (
     tracked,
     wifi_setup as wifi_setup_screen,
 )
+from display.round_touch import live_map
+from utilities import position_source
 from utilities import wifi_setup as wifi_setup_util
+from utilities.airline_branding import display_flight_id_for_flight
 
 logger = logging.getLogger("flightscnr.display")
 
@@ -82,6 +86,7 @@ SCREEN_CLOCK = "clock"
 SCREEN_CLOCK_SETTINGS = "clock_settings"
 SCREEN_FORECAST = "forecast"
 SCREEN_TRACKED = "tracked"
+SCREEN_LIVE = "live_tracking"
 SCREEN_WIFI_SETUP = "wifi_setup"
 SCREEN_DISCLAIMER = "disclaimer"
 
@@ -202,6 +207,14 @@ class RoundTouchDisplay:
         self._route_enrichment: dict[str, dict] = {}
         self._route_enrich_inflight: set[str] = set()
         self._route_enrich_redraw = False
+        # Live tracking map sits left of Tracked (swipe right from Track).
+        self._live_map_last_fetch = 0.0
+        self._live_map_last_result: dict | None = None
+        self._live_map_last_radius_km = 8.0
+        self._live_map_last_source: str | None = None
+        self._live_map_inflight = False
+        self._live_map_redraw = False
+        self._follow_photo_open = False
         self._aircraft_photos: dict[str, dict] = {}
         self._aircraft_photo_inflight: set[str] = set()
         self._aircraft_photo_miss: set[str] = set()
@@ -929,6 +942,24 @@ class RoundTouchDisplay:
                 display_data,
                 scroll_offset=self._scroll.offset,
             )
+        elif self.screen == SCREEN_LIVE:
+            if not self.overhead.processing:
+                self._refresh_flights()
+            display_data = tracked.resolve_display_data(
+                self.overhead.tracked_data,
+                self.flights,
+            )
+            if display_data:
+                display_data = self._merge_tracked_aircraft_photo(display_data)
+                self._maybe_fetch_tracked_aircraft_photo(display_data)
+                self._draw_live_tracking(display_data)
+            else:
+                draw.fill_background(self.surface)
+                tracked.draw_footer(self.surface, None)
+                nav.draw_breadcrumb(
+                    self.surface, ["Radar", "Follow"], with_scrim=True
+                )
+            self._scroll.max_offset = 0
         self._scroll.clamp()
         remaining = self._timeout_remaining_fraction()
         if remaining is not None:
@@ -952,14 +983,169 @@ class RoundTouchDisplay:
         if FRAME_DEBUG:
             self._stage("4_present", time.perf_counter() - _t)
 
-    def _draw_reboot_progress_overlay(self) -> None:
-        from utilities import system_control
+    def _sync_follow_from_tracked(self, display_data: dict) -> None:
+        """Follow mirrors the pinned-flight owner cache — no dead reckoning.
 
-        copy = system_control.reboot_progress_copy()
-        if copy is None:
+        ``overhead._grab_tracked`` owns LiveFeed/FlightDetails for the pin.
+        Follow only copies that snapshot into live-map radius state. Extrapolating
+        between polls caused frozen maps, path-ahead glitches, and stale details.
+        """
+        lat = display_data.get("plane_latitude")
+        if lat is None:
+            lat = display_data.get("latitude")
+        lon = display_data.get("plane_longitude")
+        if lon is None:
+            lon = display_data.get("longitude")
+        if lat is None or lon is None:
             return
-        title, detail = copy
-        info.draw_reboot_progress_popup(self.surface, title, detail)
+
+        try:
+            lat_f = float(lat)
+            lon_f = float(lon)
+        except (TypeError, ValueError):
+            return
+
+        now = time.time()
+        speed = display_data.get("ground_speed")
+        try:
+            speed_f = float(speed) if speed is not None else None
+        except (TypeError, ValueError):
+            speed_f = None
+        have_speed = speed_f is not None and speed_f > 0
+        radius_km = (
+            position_source.compute_tracking_radius_km(speed_f)
+            if have_speed
+            else self._live_map_last_radius_km
+        )
+        self._live_map_last_radius_km = live_map.stabilize_radius_km(
+            self._live_map_last_radius_km,
+            radius_km,
+            have_speed=have_speed,
+        )
+
+        source = display_data.get("data_source") or "tracked"
+        entry = {
+            "plane_latitude": lat_f,
+            "plane_longitude": lon_f,
+            "latitude": lat_f,
+            "longitude": lon_f,
+            "altitude": display_data.get("altitude"),
+            "ground_speed": display_data.get("ground_speed"),
+            "heading": display_data.get("heading"),
+            "vertical_speed": display_data.get("vertical_speed"),
+            "icao_hex": display_data.get("icao_hex"),
+            "callsign": display_data.get("callsign"),
+            "registration": display_data.get("registration"),
+            "data_source": source,
+            "time_remaining": display_data.get("time_remaining"),
+            "dist_remaining": display_data.get("dist_remaining"),
+            "is_live": bool(display_data.get("is_live")),
+            "last_seen_ts": display_data.get("last_seen_ts"),
+        }
+        prev = self._live_map_last_result or {}
+        moved = (
+            abs(float(prev.get("plane_latitude") or 0) - lat_f) > 1e-6
+            or abs(float(prev.get("plane_longitude") or 0) - lon_f) > 1e-6
+            or prev.get("heading") != entry.get("heading")
+            or prev.get("altitude") != entry.get("altitude")
+            or prev.get("ground_speed") != entry.get("ground_speed")
+            or prev.get("time_remaining") != entry.get("time_remaining")
+            or prev.get("dist_remaining") != entry.get("dist_remaining")
+            or prev.get("last_seen_ts") != entry.get("last_seen_ts")
+        )
+        self._live_map_last_source = source
+        self._live_map_last_result = entry
+        self._live_map_last_fetch = now
+        self._live_map_inflight = False
+        if moved:
+            self._live_map_redraw = True
+
+    def _draw_live_tracking(self, display_data: dict) -> None:
+        """Full-screen map centered on the tracked aircraft (SCREEN_LIVE).
+
+        Position comes only from the pinned-flight owner
+        (``overhead.tracked_data`` / Tracked FR24 poll) — Follow does not run
+        its own position_source or LiveFeed lookups.
+        """
+        self._sync_follow_from_tracked(display_data)
+
+        result = self._live_map_last_result or display_data
+
+        # Prefer live-position telemetry; keep Tracked route/identity fields.
+        overlay = dict(display_data)
+        for key in (
+            "plane_latitude",
+            "plane_longitude",
+            "latitude",
+            "longitude",
+            "altitude",
+            "ground_speed",
+            "heading",
+            "vertical_speed",
+            "icao_hex",
+            "callsign",
+            "registration",
+            "time_remaining",
+            "dist_remaining",
+            "is_live",
+        ):
+            val = result.get(key) if isinstance(result, dict) else None
+            if val is not None and val != "":
+                overlay[key] = val
+
+        lat = overlay.get("plane_latitude")
+        if lat is None:
+            lat = overlay.get("latitude")
+
+        lon = overlay.get("plane_longitude")
+        if lon is None:
+            lon = overlay.get("longitude")
+
+        heading = overlay.get("heading", 0) or 0
+        radius_km = self._live_map_last_radius_km
+
+        draw.fill_background(self.surface)
+
+        display_id = display_flight_id_for_flight(overlay) if overlay else "Follow"
+        trail = ["Radar", "Follow"]
+        if display_id and display_id not in ("—", "Follow", "Live"):
+            trail = ["Radar", "Follow", display_id]
+
+        if lat is None or lon is None:
+            # Nothing to center on yet — next throttled fetch may fill this in.
+            tracked.draw_live_details(self.surface, overlay)
+            if self._follow_photo_open:
+                tracked.draw_follow_photo_popup(self.surface, overlay)
+            tracked.draw_footer(self.surface, display_data)
+            nav.draw_breadcrumb(self.surface, trail, with_scrim=True)
+            return
+
+        # Full-panel pygame.transform.rotate of satellite (and large vector)
+        # maps hangs the Pi v3d GPU. Keep the basemap north-up always; when
+        # the user wants heading-up, draw the aircraft nose-up so Follow still
+        # reads as track-up for the subject without spinning the raster.
+        want_heading_up = settings.live_map_heading_up()
+        icon_heading = 0.0 if want_heading_up else float(heading)
+        live_map.blit_live_tracking_map(
+            self.surface,
+            lat=float(lat),
+            lon=float(lon),
+            heading=icon_heading,
+            radius_km=float(radius_km),
+            flight=overlay,
+        )
+
+        tracked.draw_live_details(self.surface, overlay)
+        follow_overlays.draw_callout(
+            self.surface,
+            # Basemap is north-up; do not undo a rotate that never happened.
+            heading_up=False,
+            heading=float(heading),
+        )
+        if self._follow_photo_open:
+            tracked.draw_follow_photo_popup(self.surface, overlay)
+        tracked.draw_footer(self.surface, display_data)
+        nav.draw_breadcrumb(self.surface, trail, with_scrim=True)
 
     def _timeout_duration_s(self) -> float | None:
         """Active secondary-screen timeout in seconds, or None if no countdown."""
@@ -969,7 +1155,7 @@ class RoundTouchDisplay:
             return None
         if self.screen in (SCREEN_RADAR, SCREEN_CLOCK, SCREEN_CLOCK_SETTINGS, SCREEN_FORECAST):
             return None
-        if self.screen == SCREEN_TRACKED and tracked.is_pinned():
+        if self.screen in (SCREEN_TRACKED, SCREEN_LIVE) and tracked.is_pinned():
             return None
         if self.screen == SCREEN_FLIGHT:
             return float(settings.flight_detail_timeout_s())
@@ -1089,6 +1275,15 @@ class RoundTouchDisplay:
                 radar.take_rebuild_counts(),
                 counter_txt,
             )
+
+    def _draw_reboot_progress_overlay(self) -> None:
+        from utilities import system_control
+
+        copy = system_control.reboot_progress_copy()
+        if copy is None:
+            return
+        title, detail = copy
+        info.draw_reboot_progress_popup(self.surface, title, detail)
 
     @staticmethod
     def _bound(collection, cap: int = 200) -> None:
@@ -1280,7 +1475,7 @@ class RoundTouchDisplay:
         self._close_atc_picker()
         self._invalidate_timeout_content_cache()
         previous = self.screen
-        if self.screen == SCREEN_TRACKED:
+        if self.screen in (SCREEN_TRACKED, SCREEN_LIVE):
             tracked.reset_marquee()
         self._radar_visible_since = time.time()
         self._auto_idle_clock = False
@@ -1338,11 +1533,37 @@ class RoundTouchDisplay:
             self._last_clock_draw = 0.0
         previous = self.screen
         if screen != self.screen:
-            if self.screen == SCREEN_TRACKED:
+            if self.screen in (SCREEN_TRACKED, SCREEN_LIVE):
                 tracked.reset_marquee()
             self._scroll.reset()
             self._settings_drag_y = None
             self._settings_drag_scrolled = False
+        if screen == SCREEN_LIVE and previous != SCREEN_LIVE:
+            # Fresh entry into live tracking — force an immediate position fetch.
+            self._live_map_last_fetch = 0.0
+            self._live_map_last_result = None
+            self._live_map_inflight = False
+            self._live_map_redraw = False
+            self._follow_photo_open = False
+            try:
+                live_map.invalidate()
+            except Exception:
+                pass
+            try:
+                from display.round_touch import follow_overlays
+
+                follow_overlays.clear_follow_path()
+            except Exception:
+                pass
+            try:
+                self.overhead.set_follow_pin_polling(True)
+            except Exception:
+                pass
+        elif previous == SCREEN_LIVE and screen != SCREEN_LIVE:
+            try:
+                self.overhead.set_follow_pin_polling(False)
+            except Exception:
+                pass
         if screen == SCREEN_RADAR:
             self._radar_visible_since = time.time()
             self._auto_idle_clock = False
@@ -2896,6 +3117,13 @@ class RoundTouchDisplay:
             rgb[channel] = value
             settings.set_runway_darkmap_rgb(*rgb, persist=persist)
             return True
+        if group == info.RGB_GROUP_RUNWAY_LIGHT:
+            rgb = list(settings.runway_light_rgb())
+            if rgb[channel] == value:
+                return False
+            rgb[channel] = value
+            settings.set_runway_light_rgb(*rgb, persist=persist)
+            return True
         rgb = list(settings.theme_rgb())
         if rgb[channel] == value:
             return False
@@ -3212,9 +3440,9 @@ class RoundTouchDisplay:
         ):
             return
 
-        # Tracked sits left of radar: swipe right on radar opens it; swipe left
-        # cycles favorite locations (Home → saved → Home). Short flicks still
-        # pick aircraft / fires like a tap.
+        # Live ← Tracked ← Radar: swipe right moves leftward; swipe left returns.
+        # On radar, swipe left also cycles favorite locations (Home → saved → Home).
+        # Short flicks still pick aircraft / fires like a tap.
         if swipe == input_handler.SWIPE_RIGHT and self.screen == SCREEN_RADAR:
             if self._radar_swipe_committed(swipe_start, swipe_end):
                 self._open_screen(SCREEN_TRACKED)
@@ -3230,6 +3458,16 @@ class RoundTouchDisplay:
                     self._safe_draw()
             elif self._open_radar_swipe_target(swipe_start, swipe_end):
                 self._safe_draw()
+        elif swipe == input_handler.SWIPE_RIGHT and self.screen == SCREEN_TRACKED:
+            # Tracked → Live (further left).
+            self._open_screen(SCREEN_LIVE)
+            self._note_activity()
+            self._safe_draw()
+        elif swipe == input_handler.SWIPE_LEFT and self.screen == SCREEN_LIVE:
+            # Live → Tracked.
+            self._open_screen(SCREEN_TRACKED)
+            self._note_activity()
+            self._safe_draw()
         elif swipe == input_handler.SWIPE_LEFT and self.screen == SCREEN_TRACKED:
             self._return_to_radar()
             self._safe_draw()
@@ -3314,7 +3552,7 @@ class RoundTouchDisplay:
         if tap and not theme.in_visible_circle(tap[0], tap[1]):
             tap = None
         if tap and nav.tap_breadcrumb(tap[0], tap[1]) and self.screen != SCREEN_RADAR:
-            if self.screen == SCREEN_TRACKED:
+            if self.screen in (SCREEN_TRACKED, SCREEN_LIVE):
                 self._return_to_radar()
             elif self.screen == SCREEN_FORECAST:
                 self._open_screen(SCREEN_CLOCK)
@@ -3438,6 +3676,52 @@ class RoundTouchDisplay:
                 self._safe_draw()
             else:
                 self._safe_draw()
+        elif tap and self.screen == SCREEN_LIVE:
+            if self._follow_photo_open:
+                if tracked.follow_photo_close_hit(tap[0], tap[1]):
+                    self._follow_photo_open = False
+                    self._note_activity()
+                    self._safe_draw()
+                # Absorb other taps while the popup is open.
+                else:
+                    self._note_activity()
+                return
+            airport, airport_d2 = follow_overlays.pick_airport_at(tap[0], tap[1])
+            aircraft_hit = tracked.follow_aircraft_hit(tap[0], tap[1])
+            aircraft_d2 = (tap[0] - theme.CENTER_X) ** 2 + (
+                tap[1] - theme.CENTER_Y
+            ) ** 2
+            # Prefer the center aircraft blip when distances are close (same
+            # bias as radar flight-vs-airport).
+            aircraft_bias = theme.s(12) ** 2
+            if aircraft_hit and (
+                airport is None
+                or airport_d2 is None
+                or aircraft_d2 <= airport_d2 + aircraft_bias
+            ):
+                airport_overlay.clear_callout()
+                self._follow_photo_open = True
+                self._note_activity()
+                self._safe_draw()
+                return
+            if airport is not None:
+                airport_overlay.show_callout(airport)
+                self._note_activity()
+                self._safe_draw()
+                return
+            action = tracked.tap_footer_action(
+                tap[0], tap[1], self.overhead.tracked_data
+            )
+            if action == "pin":
+                tracked.toggle_pinned()
+                self._note_activity()
+                self._safe_draw()
+            elif action == "radar":
+                tracked.clear_pinned()
+                self._follow_photo_open = False
+                airport_overlay.clear_callout()
+                self._return_to_radar()
+                self._safe_draw()
         elif tap and self.screen == SCREEN_TRACKED:
             action = tracked.tap_footer_action(
                 tap[0], tap[1], self.overhead.tracked_data
@@ -3547,7 +3831,7 @@ class RoundTouchDisplay:
             return
         if self.screen == SCREEN_RADAR:
             return
-        if self.screen == SCREEN_TRACKED and tracked.is_pinned():
+        if self.screen in (SCREEN_TRACKED, SCREEN_LIVE) and tracked.is_pinned():
             return
 
         timeout_s = self._timeout_duration_s()
@@ -4249,6 +4533,12 @@ class RoundTouchDisplay:
                     and now - last_data_poll >= DATA_REFRESH_SECONDS
                 ):
                     _lt = time.perf_counter()
+                    try:
+                        self.overhead.set_follow_pin_polling(
+                            self.screen == SCREEN_LIVE
+                        )
+                    except Exception:
+                        pass
                     # FLIGHTSCNR_PAUSE_GRAB=1: isolate whether _grab causes sweep hitch.
                     if os.environ.get("FLIGHTSCNR_PAUSE_GRAB", "").lower() in (
                         "1", "true", "yes"
@@ -4298,7 +4588,7 @@ class RoundTouchDisplay:
                         ring_owns = self._timeout_remaining_fraction() is not None
                         if ring_owns:
                             pass
-                        elif self.screen == SCREEN_TRACKED:
+                        elif self.screen in (SCREEN_TRACKED, SCREEN_LIVE):
                             self._safe_draw()
                             self._last_static_draw = now
                         elif self.screen != SCREEN_RADAR:
@@ -4337,8 +4627,13 @@ class RoundTouchDisplay:
                 if self._aircraft_photo_redraw and self.screen in (
                     SCREEN_FLIGHT,
                     SCREEN_TRACKED,
+                    SCREEN_LIVE,
                 ):
                     self._aircraft_photo_redraw = False
+                    self._safe_draw()
+
+                if self._live_map_redraw and self.screen == SCREEN_LIVE:
+                    self._live_map_redraw = False
                     self._safe_draw()
 
                 if route_map.basemap_needs_redraw() and self.screen == SCREEN_TRACKED:
@@ -4444,17 +4739,22 @@ class RoundTouchDisplay:
                             self._loop_stage("loop_prewarm_spawn", _lt)
                 elif self.screen in (SCREEN_CLOCK, SCREEN_CLOCK_SETTINGS, SCREEN_FORECAST):
                     self._tick_clock()
-                elif self.screen == SCREEN_TRACKED:
+                elif self.screen in (SCREEN_TRACKED, SCREEN_LIVE):
                     tracked.tick_marquee()
-                    interval = (
-                        theme.SWEEP_FRAME_MS / 1000.0
-                        if tracked.marquee_animating()
-                        or tracked.live_status_active(
-                            self.overhead.tracked_data,
-                            self.flights,
+                    if self.screen == SCREEN_LIVE:
+                        # Pin owner polls ~2s while Follow is open; redraw on
+                        # grab_seq and this timer for chrome / map pan.
+                        interval = DATA_REFRESH_SECONDS
+                    else:
+                        interval = (
+                            theme.SWEEP_FRAME_MS / 1000.0
+                            if tracked.marquee_animating()
+                            or tracked.live_status_active(
+                                self.overhead.tracked_data,
+                                self.flights,
+                            )
+                            else DATA_REFRESH_SECONDS
                         )
-                        else DATA_REFRESH_SECONDS
-                    )
                     if self._timeout_remaining_fraction() is not None:
                         # Match radar cadence so the perimeter countdown crawls smoothly.
                         interval = min(interval, theme.SWEEP_FRAME_MS / 1000.0)
