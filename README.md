@@ -5,11 +5,9 @@ A [round **4″ touch display**](https://www.waveshare.com/4inch-dsi-lcd-c.htm?&
 ![FlightScnr Pi on a round display](docs/images/flightscnrpi.jpg)
 
 <p align="center">
-  <a href="https://discord.gg/wjqgUjv8Re" target="_blank" rel="noopener noreferrer" title="Join FlightScnrPi on Discord">
+  <a href="https://discord.gg/wjqgUjv8Re" target="_blank" rel="noopener noreferrer" title="Join FlightScnrPi on Discord" style="margin-right: 12px;">
     <img src="https://cdn.simpleicons.org/discord/5865F2" alt="Join FlightScnrPi on Discord" height="40">
-  </a>
-  &nbsp;&nbsp;
-  <a href="https://buymeacoffee.com/yashmulgaonkar" target="_blank">
+  </a><a href="https://buymeacoffee.com/yashmulgaonkar" target="_blank">
     <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me a Coffee" style="height: 35px;">
   </a>
 </p>
