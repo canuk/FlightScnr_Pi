@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import math
 import sys
 import unittest
 from pathlib import Path
@@ -31,59 +32,32 @@ class TestRadarTagSide(unittest.TestCase):
         self.cx = theme.CENTER_X
         self.cy = theme.CENTER_Y
 
+    def _pick_tag_rect(self, x, y, w, h, _placed=()):
+        """A representative box for the leader tests.
+
+        Slot selection moved to label_layout (see test_label_layout); these
+        tests only care about the bracket drawn around a given rect.
+        """
+        on_right = self.radar._preferred_tag_on_right(x)
+        return on_right, self.radar._tag_rect(x, y, w, h, on_right)
+
     def test_isolated_left_half_prefers_right(self):
         x = self.cx - 80
         self.assertTrue(self.radar._preferred_tag_on_right(x))
-        on_right, _rect = self.radar._pick_tag_rect(x, self.cy, 80, 30, [])
+        on_right, _rect = self._pick_tag_rect(x, self.cy, 80, 30, [])
         self.assertTrue(on_right)
 
     def test_isolated_right_half_prefers_left(self):
         x = self.cx + 80
         self.assertFalse(self.radar._preferred_tag_on_right(x))
-        on_right, _rect = self.radar._pick_tag_rect(x, self.cy, 80, 30, [])
+        on_right, _rect = self._pick_tag_rect(x, self.cy, 80, 30, [])
         self.assertFalse(on_right)
 
-    def test_second_nearby_tag_on_same_half_flips(self):
-        x1 = self.cx - 80
-        placed = []
-        on1, r1 = self.radar._pick_tag_rect(x1, self.cy, 80, 30, placed)
-        self.assertTrue(on1)
-        placed.append(r1)
-        on2, _r2 = self.radar._pick_tag_rect(x1 + 8, self.cy, 80, 30, placed)
-        self.assertFalse(on2)
-
-    def test_no_overlap_keeps_preferred_side(self):
-        x = self.cx - 80
-        pref = self.radar._preferred_tag_on_right(x)
-        rect_l = self.radar._tag_rect(x, self.cy, 80, 30, False)
-        rect_r = self.radar._tag_rect(x, self.cy, 80, 30, True)
-        far = self.radar._tag_rect(self.cx + 120, self.cy + 120, 40, 20, True)
-        on_right = self.radar._choose_tag_side(pref, rect_l, rect_r, [far])
-        self.assertEqual(on_right, pref)
-
-    def test_equal_overlap_keeps_preferred_side(self):
-        x = self.cx - 80
-        pref = True
-        rect_l = self.radar._tag_rect(x, self.cy, 80, 30, False)
-        rect_r = self.radar._tag_rect(x, self.cy, 80, 30, True)
-        on_right = self.radar._choose_tag_side(pref, rect_l, rect_r, [])
-        self.assertTrue(on_right)
-        on_left_pref = self.radar._choose_tag_side(False, rect_l, rect_r, [])
-        self.assertFalse(on_left_pref)
-
-    def test_bezel_clamp_after_flip_to_left(self):
-        x = self.cx - self.theme.VISIBLE_RADIUS + 8
-        margin = self.theme.s(20)
-        floor = self.cx - self.theme.VISIBLE_RADIUS + margin
-        anchor = self.radar._tag_anchor(x, False)
-        self.assertGreaterEqual(anchor, floor)
-
-    def test_bezel_clamp_after_flip_to_right(self):
-        x = self.cx + self.theme.VISIBLE_RADIUS - 8
-        margin = self.theme.s(20)
-        ceiling = self.cx + self.theme.VISIBLE_RADIUS - margin
-        anchor = self.radar._tag_anchor(x, True)
-        self.assertLessEqual(anchor, ceiling)
+    def test_empty_field_keeps_preferred_side(self):
+        for x, want_right in ((self.cx - 80, True), (self.cx + 80, False)):
+            on_right, rect = self._pick_tag_rect(x, self.cy, 80, 30, [])
+            self.assertEqual(on_right, want_right, x)
+            self.assertEqual(rect.top, self.cy - 30 // 2, x)
 
     def test_leader_keeps_blip_color(self):
         orange = (255, 140, 0)
@@ -91,7 +65,7 @@ class TestRadarTagSide(unittest.TestCase):
 
     def test_leader_underline_sits_under_tag(self):
         x = self.cx - 80
-        on_right, rect = self.radar._pick_tag_rect(x, self.cy, 80, 30, [])
+        on_right, rect = self._pick_tag_rect(x, self.cy, 80, 30, [])
         self.assertTrue(on_right)
         geo_pts = self.radar._tag_leader_geometry(x, self.cy, rect, on_right)
         left, right = geo_pts["underline"]
@@ -105,7 +79,7 @@ class TestRadarTagSide(unittest.TestCase):
 
     def test_leader_underline_matches_altitude_width(self):
         x = self.cx - 80
-        on_right, rect = self.radar._pick_tag_rect(x, self.cy, 80, 30, [])
+        on_right, rect = self._pick_tag_rect(x, self.cy, 80, 30, [])
         self.assertTrue(on_right)
         geo_pts = self.radar._tag_leader_geometry(
             x, self.cy, rect, on_right, underline_w=40
@@ -116,7 +90,7 @@ class TestRadarTagSide(unittest.TestCase):
         self.assertEqual(geo_pts["elbow"][0], rect.left)
 
         x2 = self.cx + 80
-        on_left, rect2 = self.radar._pick_tag_rect(x2, self.cy, 80, 30, [])
+        on_left, rect2 = self._pick_tag_rect(x2, self.cy, 80, 30, [])
         self.assertFalse(on_left)
         geo_left = self.radar._tag_leader_geometry(
             x2, self.cy, rect2, on_left, underline_w=40
@@ -128,7 +102,7 @@ class TestRadarTagSide(unittest.TestCase):
 
     def test_leader_underline_flips_with_tag(self):
         x = self.cx + 80
-        on_right, rect = self.radar._pick_tag_rect(x, self.cy, 80, 30, [])
+        on_right, rect = self._pick_tag_rect(x, self.cy, 80, 30, [])
         self.assertFalse(on_right)
         geo_pts = self.radar._tag_leader_geometry(x, self.cy, rect, on_right)
         self.assertEqual(geo_pts["elbow"][0], rect.right)
@@ -137,20 +111,9 @@ class TestRadarTagSide(unittest.TestCase):
         self.assertIsNotNone(stem)
         self.assertGreater(stem[0][0], stem[1][0])
 
-    def test_near_miss_stacked_tags_flip(self):
-        x = self.cx - 80
-        w, h = 80, 30
-        placed = []
-        on1, r1 = self.radar._pick_tag_rect(x, self.cy, w, h, placed)
-        placed.append(r1)
-        on2, _r2 = self.radar._pick_tag_rect(
-            x, self.cy + h + self.theme.s(6), w, h, placed
-        )
-        self.assertNotEqual(on2, on1)
-
     def test_leader_not_crowded_when_isolated(self):
         x = self.cx - 80
-        on_right, rect = self.radar._pick_tag_rect(x, self.cy, 80, 30, [])
+        on_right, rect = self._pick_tag_rect(x, self.cy, 80, 30, [])
         self.assertFalse(
             self.radar._tag_leader_crowded(
                 x, self.cy, rect, on_right, [(x, self.cy)], []
@@ -159,7 +122,7 @@ class TestRadarTagSide(unittest.TestCase):
 
     def test_leader_crowded_when_other_icon_on_underline(self):
         x = self.cx - 80
-        on_right, rect = self.radar._pick_tag_rect(x, self.cy, 80, 30, [])
+        on_right, rect = self._pick_tag_rect(x, self.cy, 80, 30, [])
         self.assertTrue(on_right)
         elbow = self.radar._tag_leader_geometry(x, self.cy, rect, on_right)["elbow"]
         other = elbow
@@ -171,7 +134,7 @@ class TestRadarTagSide(unittest.TestCase):
 
     def test_leader_crowded_when_blips_overlap(self):
         x = self.cx - 80
-        on_right, rect = self.radar._pick_tag_rect(x, self.cy, 80, 30, [])
+        on_right, rect = self._pick_tag_rect(x, self.cy, 80, 30, [])
         other = (x + 12, self.cy + 8)
         self.assertTrue(
             self.radar._tag_leader_hits_blip(
@@ -181,7 +144,7 @@ class TestRadarTagSide(unittest.TestCase):
 
     def test_leader_crowded_when_tags_touch(self):
         x = self.cx - 80
-        on_right, rect = self.radar._pick_tag_rect(x, self.cy, 80, 30, [])
+        on_right, rect = self._pick_tag_rect(x, self.cy, 80, 30, [])
         neighbor = rect.move(0, rect.height + self.theme.s(4))
         self.assertTrue(
             self.radar._tag_leader_crowded(
@@ -191,7 +154,7 @@ class TestRadarTagSide(unittest.TestCase):
 
     def test_leader_hidden_when_setting_off(self):
         x = self.cx - 80
-        on_right, rect = self.radar._pick_tag_rect(x, self.cy, 80, 30, [])
+        on_right, rect = self._pick_tag_rect(x, self.cy, 80, 30, [])
         surface = self.radar.pygame.Surface((self.theme.SIZE, self.theme.SIZE))
         with mock.patch.object(self.radar.settings, "show_tag_leaders", return_value=False), \
              mock.patch.object(self.radar.pygame.draw, "line") as draw_line:
@@ -202,7 +165,7 @@ class TestRadarTagSide(unittest.TestCase):
 
     def test_leader_draws_underline_and_diagonal(self):
         x = self.cx - 80
-        on_right, rect = self.radar._pick_tag_rect(x, self.cy, 80, 30, [])
+        on_right, rect = self._pick_tag_rect(x, self.cy, 80, 30, [])
         stem = self.radar._tag_stem_segment(x, self.cy, rect, on_right)
         self.assertNotEqual(stem[0], stem[1])
         surface = self.radar.pygame.Surface((self.theme.SIZE, self.theme.SIZE))
@@ -213,6 +176,45 @@ class TestRadarTagSide(unittest.TestCase):
         self.assertEqual(draw_line.call_count, 2)
         widths = [call.args[4] for call in draw_line.call_args_list]
         self.assertEqual(widths, [2, 2])
+
+
+class TestTagQuadrants(unittest.TestCase):
+    def setUp(self):
+        from display.round_touch import theme
+        from display.round_touch.screens import radar
+
+        self.theme = theme
+        self.radar = radar
+        self.cx = theme.CENTER_X
+        self.cy = theme.CENTER_Y
+
+    def _pick_tag_rect(self, x, y, w, h, _placed=()):
+        """A representative box for the leader tests.
+
+        Slot selection moved to label_layout (see test_label_layout); these
+        tests only care about the bracket drawn around a given rect.
+        """
+        on_right = self.radar._preferred_tag_on_right(x)
+        return on_right, self.radar._tag_rect(x, y, w, h, on_right)
+
+    def test_above_slot_still_gets_a_diagonal(self):
+        x, w, h = self.cx - 80, 80, 30
+        rect = self.radar._tag_rect(x, self.cy, w, h, True, self.radar._TAG_V_ABOVE)
+        geo_pts = self.radar._tag_leader_geometry(x, self.cy, rect, True)
+        # Underline runs along the far edge, so the diagonal has room to exist.
+        self.assertLessEqual(geo_pts["underline"][0][1], rect.top)
+        stem = geo_pts["stem"]
+        self.assertIsNotNone(stem)
+        self.assertNotEqual(stem[0], stem[1])
+        length = math.hypot(stem[1][0] - stem[0][0], stem[1][1] - stem[0][1])
+        self.assertGreater(length, self.theme.s(6))
+
+    def test_below_slot_keeps_the_underline_beneath(self):
+        x, w, h = self.cx - 80, 80, 30
+        rect = self.radar._tag_rect(x, self.cy, w, h, True, self.radar._TAG_V_BELOW)
+        geo_pts = self.radar._tag_leader_geometry(x, self.cy, rect, True)
+        self.assertGreaterEqual(geo_pts["underline"][0][1], rect.bottom)
+        self.assertIsNotNone(geo_pts["stem"])
 
 
 class TestTagLeadersFollowLabels(unittest.TestCase):
