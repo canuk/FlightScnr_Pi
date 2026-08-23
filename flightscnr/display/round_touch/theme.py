@@ -29,7 +29,7 @@ def _apply_framebuffer_side(side: int) -> None:
     global GRID_OUTER_RADIUS, CARDINAL_NORTH_OFFSET_Y, CARDINAL_SOUTH_OFFSET_Y
     global CARDINAL_DIAGONAL_INSET, SCALE_GAP_FROM_OUTER_RING, SCALE_GAP_OUTER_RING_KM
     global GRID_DASH_LEN, GRID_DASH_GAP, AIRCRAFT_ICON_RADIUS, AIRCRAFT_LABEL_GAP
-    global BEYOND_RING_MARGIN, SWEEP_RADIUS, TAP_PICK_RADIUS
+    global BEYOND_RING_MARGIN, SWEEP_RADIUS, TAP_PICK_RADIUS, RIM_BLIP_RADIUS
     global FONT_TITLE, FONT_BODY, FONT_DETAIL, FONT_CLOCK, FONT_CLOCK_AMPM
     global FONT_CARDINAL, FONT_CARDINAL_DIAG, FONT_TAG, FONT_TAG_SUB
 
@@ -52,6 +52,11 @@ def _apply_framebuffer_side(side: int) -> None:
     AIRCRAFT_LABEL_GAP = s(3)
     BEYOND_RING_MARGIN = s(3)
     SWEEP_RADIUS = VISIBLE_RADIUS - BEYOND_RING_MARGIN
+    # Out-of-range targets in "dot" style. Drawn as a whole circle centred
+    # BEYOND_RING_MARGIN inside the rim; apply_round_bezel() crops whatever
+    # overhangs, so a radius above that margin leaves a D flat against the edge.
+    # Half unit: the only value that lands on a 24px diameter at 720px.
+    RIM_BLIP_RADIUS = s(6.5)
     TAP_PICK_RADIUS = s(36)
     FONT_TITLE = s(28)
     FONT_BODY = s(22)

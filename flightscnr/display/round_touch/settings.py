@@ -1661,6 +1661,21 @@ def set_color_by_altitude(enabled: bool):
     _save(_state)
 
 
+def rim_target_style() -> str:
+    """How out-of-range targets render on the rim: dot | plane.
+
+    config.h / env only for now — there is no web-portal control yet, so this
+    reads straight through instead of being seeded into the saved settings.
+    config._parse_rim_style() has already validated the value.
+    """
+    try:
+        from config import RADAR_RIM_STYLE
+
+        return RADAR_RIM_STYLE
+    except ImportError:
+        return "plane"
+
+
 def show_range_rings() -> bool:
     return bool(_state.get("show_range_rings", True))
 
