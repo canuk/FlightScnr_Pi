@@ -89,6 +89,28 @@ def validate_config():
     return len(errors) == 0
 
 
+def stop_web_server(proc, timeout: float = 5.0) -> None:
+    """Stop the web-portal child on the way out.
+
+    Without this the child outlives the display loop and only dies when systemd
+    SIGKILLs the leftovers in the cgroup.
+    """
+    if proc is None or proc.poll() is not None:
+        return
+    logger.info("Stopping web portal (pid %d)", proc.pid)
+    proc.terminate()
+    try:
+        proc.wait(timeout=timeout)
+        return
+    except subprocess.TimeoutExpired:
+        logger.warning("Web portal ignored SIGTERM after %.0fs — killing", timeout)
+    proc.kill()
+    try:
+        proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        logger.error("Web portal (pid %d) survived SIGKILL", proc.pid)
+
+
 if __name__ == "__main__":
     # SDL reads WM_CLASS at init time — before any pygame import in the tree.
     from utilities.kiosk_env import apply_sdl_kiosk_env
@@ -105,9 +127,12 @@ if __name__ == "__main__":
     app_path = os.path.join(base_dir, "web", "app.py")
 
     # Start Flask server in background (use same interpreter as this process)
-    subprocess.Popen([sys.executable, app_path])
+    web_server = subprocess.Popen([sys.executable, app_path])
 
     # Start round touch display loop
     from display import Display
     display = Display()
-    display.run()
+    try:
+        display.run()
+    finally:
+        stop_web_server(web_server)
