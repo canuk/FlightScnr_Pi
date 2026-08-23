@@ -614,7 +614,7 @@ def _draw_grid(surface, *, calibrate: bool = False):
         return
 
     use_units = settings.distance_units()
-    scale_font = draw.load_font(theme.FONT_TAG, bold=True)
+    scale_font = draw.load_font(theme.FONT_SCALE_LABEL, bold=True)
     outer_km = scale.active_band()["label_km"]
     for ring in range(1, theme.RING_COUNT + 1):
         ring_km = outer_km * ring / theme.RING_COUNT
@@ -637,9 +637,9 @@ def _tag_block_metrics():
     sub_h = sub_font.get_height()
     # Font height includes generous leading. Apply the same tuck to every row so
     # tags stay compact without the old callsign/type overlap (tuck_main was 6).
-    tuck = theme.s(4)
-    step_main = max(theme.s(9), main_h - tuck)
-    step_sub = max(theme.s(8), sub_h - tuck)
+    tuck = theme.TAG_ROW_TUCK
+    step_main = max(theme.TAG_ROW_STEP_MAIN_MIN, main_h - tuck)
+    step_sub = max(theme.TAG_ROW_STEP_SUB_MIN, sub_h - tuck)
     offsets = [0, step_main, step_main + step_sub]
     block_h = offsets[-1] + step_sub
     return block_h, offsets, main_font, sub_font
