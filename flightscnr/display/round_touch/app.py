@@ -12,6 +12,7 @@
 import logging
 import math
 import os
+import signal
 import time
 from threading import Thread
 
@@ -140,6 +141,10 @@ class RoundTouchDisplay:
         self.overhead = Overhead()
         # Defer FR24/AIS/ATC until the boot disclaimer is accepted.
         self._session_unlocked = False
+
+        # Set by the SIGTERM/SIGINT handler; the run() loop polls it.
+        self._stop_requested = False
+        self._stop_signal: int | None = None
 
         self.input = input_handler.TouchInput()
         self.pinch = pinch_handler.PinchZoom()
@@ -4304,6 +4309,25 @@ class RoundTouchDisplay:
         except Exception:
             logger.exception("[ais] vessel poll failed")
 
+    def _install_signal_handlers(self) -> None:
+        """Break the render loop on SIGTERM/SIGINT rather than waiting for SIGKILL.
+
+        Installed after SDL init so these win even if SDL claimed the signals
+        despite SDL_NO_SIGNAL_HANDLERS. The handler only sets flags —
+        logging from inside a signal handler can deadlock on the logging lock.
+        """
+
+        def _request_stop(signum, _frame):
+            self._stop_signal = signum
+            self._stop_requested = True
+
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            try:
+                signal.signal(sig, _request_stop)
+            except (OSError, ValueError):
+                # Not the main thread, or the platform lacks this signal.
+                logger.warning("Could not install a handler for %s", sig)
+
     def run(self):
         import gc
         import sys
@@ -4316,6 +4340,7 @@ class RoundTouchDisplay:
         # freeze them so gen-2 collections stop scanning them (~90ms pauses).
         gc.collect()
         gc.freeze()
+        self._install_signal_handlers()
 
         logger.info(
             "Round touch display starting (%dx%d framebuffer, rotation=%d°, visible radius=%d)",
@@ -4353,6 +4378,12 @@ class RoundTouchDisplay:
 
         try:
             while running:
+                if self._stop_requested:
+                    logger.info(
+                        "Received %s — shutting down",
+                        signal.Signals(self._stop_signal).name,
+                    )
+                    break
                 x11_kiosk.tick_kiosk_chrome()
                 if (
                     not pinch_diag_logged

@@ -42,6 +42,7 @@ class TestDeriveWmClass(unittest.TestCase):
             "SDL_VIDEO_X11_WMCLASS",
             "SDL_VIDEO_WAYLAND_WMCLASS",
             "SDL_VIDEO_MINIMIZE_ON_FOCUS_LOSS",
+            "SDL_NO_SIGNAL_HANDLERS",
         )
         saved = {key: os.environ.pop(key) for key in keys if key in os.environ}
         try:
@@ -49,6 +50,9 @@ class TestDeriveWmClass(unittest.TestCase):
             self.assertEqual(wm, "flightscnr")
             self.assertEqual(os.environ["SDL_VIDEO_X11_WMCLASS"], "flightscnr")
             self.assertEqual(os.environ["SDL_VIDEO_WAYLAND_WMCLASS"], "flightscnr")
+            # Without this SDL swallows SIGTERM into an SDL_QUIT event, which
+            # the radar loop ignores — the service then only dies on SIGKILL.
+            self.assertEqual(os.environ["SDL_NO_SIGNAL_HANDLERS"], "1")
         finally:
             for key in keys:
                 os.environ.pop(key, None)
