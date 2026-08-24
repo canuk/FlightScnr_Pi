@@ -127,21 +127,65 @@ class TestStabilizeRadius(unittest.TestCase):
         from display.round_touch import live_map
 
         self.assertEqual(
-            live_map.stabilize_radius_km(22.0, 8.0, have_speed=False), 22.0
+            live_map.stabilize_radius_km(24.0, 8.0, have_speed=False), 24.0
         )
 
-    def test_ignores_small_jitter(self):
+    def test_snaps_to_discrete_step_on_first_fix(self):
         from display.round_touch import live_map
 
         self.assertEqual(
-            live_map.stabilize_radius_km(20.0, 21.5, have_speed=True), 20.0
+            live_map.stabilize_radius_km(0.0, 21.5, have_speed=True), 24.0
         )
 
-    def test_accepts_real_speed_change(self):
+    def test_ignores_small_jitter_within_step(self):
+        from display.round_touch import live_map
+
+        # At 16 km step, need raw >= 16 + (24-16)*0.9 = 23.2 to zoom out.
+        self.assertEqual(
+            live_map.stabilize_radius_km(16.0, 21.5, have_speed=True), 16.0
+        )
+
+    def test_zooms_out_one_step_when_crossing_up_threshold(self):
+        from display.round_touch import live_map
+
+        # 16 → 24 when raw clears 90% of the gap (23.2).
+        self.assertEqual(
+            live_map.stabilize_radius_km(16.0, 23.5, have_speed=True), 24.0
+        )
+
+    def test_zooms_in_early_when_slowing(self):
+        from display.round_touch import live_map
+
+        # At 16 km, down threshold = 16 - (16-13)*0.25 = 15.25.
+        self.assertEqual(
+            live_map.stabilize_radius_km(16.0, 15.0, have_speed=True), 13.0
+        )
+
+    def test_catch_up_zoom_out_in_one_poll(self):
+        from display.round_touch import live_map
+
+        # Cruise raw ~62 km should land on 64 km, not creep 8→13→… over many polls.
+        self.assertEqual(
+            live_map.stabilize_radius_km(8.0, 62.0, have_speed=True), 64.0
+        )
+
+    def test_taxi_snap_from_approach_zoom(self):
+        from display.round_touch import live_map
+
+        # gs=0 on the ground must snap to 2 mi, not hold approach zoom.
+        self.assertEqual(
+            live_map.stabilize_radius_km(
+                16.0, 3.22, have_speed=True, taxi_snap=True
+            ),
+            3.22,
+        )
+
+    def test_display_radius_steps_cover_issue_114_ladder(self):
         from display.round_touch import live_map
 
         self.assertEqual(
-            live_map.stabilize_radius_km(20.0, 35.0, have_speed=True), 35.0
+            live_map._LIVE_MAP_RADIUS_STEPS_KM,
+            (3.22, 4.8, 8.0, 13.0, 16.0, 24.0, 32.0, 48.0, 64.0, 96.0, 120.0),
         )
 
 

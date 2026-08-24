@@ -180,13 +180,16 @@ POSITION_SOURCE_ORDER = _parse_position_source_order(
     os.environ.get("POSITION_SOURCE_ORDER", "")
 )
 
-# Extended live-tracking map (Radar > Track > Live): radius is
+# Extended live-tracking map (Radar > Track > Live / Follow): radius is
 # derived from current ground speed (distance covered in
-# LIVE_TRACKING_PREVIEW_MINUTES), clamped to [MIN, MAX]. MAX mirrors the
-# main-display radar outer band (50mi ≈ 80.5km).
+# LIVE_TRACKING_PREVIEW_MINUTES), with low-speed compression, then clamped
+# to [MIN, MAX]. MIN matches LIVE_TRACKING_TAXI_RADIUS_MI (2 mi ≈ 3.22 km).
 LIVE_TRACKING_PREVIEW_MINUTES = float(os.environ.get("LIVE_TRACKING_PREVIEW_MINUTES", "5"))
-LIVE_TRACKING_MIN_RADIUS_KM = float(os.environ.get("LIVE_TRACKING_MIN_RADIUS_KM", "8"))
-LIVE_TRACKING_MAX_RADIUS_KM = float(os.environ.get("LIVE_TRACKING_MAX_RADIUS_KM", "80.5"))
+LIVE_TRACKING_MIN_RADIUS_KM = float(os.environ.get("LIVE_TRACKING_MIN_RADIUS_KM", "3.22"))
+LIVE_TRACKING_MAX_RADIUS_KM = float(os.environ.get("LIVE_TRACKING_MAX_RADIUS_KM", "120"))
+# Below this ground speed (kt), Follow uses a fixed map radius (mi).
+LIVE_TRACKING_TAXI_MAX_SPEED_KT = float(os.environ.get("LIVE_TRACKING_TAXI_MAX_SPEED_KT", "50"))
+LIVE_TRACKING_TAXI_RADIUS_MI = float(os.environ.get("LIVE_TRACKING_TAXI_RADIUS_MI", "2"))
 
 # NASA FIRMS free MAP_KEY for wildfire detections on the radar.
 # https://firms.modaps.eosdis.nasa.gov/api/map_key/
@@ -405,6 +408,32 @@ def _parse_tag_font_scale(raw: str) -> float:
 
 
 RADAR_TAG_FONT_SCALE = _parse_tag_font_scale(os.environ.get("RADAR_TAG_FONT_SCALE", ""))
+
+# Out-of-range targets on the radar rim: dot | plane. Normalized here only —
+# display.round_touch.settings.rim_target_style() reads this value as-is.
+RIM_STYLES = ("plane", "dot")
+
+
+def _parse_rim_style(raw: str) -> str:
+    """Validate RADAR_RIM_STYLE, defaulting to the aircraft icon.
+
+    Unset means an existing install that never opted in, so it keeps the icon
+    it already had rather than silently changing on upgrade.
+    """
+    style = (raw or "").strip().lower()
+    if style in RIM_STYLES:
+        return style
+    if style:
+        logger.warning(
+            "RADAR_RIM_STYLE=%r is not one of %s — using 'plane'",
+            style,
+            ", ".join(RIM_STYLES),
+        )
+    return "plane"
+
+
+RADAR_RIM_STYLE = _parse_rim_style(os.environ.get("RADAR_RIM_STYLE", ""))
+
 
 # --- AIS vessel radar declutter (config.h) ---
 # One-line vessel name only (no type/speed); never show MMSI as a label.

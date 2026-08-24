@@ -44,4 +44,9 @@ def apply_sdl_kiosk_env(argv: list[str] | None = None) -> str:
     os.environ.setdefault("SDL_VIDEO_X11_WMCLASS", wm_class)
     os.environ.setdefault("SDL_VIDEO_WAYLAND_WMCLASS", wm_class)
     os.environ.setdefault("SDL_VIDEO_MINIMIZE_ON_FOCUS_LOSS", "0")
+    # Otherwise SDL traps SIGINT/SIGTERM and re-delivers them as an SDL_QUIT
+    # event, which the radar loop deliberately ignores because touch drivers
+    # emit spurious QUITs. Leave the signals to Python so systemd can stop the
+    # service without waiting out TimeoutStopSec and SIGKILLing the cgroup.
+    os.environ.setdefault("SDL_NO_SIGNAL_HANDLERS", "1")
     return wm_class
