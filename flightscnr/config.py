@@ -380,6 +380,35 @@ DISPLAY_FULLSCREEN = _bool(os.environ.get("DISPLAY_FULLSCREEN", "True"))
 # Flight detail: show airline logo when no aircraft photo (False = photo-only / text).
 SHOW_AIRLINE_LOGOS = _bool(os.environ.get("SHOW_AIRLINE_LOGOS", "False"))
 
+# Radar target tags: multiplier on the tag fonts and the block metrics derived
+# from them. Range-ring distance labels are deliberately unaffected.
+RADAR_TAG_FONT_SCALE_MIN = 0.5
+RADAR_TAG_FONT_SCALE_MAX = 2.0
+
+
+def _parse_tag_font_scale(raw: str) -> float:
+    """Validate RADAR_TAG_FONT_SCALE, defaulting to 1.0 (today's size)."""
+    text = (raw or "").strip()
+    if not text:
+        return 1.0
+    try:
+        value = float(text)
+    except (TypeError, ValueError):
+        logger.warning("RADAR_TAG_FONT_SCALE=%r is not a number — using 1.0", text)
+        return 1.0
+    if not RADAR_TAG_FONT_SCALE_MIN <= value <= RADAR_TAG_FONT_SCALE_MAX:
+        logger.warning(
+            "RADAR_TAG_FONT_SCALE=%s is outside %s-%s — using 1.0",
+            text,
+            RADAR_TAG_FONT_SCALE_MIN,
+            RADAR_TAG_FONT_SCALE_MAX,
+        )
+        return 1.0
+    return value
+
+
+RADAR_TAG_FONT_SCALE = _parse_tag_font_scale(os.environ.get("RADAR_TAG_FONT_SCALE", ""))
+
 # Out-of-range targets on the radar rim: dot | plane. Normalized here only —
 # display.round_touch.settings.rim_target_style() reads this value as-is.
 RIM_STYLES = ("plane", "dot")
@@ -404,6 +433,7 @@ def _parse_rim_style(raw: str) -> str:
 
 
 RADAR_RIM_STYLE = _parse_rim_style(os.environ.get("RADAR_RIM_STYLE", ""))
+
 
 # --- AIS vessel radar declutter (config.h) ---
 # One-line vessel name only (no type/speed); never show MMSI as a label.

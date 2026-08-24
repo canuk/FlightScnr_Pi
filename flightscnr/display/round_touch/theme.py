@@ -19,8 +19,23 @@ except ImportError:
         return 720
 
 
+try:
+    from config import RADAR_TAG_FONT_SCALE as _CONFIG_TAG_FONT_SCALE
+except ImportError:
+    _CONFIG_TAG_FONT_SCALE = 1.0
+
+# Multiplier for radar target tags only. Range-ring distance labels use plain
+# s() so they stay a fixed reference when tags are resized.
+TAG_FONT_SCALE = float(_CONFIG_TAG_FONT_SCALE)
+
+
 def s(value: float) -> int:
     return max(1, int(round(value * SCALE)))
+
+
+def tag_s(value: float) -> int:
+    """s() for radar tag metrics, scaled by RADAR_TAG_FONT_SCALE."""
+    return max(1, int(round(value * SCALE * TAG_FONT_SCALE)))
 
 
 def _apply_framebuffer_side(side: int) -> None:
@@ -32,6 +47,7 @@ def _apply_framebuffer_side(side: int) -> None:
     global BEYOND_RING_MARGIN, SWEEP_RADIUS, TAP_PICK_RADIUS, RIM_BLIP_RADIUS
     global FONT_TITLE, FONT_BODY, FONT_DETAIL, FONT_CLOCK, FONT_CLOCK_AMPM
     global FONT_CARDINAL, FONT_CARDINAL_DIAG, FONT_TAG, FONT_TAG_SUB
+    global FONT_SCALE_LABEL, TAG_ROW_TUCK, TAG_ROW_STEP_MAIN_MIN, TAG_ROW_STEP_SUB_MIN
 
     SIZE = side
     SCALE = SIZE / REF_SIZE
@@ -66,8 +82,16 @@ def _apply_framebuffer_side(side: int) -> None:
     FONT_CARDINAL = s(15)
     FONT_CARDINAL_DIAG = s(15)
     # Radar callsign / type / alt tags (aircraft + vessels) — keep compact.
-    FONT_TAG = s(12)
-    FONT_TAG_SUB = s(11)
+    FONT_TAG = tag_s(12)
+    FONT_TAG_SUB = tag_s(11)
+    # Range-ring distance labels ("1mi", "20mi") — fixed, so resizing tags
+    # leaves the scale reference alone.
+    FONT_SCALE_LABEL = s(12)
+    # Row spacing for the tag block. These scale with the fonts, otherwise the
+    # floors pin the block height and shrinking the text buys no space back.
+    TAG_ROW_TUCK = tag_s(4)
+    TAG_ROW_STEP_MAIN_MIN = tag_s(9)
+    TAG_ROW_STEP_SUB_MIN = tag_s(8)
 
 
 def set_framebuffer_side(side: int) -> None:
@@ -84,6 +108,17 @@ def set_framebuffer_side(side: int) -> None:
         draw.invalidate_bezel_cache()
     except ImportError:
         pass
+
+
+def set_tag_font_scale(value: float) -> None:
+    """Resize radar target tags at runtime.
+
+    config validates RADAR_TAG_FONT_SCALE at startup; this is the entry point
+    for experimenting and for tests, so it only guards against a useless value.
+    """
+    global TAG_FONT_SCALE
+    TAG_FONT_SCALE = max(0.1, float(value))
+    _apply_framebuffer_side(SIZE)
 
 
 _apply_framebuffer_side(square_framebuffer_side())

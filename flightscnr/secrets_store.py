@@ -50,6 +50,7 @@ MANAGED_KEYS = (
 # Non-secret keys from config.h that should become env vars when unset.
 CONFIG_H_SETTINGS = MANAGED_KEYS + (
     "SHOW_AIRLINE_LOGOS",
+    "RADAR_TAG_FONT_SCALE",
     "RADAR_RIM_STYLE",
     "VESSEL_SHORT_TAGS",
     "VESSEL_HIERARCHY",
