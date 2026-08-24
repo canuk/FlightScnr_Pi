@@ -41,6 +41,11 @@ HOME_LON = -122.372035
 // Flight detail: airline logo when no planespotters photo (True/False)
 SHOW_AIRLINE_LOGOS = False
 
+// Aircraft beyond the radar range, pinned to the rim: dot | plane
+// plane = the aircraft icon, pointing along its track (default)
+// dot   = small half-round blip flat against the display edge
+RADAR_RIM_STYLE = plane
+
 // AIS vessel radar declutter
 // One-line name only (no type/speed); never label with MMSI
 VESSEL_SHORT_TAGS = True

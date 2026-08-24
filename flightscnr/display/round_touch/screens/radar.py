@@ -1265,13 +1265,21 @@ def _draw_flights(surface, flights):
         inner_items.sort(key=_draw_order)
         _t = frame_debug.end("2r_f_sort", _t)
 
+        # Hoisted: one config read per pass, not one per rim target.
+        rim_style = settings.rim_target_style()
         for _, flight, (x, y) in rim_items:
+            color = _flight_icon_color(flight, compact=True)
+            if rim_style == "dot":
+                # Whole dot centred inside the rim; apply_round_bezel() crops
+                # the overhang, leaving a D flat against the display edge.
+                pygame.draw.circle(surface, color, (x, y), theme.RIM_BLIP_RADIUS)
+                continue
             aircraft.draw_plane_icon(
                 surface,
                 x,
                 y,
                 geo.screen_heading(flight.get("heading") or 0),
-                _flight_icon_color(flight, compact=True),
+                color,
                 compact=True,
                 flight=flight,
             )

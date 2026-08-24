@@ -380,6 +380,31 @@ DISPLAY_FULLSCREEN = _bool(os.environ.get("DISPLAY_FULLSCREEN", "True"))
 # Flight detail: show airline logo when no aircraft photo (False = photo-only / text).
 SHOW_AIRLINE_LOGOS = _bool(os.environ.get("SHOW_AIRLINE_LOGOS", "False"))
 
+# Out-of-range targets on the radar rim: dot | plane. Normalized here only —
+# display.round_touch.settings.rim_target_style() reads this value as-is.
+RIM_STYLES = ("plane", "dot")
+
+
+def _parse_rim_style(raw: str) -> str:
+    """Validate RADAR_RIM_STYLE, defaulting to the aircraft icon.
+
+    Unset means an existing install that never opted in, so it keeps the icon
+    it already had rather than silently changing on upgrade.
+    """
+    style = (raw or "").strip().lower()
+    if style in RIM_STYLES:
+        return style
+    if style:
+        logger.warning(
+            "RADAR_RIM_STYLE=%r is not one of %s — using 'plane'",
+            style,
+            ", ".join(RIM_STYLES),
+        )
+    return "plane"
+
+
+RADAR_RIM_STYLE = _parse_rim_style(os.environ.get("RADAR_RIM_STYLE", ""))
+
 # --- AIS vessel radar declutter (config.h) ---
 # One-line vessel name only (no type/speed); never show MMSI as a label.
 VESSEL_SHORT_TAGS = _bool(os.environ.get("VESSEL_SHORT_TAGS", "True"))
