@@ -141,6 +141,7 @@ ATC_QUIET_ACTIONS = (
 )
 # Power / service controls (portal System section equivalent).
 SYSTEM_ACTIONS = (
+    "wifi_setup",
     "restart",
     "reboot",
     "shutdown",
@@ -810,6 +811,8 @@ def atc_picker_list_rect() -> pygame.Rect | None:
 
 
 def _system_button_label(action: str) -> str:
+    if action == "wifi_setup":
+        return "Start Wi-Fi Setup"
     if action == "restart":
         return "Restart App"
     if action == "reboot":
