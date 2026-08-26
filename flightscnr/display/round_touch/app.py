@@ -1645,6 +1645,8 @@ class RoundTouchDisplay:
             self._open_atc_picker("favourite")
         elif action == "aircraft_tag":
             self._open_atc_picker("aircraft_tag")
+        elif action == "aircraft_tag_id":
+            self._open_atc_picker("aircraft_tag_id")
         elif action == "min_height":
             self._open_atc_picker("min_height")
         elif action == "max_height":
@@ -1910,6 +1912,10 @@ class RoundTouchDisplay:
             return
         if kind == "aircraft_tag":
             settings.set_traffic_labels(choice)
+            radar.invalidate_frame_layer()
+            return
+        if kind == "aircraft_tag_id":
+            settings.set_aircraft_tag_id(choice)
             radar.invalidate_frame_layer()
             return
         if kind == "rim_style":

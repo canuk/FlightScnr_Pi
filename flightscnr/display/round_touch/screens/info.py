@@ -101,6 +101,7 @@ HUD_ACTIONS = (
 # Filter / map controls — kept short so rows fit the round viewport.
 OPTIONS_ACTIONS = (
     "aircraft_tag",
+    "aircraft_tag_id",
     "favourite",
     "min_height",
     "max_height",
@@ -173,6 +174,7 @@ LIST_PICKER_KINDS = frozenset(
         "units",
         "rotate",
         "aircraft_tag",
+        "aircraft_tag_id",
         "min_height",
         "max_height",
         "aircraft_min_speed",
@@ -196,6 +198,7 @@ _LIST_PICKER_TITLES = {
     "units": "Units",
     "rotate": "Rotate screen",
     "aircraft_tag": "Traffic labels",
+    "aircraft_tag_id": "Aircraft ID",
     "rim_style": "Rim targets",
     "min_height": "Min altitude",
     "max_height": "Max altitude",
@@ -460,6 +463,12 @@ def _build_settings_picker_items(kind: str) -> list[dict]:
             settings.TRAFFIC_LABEL_MODES,
             settings.traffic_labels(),
             lambda mode: settings.TRAFFIC_LABEL_LABELS.get(mode, str(mode)),
+        )
+    if kind == "aircraft_tag_id":
+        return _enum_picker_items(
+            settings.AIRCRAFT_TAG_ID_MODES,
+            settings.aircraft_tag_id(),
+            lambda mode: settings.AIRCRAFT_TAG_ID_LABELS.get(mode, str(mode)),
         )
     if kind == "rim_style":
         return _enum_picker_items(
@@ -1873,6 +1882,7 @@ def _options_row_labels() -> list[str]:
     fav = favourite_locations.active_label()
     return [
         f"Traffic Labels › {settings.traffic_labels_label()}",
+        f"Aircraft ID › {settings.aircraft_tag_id_label()}",
         f"Favorite Locations › {fav}",
         f"Min Aircraft Altitude › {settings.min_height_ft()} ft",
         f"Max Aircraft Altitude › {settings.max_height_ft()} ft",

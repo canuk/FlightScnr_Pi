@@ -15,6 +15,8 @@ Delta DAL). Logos should follow the ticketed airline, not the operating callsign
 
 from __future__ import annotations
 
+import time
+
 # Operators that fly for multiple marketing brands.
 AMBIGUOUS_REGIONALS = {
     "RPA", "SKW", "ENY", "JIA", "EDV", "GJS", "CPZ", "ASQ", "PDT", "JZA",
@@ -197,6 +199,54 @@ def display_flight_id_for_flight(flight: dict) -> str:
         flight_number=flight.get("flight_number") or flight.get("number") or "",
         callsign=flight.get("callsign") or flight.get("registration") or "",
     )
+
+
+def raw_callsign_for_flight(flight: dict) -> str:
+    """ATC / ADS-B callsign as transmitted (e.g. SKW5796), not marketing IATA."""
+    cs = _normalize(flight.get("callsign") or "")
+    if cs:
+        return cs
+    return _normalize(flight.get("registration") or "")
+
+
+def aircraft_tag_identity(
+    flight: dict,
+    *,
+    mode: str = "flight_number",
+    now: float | None = None,
+    alternate_s: float = 2.5,
+) -> str:
+    """Identity string for the radar aircraft tag top line.
+
+    Modes:
+      flight_number — passenger-facing ID (UA5796)
+      callsign — ATC/ADS-B callsign (SKW5796 / UAL34)
+      both — time-alternate on the same line when the two differ
+    """
+    flight_disp = display_flight_id_for_flight(flight)
+    callsign_disp = raw_callsign_for_flight(flight) or "—"
+    if not flight_disp or flight_disp == "—":
+        flight_disp = callsign_disp
+
+    raw_mode = str(mode or "flight_number").strip().lower()
+    if raw_mode == "callsign":
+        return callsign_disp if callsign_disp and callsign_disp != "—" else flight_disp
+    if raw_mode == "both":
+        if (
+            not callsign_disp
+            or callsign_disp == "—"
+            or not flight_disp
+            or flight_disp == "—"
+            or callsign_disp == flight_disp
+        ):
+            return flight_disp if flight_disp and flight_disp != "—" else callsign_disp
+        t = time.time() if now is None else float(now)
+        period = float(alternate_s) if alternate_s and alternate_s > 0 else 2.5
+        # Even phase → flight number; odd → callsign.
+        if int(t / period) % 2:
+            return callsign_disp
+        return flight_disp
+    return flight_disp
 
 
 def resolve_logo_icao(

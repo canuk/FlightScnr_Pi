@@ -1118,6 +1118,7 @@ def radar_json():
             "color_by_altitude": settings.color_by_altitude(),
             "show_aircraft_tag": settings.show_aircraft_tag(),
             "traffic_labels": settings.traffic_labels(),
+            "aircraft_tag_id": settings.aircraft_tag_id(),
             "facing_deg": settings.facing_deg(),
             "show_sweep_line": settings.show_sweep_line(),
             "show_tag_leaders": settings.tag_leaders_preferred(),
@@ -1266,6 +1267,8 @@ def radar_save():
         settings.set_traffic_labels(data.get("traffic_labels"))
     elif "show_aircraft_tag" in data:
         settings.set_show_aircraft_tag(bool(data.get("show_aircraft_tag")))
+    if "aircraft_tag_id" in data:
+        settings.set_aircraft_tag_id(data.get("aircraft_tag_id"))
     if "facing_deg" in data:
         settings.set_facing_deg(data.get("facing_deg"))
     if "show_sweep_line" in data:

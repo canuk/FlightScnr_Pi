@@ -52,6 +52,16 @@ TRAFFIC_LABEL_LABELS = {
     "both": "Aircraft and Marine",
     "off": "OFF",
 }
+# Radar aircraft identity line: marketing flight number, ATC callsign, or both
+# (time-alternating on the same line when they differ).
+AIRCRAFT_TAG_ID_MODES = ("flight_number", "callsign", "both")
+AIRCRAFT_TAG_ID_LABELS = {
+    "flight_number": "Flight number",
+    "callsign": "Callsign",
+    "both": "Both (alternate)",
+}
+# Seconds between identity swaps when aircraft_tag_id == both.
+AIRCRAFT_TAG_ID_ALTERNATE_S = 2.5
 # Out-of-range aircraft on the radar rim (PR118).
 RIM_TARGET_STYLES = ("plane", "dot")
 RIM_TARGET_STYLE_LABELS = {
@@ -283,6 +293,8 @@ _defaults = {
     "show_aircraft_tag": True,
     # aircraft | marine | both | off — which callsign/name tags to draw
     "traffic_labels": "aircraft",
+    # flight_number | callsign | both — aircraft identity line content
+    "aircraft_tag_id": "flight_number",
     # Real-world direction at the top of the screen (0=north-up).
     "facing_deg": 0.0,
     "show_sweep": True,
@@ -728,6 +740,12 @@ def _load():
     else:
         state["traffic_labels"] = labels
     state["show_aircraft_tag"] = state["traffic_labels"] != "off"
+    tag_id = str(state.get("aircraft_tag_id") or "").strip().lower()
+    if tag_id not in AIRCRAFT_TAG_ID_MODES:
+        state["aircraft_tag_id"] = "flight_number"
+        migrated = True
+    else:
+        state["aircraft_tag_id"] = tag_id
     state["facing_deg"] = _normalize_facing(state.get("facing_deg", 0))
     if "map_style" not in data:
         try:
@@ -1089,6 +1107,7 @@ def _settings_snapshot(state: dict) -> tuple:
         state.get("color_by_altitude"),
         state.get("show_aircraft_tag"),
         state.get("traffic_labels"),
+        state.get("aircraft_tag_id"),
         _normalize_facing(state.get("facing_deg", 0)),
         state.get("show_sweep"),
         state.get("show_tag_leaders"),
@@ -1928,6 +1947,27 @@ def toggle_show_aircraft_tag():
 def set_show_aircraft_tag(enabled: bool):
     """Legacy setter: True → both, False → off."""
     set_traffic_labels("both" if enabled else "off")
+
+
+def aircraft_tag_id() -> str:
+    """Aircraft tag identity: flight_number, callsign, or both (alternate)."""
+    mode = str(_state.get("aircraft_tag_id") or "").strip().lower()
+    if mode in AIRCRAFT_TAG_ID_MODES:
+        return mode
+    return "flight_number"
+
+
+def aircraft_tag_id_label() -> str:
+    return AIRCRAFT_TAG_ID_LABELS.get(aircraft_tag_id(), "Flight number")
+
+
+def set_aircraft_tag_id(mode: str) -> str:
+    raw = str(mode or "").strip().lower()
+    if raw not in AIRCRAFT_TAG_ID_MODES:
+        raw = "flight_number"
+    _state["aircraft_tag_id"] = raw
+    _save(_state)
+    return raw
 
 
 def facing_deg() -> float:
