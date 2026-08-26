@@ -931,8 +931,13 @@ def _aircraft_tag_lines(flight):
 
     block_h, offsets, main_font, sub_font = _tag_block_metrics()
     try:
-        from utilities.airline_branding import display_flight_id_for_flight
-        callsign = display_flight_id_for_flight(flight)
+        from utilities.airline_branding import aircraft_tag_identity
+
+        callsign = aircraft_tag_identity(
+            flight,
+            mode=settings.aircraft_tag_id(),
+            alternate_s=settings.AIRCRAFT_TAG_ID_ALTERNATE_S,
+        )
     except ImportError:
         callsign = flight.get("callsign") or "—"
     plane_type = flight.get("plane") or ""
