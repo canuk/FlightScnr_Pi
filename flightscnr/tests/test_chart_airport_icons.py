@@ -151,6 +151,20 @@ class TestChartMarkerDrawing:
     def test_draws_something(self):
         assert any(b != 0 for b in self._draw(False, False, False))
 
+    def test_disc_is_filled(self):
+        surf = pygame.Surface((80, 80), pygame.SRCALPHA)
+        airport_overlay.draw_chart_icon(
+            surf, (40, 40), 12, towered=False, fuel=False, beacon=False
+        )
+        assert surf.get_at((40, 40))[3] > 150  # center painted, not a hollow ring
+
+    def test_size_is_uniform_across_types(self):
+        sizes = {
+            airport_overlay.chart_icon_radius({"type": t})
+            for t in ("large_airport", "medium_airport", "small_airport")
+        }
+        assert len(sizes) == 1
+
     def test_towered_and_untowered_differ(self):
         assert self._draw(True, False, False) != self._draw(False, False, False)
 
