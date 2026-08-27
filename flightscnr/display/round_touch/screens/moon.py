@@ -298,8 +298,34 @@ def _blit_arc_items(
         )
 
 
-# Cool moon-blue, the lunar counterpart of the golden Tomorrow.io sun icons.
-_MOON_ICON_BLUE = (136, 172, 232)
+# Soft moonlight silver-blue for the rise/set crescents.
+_MOON_ICON_BLUE = (174, 191, 214)
+_RISE_SET_DIR = os.path.join(os.path.dirname(os.path.normpath(_ASSET_PATH)))
+_rise_set_cache: dict[tuple[str, int], pygame.Surface | None] = {}
+
+
+def _rise_set_asset(kind: str) -> pygame.Surface | None:
+    """White-on-transparent Noun Project crescent+arrow art (tintable)."""
+    key = (kind, 0)
+    if key in _rise_set_cache:
+        return _rise_set_cache[key]
+    path = os.path.join(_RISE_SET_DIR, f"{kind}.png")
+    surf = None
+    if os.path.isfile(path):
+        # PIL load path — some pygame builds lack PNG support (see buttons.py).
+        try:
+            from PIL import Image
+
+            img = Image.open(path).convert("RGBA")
+            surf = pygame.image.frombytes(img.tobytes(), img.size, "RGBA")
+            try:
+                surf = surf.convert_alpha()
+            except pygame.error:
+                pass
+        except Exception:
+            surf = None
+    _rise_set_cache[key] = surf
+    return surf
 
 
 def draw_rise_set_icon(
@@ -310,57 +336,45 @@ def draw_rise_set_icon(
     up_arrow: bool,
     color: tuple[int, int, int] | None = None,
 ) -> None:
-    """Vector moonrise/moonset glyph in the sunrise-icon style.
+    """Moonrise/moonset glyph: Noun Project crescent + arrow art, tinted.
 
-    Blue half disc on a horizon line with a shaft-and-head arrow above —
-    the lunar sibling of the Tomorrow.io sunrise/sunset icons.
+    Falls back to a simple vector crescent+arrow when the asset is missing.
     """
     rgb = color or _MOON_ICON_BLUE
+    art = _rise_set_asset("moonrise" if up_arrow else "moonset")
+    if art is not None:
+        # Assets are pre-colored (deep-blue crescent, white arrow) — no tint.
+        icon = pygame.transform.smoothscale(art, (size, size))
+        surface.blit(icon, icon.get_rect(center=center))
+        return
+
+    # Vector fallback: crescent outline + shaft-and-head arrow.
     scale = 2
     side = (size + 2) * scale
-    icon = pygame.Surface((side, side), pygame.SRCALPHA)
-    ox = side // 2
-    hy = side // 2 + int(size * 0.30) * scale
-    lw = max(2, size // 9) * scale
+    hi = pygame.Surface((side, side), pygame.SRCALPHA)
     rgba = (*rgb, 255)
-
-    # Half disc sitting on the horizon.
-    pygame.draw.circle(icon, rgba, (ox, hy), max(3, int(size * 0.30)) * scale)
-    icon.fill((0, 0, 0, 0), pygame.Rect(0, hy, side, side - hy))
-    pygame.draw.line(icon, rgba, (0, hy), (side - 1, hy), lw)
-
-    # Arrow: vertical shaft with a triangular head, like the sun icons.
-    head_w = max(3, int(size * 0.18)) * scale
-    head_h = max(3, int(size * 0.16)) * scale
-    top_y = hy - int(size * 0.42) * scale - int(size * 0.44) * scale
-    bot_y = hy - int(size * 0.42) * scale
+    r = int(side * 0.30)
+    cxy = (int(side * 0.42), int(side * 0.58))
+    lw = max(2, size // 8) * scale
+    pygame.draw.circle(hi, rgba, cxy, r, lw)
+    pygame.draw.circle(
+        hi, (0, 0, 0, 0), (cxy[0] + int(r * 0.55), cxy[1] - int(r * 0.55)),
+        int(r * 0.85),
+    )
+    ax = int(side * 0.74)
+    top_y, bot_y = int(side * 0.16), int(side * 0.48)
+    head_w = max(3, int(size * 0.14)) * scale
+    head_h = max(3, int(size * 0.14)) * scale
     if up_arrow:
-        tip = (ox, top_y)
-        base_y = top_y + head_h
-        shaft = (ox, base_y), (ox, bot_y)
+        tip, base_y = (ax, top_y), top_y + head_h
+        shaft = (ax, base_y), (ax, bot_y)
     else:
-        tip = (ox, bot_y)
-        base_y = bot_y - head_h
-        shaft = (ox, top_y), (ox, base_y)
-    pygame.draw.line(icon, rgba, *shaft, lw)
-    pygame.draw.polygon(
-        icon, rgba, [tip, (ox - head_w, base_y), (ox + head_w, base_y)]
-    )
-
-    lo = pygame.transform.smoothscale(icon, (side // scale, side // scale))
+        tip, base_y = (ax, bot_y), bot_y - head_h
+        shaft = (ax, top_y), (ax, base_y)
+    pygame.draw.line(hi, rgba, *shaft, lw)
+    pygame.draw.polygon(hi, rgba, [tip, (ax - head_w, base_y), (ax + head_w, base_y)])
+    lo = pygame.transform.smoothscale(hi, (side // scale, side // scale))
     surface.blit(lo, lo.get_rect(center=center))
-
-
-def _spacer(width: int) -> pygame.Surface:
-    return pygame.Surface((max(1, width), 1), pygame.SRCALPHA)
-
-
-def _icon_surface(size: int, *, up_arrow: bool) -> pygame.Surface:
-    surf = pygame.Surface((size + 2, size + 2), pygame.SRCALPHA)
-    draw_rise_set_icon(
-        surf, ((size + 2) // 2, (size + 2) // 2), size, up_arrow=up_arrow
-    )
-    return surf
 
 
 def _spacer(width: int) -> pygame.Surface:
