@@ -173,3 +173,25 @@ class TestChartMarkerDrawing:
 
     def test_beacon_star_changes_the_icon(self):
         assert self._draw(False, False, True) != self._draw(False, False, False)
+
+
+class TestZoomDependentSize:
+    def test_close_ranges_get_a_larger_symbol(self):
+        from display.round_touch import scale
+
+        scale.select(4)  # 10 mi band
+        close = airport_overlay.chart_icon_radius()
+        scale.select(5)  # 20 mi band
+        far = airport_overlay.chart_icon_radius()
+        scale.select(1)
+        assert close > far
+
+    def test_all_close_bands_share_the_larger_size(self):
+        from display.round_touch import scale
+
+        sizes = set()
+        for idx in (0, 1, 2, 3, 4):  # 2..10 mi
+            scale.select(idx)
+            sizes.add(airport_overlay.chart_icon_radius())
+        scale.select(1)
+        assert len(sizes) == 1

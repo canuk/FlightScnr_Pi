@@ -222,7 +222,19 @@ _CHART_MAGENTA = (196, 44, 130)
 
 
 def chart_icon_radius(airport: dict | None = None) -> int:
-    """Uniform sectional-symbol radius — chart icons do not scale by type."""
+    """Uniform sectional-symbol radius — chart icons do not scale by type.
+
+    Slightly larger at close radar ranges (≤ 10 mi bands), where the map has
+    room and small symbols look lost.
+    """
+    try:
+        from display.round_touch import scale
+
+        miles = scale.active_band()["label_km"] / scale.STATUTE_MILE_KM
+    except Exception:
+        miles = 50.0
+    if miles <= 10.05:
+        return max(5, theme.s(8))
     return max(4, theme.s(6))
 
 
