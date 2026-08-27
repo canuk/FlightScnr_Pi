@@ -146,10 +146,14 @@ def _draw_rose(surface: pygame.Surface, snap: dict, view: str) -> None:
     outer_r = theme.VISIBLE_RADIUS - label_band - theme.s(10)
     # Generous center hole (PiAware-style) — also fits the view label.
     inner_r = outer_r * 0.28
-    ring_w = (outer_r - inner_r) / cov.RANGE_BIN_COUNT
+    ring_w = (outer_r - inner_r) / cov.DISPLAY_RING_COUNT
 
-    counts = snap["counts_24h"] if view == VIEW_LOCAL_24H else snap["counts"]
+    fine = snap["counts_24h"] if view == VIEW_LOCAL_24H else snap["counts"]
     total = snap["total_24h"] if view == VIEW_LOCAL_24H else snap["total"]
+    # Ring scale hugs the traffic actually seen in this view (p98), so a
+    # near-field antenna fills the rose instead of lighting two inner rings.
+    scale_nm = cov.pick_display_max_nm(fine)
+    counts = cov.aggregate_display(fine, scale_nm)
     max_count = max((max(row) for row in counts), default=0)
 
     layer = pygame.Surface(surface.get_size(), pygame.SRCALPHA)
@@ -159,7 +163,7 @@ def _draw_rose(surface: pygame.Surface, snap: dict, view: str) -> None:
         a_mid = sec * sector_w
         a0 = a_mid - sector_w / 2 + _SECTOR_GAP_RAD / 2
         a1 = a_mid + sector_w / 2 - _SECTOR_GAP_RAD / 2
-        for rbin in range(cov.RANGE_BIN_COUNT):
+        for rbin in range(cov.DISPLAY_RING_COUNT):
             alpha = _cell_alpha(counts[sec][rbin], max_count)
             if alpha <= 0:
                 continue
@@ -171,7 +175,7 @@ def _draw_rose(surface: pygame.Surface, snap: dict, view: str) -> None:
     # Grid: faint rings + outer circle.
     grid = (*theme.GRID, 90)
     ring_layer = pygame.Surface(surface.get_size(), pygame.SRCALPHA)
-    for rbin in range(cov.RANGE_BIN_COUNT + 1):
+    for rbin in range(cov.DISPLAY_RING_COUNT + 1):
         r = inner_r + rbin * ring_w
         pygame.draw.circle(ring_layer, grid, (int(cx), int(cy)), int(r), 1)
     surface.blit(ring_layer, (0, 0))
@@ -194,6 +198,7 @@ def _draw_rose(surface: pygame.Surface, snap: dict, view: str) -> None:
         (view_label(view), title_font, theme.MUTED),
         (f"{total:,}", count_font, theme.LABEL),
         ("position reports", detail_font, theme.HINT),
+        (f"outer ring {_format_range(scale_nm)}", detail_font, theme.HINT),
     )
     row_h = [f.get_height() for _t, f, _c in rows]
     y = cy - sum(row_h) / 2
@@ -221,7 +226,7 @@ def _draw_stats(surface: pygame.Surface, snap: dict) -> None:
         rows.append(f"Aircraft now: {live}")
     covered = sum(1 for row in snap["counts"] for v in row if v > 0)
     rows.append(
-        f"Cells covered: {covered}/{cov.SECTOR_COUNT * cov.RANGE_BIN_COUNT}"
+        f"Bins covered: {covered}/{cov.SECTOR_COUNT * cov.RANGE_BIN_COUNT}"
     )
     if snap["since"]:
         rows.append("Since: " + time.strftime("%b %d", time.localtime(snap["since"])))
