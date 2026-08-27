@@ -314,6 +314,8 @@ _defaults = {
     "show_airport_centerlines": True,
     # airport.png pins for large/medium/small airports in range.
     "show_airport_icons": True,
+    # classic (airport.png pin) | chart (sectional-style vector icon).
+    "airport_icon_style": "classic",
     # Airport ground vehicles (GRND/GVEH/… icon category) on the radar.
     "show_ground_vehicles": True,
     # Hide AIS vessels at or below this SOG (knots). 0 = show all speeds.
@@ -1117,6 +1119,7 @@ def _settings_snapshot(state: dict) -> tuple:
         state.get("earthquake_voice_enabled"),
         state.get("show_airport_centerlines"),
         state.get("show_airport_icons"),
+        str(state.get("airport_icon_style") or "classic"),
         state.get("show_ground_vehicles"),
         state.get("vessel_min_speed_kt"),
         state.get("aircraft_min_speed_kt"),
@@ -1611,6 +1614,28 @@ def toggle_show_airport_icons():
 def set_show_airport_icons(enabled: bool):
     _state["show_airport_icons"] = bool(enabled)
     _save(_state)
+
+
+AIRPORT_ICON_STYLES = ("classic", "chart")
+AIRPORT_ICON_STYLE_LABELS = {"classic": "Classic pins", "chart": "Chart style"}
+
+
+def airport_icon_style() -> str:
+    style = str(_state.get("airport_icon_style") or "classic").strip().lower()
+    return style if style in AIRPORT_ICON_STYLES else "classic"
+
+
+def set_airport_icon_style(style: str) -> str:
+    value = str(style or "classic").strip().lower()
+    if value not in AIRPORT_ICON_STYLES:
+        value = "classic"
+    _state["airport_icon_style"] = value
+    _save(_state)
+    return value
+
+
+def airport_icon_style_label() -> str:
+    return AIRPORT_ICON_STYLE_LABELS.get(airport_icon_style(), "Classic pins")
 
 
 def show_ground_vehicles() -> bool:

@@ -286,6 +286,12 @@
                 <label for="show_airport_icons">Show airport icons</label>
                 <span class="switch"><input id="show_airport_icons" type="checkbox"><span class="track"></span></span>
             </div>
+            <label for="airport_icon_style">Airport icon style</label>
+            <select id="airport_icon_style">
+                <option value="classic">Classic pins</option>
+                <option value="chart">Chart style (sectional)</option>
+            </select>
+            <p class="hint">Chart style draws VFR-sectional symbols: blue = towered, magenta = untowered, tines = fuel available, star = rotating beacon. Fuel/beacon marks use FAA data and are US airports only.</p>
             <p class="hint">Airport pin icons (airport.png) for large, medium, and small airports in range. Heliports and closed fields are skipped.</p>
             <div class="chk">
                 <label for="show_ground_vehicles">Show ground vehicles</label>
@@ -1251,6 +1257,7 @@ async function loadAll() {
         if ($("show_earthquakes")) $("show_earthquakes").checked = !!r.show_earthquakes;
         if ($("show_airport_centerlines")) $("show_airport_centerlines").checked = !!r.show_airport_centerlines;
         if ($("show_airport_icons")) $("show_airport_icons").checked = !!r.show_airport_icons;
+        if ($("airport_icon_style")) $("airport_icon_style").value = r.airport_icon_style || "classic";
         if ($("show_ground_vehicles")) $("show_ground_vehicles").checked = r.show_ground_vehicles !== false;
         $("traffic_mode").value = r.traffic_mode || (r.ais_enabled ? "both" : "aircraft");
         if ($("vessel_min_speed")) $("vessel_min_speed").value = String(r.vessel_min_speed_kt ?? 0);
@@ -1636,6 +1643,7 @@ async function saveRadar() {
                 show_earthquakes: $("show_earthquakes") ? $("show_earthquakes").checked : false,
                 show_airport_centerlines: $("show_airport_centerlines") ? $("show_airport_centerlines").checked : false,
                 show_airport_icons: $("show_airport_icons") ? $("show_airport_icons").checked : false,
+                airport_icon_style: $("airport_icon_style") ? $("airport_icon_style").value : "classic",
                 show_ground_vehicles: $("show_ground_vehicles") ? $("show_ground_vehicles").checked : true,
                 map_style: $("map_style").value,
                 vfr_map_opacity: Number($("vfr_opacity") ? $("vfr_opacity").value : 45),
@@ -1877,6 +1885,7 @@ async function saveAndReloadSettings() {
                 show_earthquakes: $("show_earthquakes") ? $("show_earthquakes").checked : false,
                 show_airport_centerlines: $("show_airport_centerlines") ? $("show_airport_centerlines").checked : false,
                 show_airport_icons: $("show_airport_icons") ? $("show_airport_icons").checked : false,
+                airport_icon_style: $("airport_icon_style") ? $("airport_icon_style").value : "classic",
                 show_ground_vehicles: $("show_ground_vehicles") ? $("show_ground_vehicles").checked : true,
                 map_style: $("map_style").value,
                 vfr_map_opacity: Number($("vfr_opacity") ? $("vfr_opacity").value : 45),

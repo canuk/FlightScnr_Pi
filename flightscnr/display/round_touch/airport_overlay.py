@@ -104,6 +104,7 @@ def _query_key() -> tuple | None:
             round(float(LOCATION_HOME[0]), 4),
             round(float(LOCATION_HOME[1]), 4),
             round(float(geo.fetch_max_km()), 2),
+            settings.airport_icon_style(),
             bool(settings.show_airport_icons()),
             bool(settings.show_airport_centerlines()),
             int(settings.scale_index()),
@@ -154,6 +155,11 @@ def _load_worker(key: tuple) -> None:
             float(LOCATION_HOME[1]),
             float(geo.fetch_max_km()),
         )
+        if settings.airport_icon_style() == "chart":
+            # Resolve chart flags here on the worker thread — the first call
+            # may download FAA/frequency data and must never block a draw.
+            for ap in points:
+                ap["chart"] = chart_icon_flags(str(ap.get("ident") or ""))
         if _runways_allowed():
             segs = runways_for_idents(ap.get("ident") for ap in points)
     except Exception:
@@ -203,6 +209,66 @@ def _screen_xy(lat: float, lon: float) -> tuple[int, int] | None:
         return geo.lat_lon_to_screen(lat, lon)
     except Exception:
         return None
+
+
+# Sectional-style chart icon colors (approximate VFR chart inks).
+_CHART_BLUE = (0, 92, 172)
+_CHART_MAGENTA = (196, 44, 130)
+
+
+def chart_icon_flags(ident: str) -> tuple[bool, bool, bool]:
+    """(towered, fuel, beacon). FAA NASR when known (US), else frequency tower."""
+    from utilities import airport_frequencies, faa_airports
+
+    rec = faa_airports.lookup(ident)
+    if rec is not None:
+        return bool(rec.get("towered")), bool(rec.get("fuel")), bool(rec.get("beacon"))
+    return airport_frequencies.is_towered(ident), False, False
+
+
+def draw_chart_icon(
+    surface: pygame.Surface,
+    center: tuple[int, int],
+    radius: int,
+    *,
+    towered: bool,
+    fuel: bool,
+    beacon: bool,
+) -> None:
+    """Sectional-style airport symbol: ring, fuel tines, beacon star."""
+    color = _CHART_BLUE if towered else _CHART_MAGENTA
+    scale = 2  # supersample for smooth small circles
+    r = max(4, int(radius))
+    tine = max(2, int(r * 0.42)) if fuel else 0
+    star = max(3, int(r * 0.62)) if beacon else 0
+    pad = tine + star + 2
+    side = (r + pad) * 2 * scale
+    hi = pygame.Surface((side, side), pygame.SRCALPHA)
+    c = side // 2
+    width = max(2, int(r * 0.35)) * scale
+    pygame.draw.circle(hi, (*color, 255), (c, c), r * scale, width)
+    if fuel:
+        # Four service tines at the cardinal points, sticking out of the ring.
+        half_w = max(1, int(r * 0.16)) * scale
+        for dx, dy in ((0, -1), (0, 1), (-1, 0), (1, 0)):
+            x0 = c + dx * r * scale
+            y0 = c + dy * r * scale
+            x1 = c + dx * (r + tine) * scale
+            y1 = c + dy * (r + tine) * scale
+            pygame.draw.line(hi, (*color, 255), (x0, y0), (x1, y1), half_w * 2)
+    if beacon:
+        # Five-point star riding the top of the ring.
+        import math as _math
+
+        sy = c - (r + (tine if fuel else 0)) * scale - star * scale
+        pts = []
+        for i in range(10):
+            ang = -_math.pi / 2 + i * _math.pi / 5
+            rr = star * scale if i % 2 == 0 else star * scale * 0.42
+            pts.append((c + rr * _math.cos(ang), sy + star * scale + rr * _math.sin(ang)))
+        pygame.draw.polygon(hi, (*color, 255), pts)
+    lo = pygame.transform.smoothscale(hi, (side // scale, side // scale))
+    surface.blit(lo, lo.get_rect(center=center))
 
 
 def _icon_height(airport: dict[str, Any]) -> int:
@@ -314,6 +380,18 @@ def _draw_marker(
         return
     x, y = int(pos[0]) + ox, int(pos[1]) + oy
     if math.hypot(x - cx, y - cy) > max_r:
+        return
+    from display.round_touch import settings
+
+    if settings.airport_icon_style() == "chart":
+        # Flags were resolved on the load worker; a stale point without them
+        # draws as a plain untowered ring until the refetch lands.
+        towered, fuel, beacon = airport.get("chart") or (False, False, False)
+        # ~30% larger than the classic pin, per chart legibility.
+        radius = max(6, int(_icon_height(airport) * 0.65))
+        draw_chart_icon(
+            surface, (x, y), radius, towered=towered, fuel=fuel, beacon=beacon
+        )
         return
     icon = airport_icon(_icon_height(airport))
     if icon is not None:

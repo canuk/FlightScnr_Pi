@@ -1720,6 +1720,8 @@ class RoundTouchDisplay:
         elif action == "radar_hud":
             settings.toggle_radar_hud_enabled()
             radar.invalidate_frame_layer()
+        elif action == "airport_icon_style":
+            self._open_atc_picker("airport_icon_style")
         elif action == "hud_position":
             self._open_atc_picker("hud_position")
         elif action == "hud_dark":
@@ -1963,6 +1965,13 @@ class RoundTouchDisplay:
             return
         if kind == "quiet_end":
             settings.set_atc_quiet_end(choice)
+            return
+        if kind == "airport_icon_style":
+            from display.round_touch import airport_overlay
+
+            settings.set_airport_icon_style(choice)
+            airport_overlay.invalidate()
+            radar.invalidate_frame_layer()
             return
         if kind == "hud_position":
             settings.set_radar_hud_position(choice)
