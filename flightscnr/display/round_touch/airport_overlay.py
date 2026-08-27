@@ -221,6 +221,11 @@ _CHART_BLUE = (0, 92, 172)
 _CHART_MAGENTA = (196, 44, 130)
 
 
+def chart_icon_radius(airport: dict | None = None) -> int:
+    """Uniform sectional-symbol radius — chart icons do not scale by type."""
+    return max(4, theme.s(6))
+
+
 def chart_icon_flags(ident: str) -> tuple[bool, bool, bool]:
     """(towered, fuel, beacon). FAA NASR when known (US), else frequency tower."""
     from utilities import airport_frequencies, faa_airports
@@ -250,8 +255,7 @@ def draw_chart_icon(
     side = (r + pad) * 2 * scale
     hi = pygame.Surface((side, side), pygame.SRCALPHA)
     c = side // 2
-    width = max(2, int(r * 0.35)) * scale
-    pygame.draw.circle(hi, (*color, 255), (c, c), r * scale, width)
+    pygame.draw.circle(hi, (*color, 255), (c, c), r * scale)
     if fuel:
         # Four service tines at the cardinal points, sticking out of the ring.
         half_w = max(1, int(r * 0.16)) * scale
@@ -392,10 +396,9 @@ def _draw_marker(
         # Flags were resolved on the load worker; a stale point without them
         # draws as a plain untowered ring until the refetch lands.
         towered, fuel, beacon = airport.get("chart") or (False, False, False)
-        # ~30% larger than the classic pin, per chart legibility.
-        radius = max(6, int(_icon_height(airport) * 0.65))
         draw_chart_icon(
-            surface, (x, y), radius, towered=towered, fuel=fuel, beacon=beacon
+            surface, (x, y), chart_icon_radius(airport),
+            towered=towered, fuel=fuel, beacon=beacon,
         )
         return
     icon = airport_icon(_icon_height(airport))
@@ -422,11 +425,19 @@ def draw_airports(
     max_r = theme.VISIBLE_RADIUS - theme.s(2)
     cx, cy = theme.CENTER_X, theme.CENTER_Y
 
+    from display.round_touch import settings
+
+    chart_style = settings.airport_icon_style() == "chart"
+    if icons and chart_style:
+        # Sectional symbols sit under the runway centerlines.
+        for airport in airports:
+            _draw_marker(surface, airport, ox=ox, oy=oy, max_r=max_r, cx=cx, cy=cy)
+
     if runways_ok:
         for seg in runways:
             _draw_runway(surface, seg, ox=ox, oy=oy, max_r=max_r, cx=cx, cy=cy)
 
-    if icons:
+    if icons and not chart_style:
         for airport in airports:
             _draw_marker(surface, airport, ox=ox, oy=oy, max_r=max_r, cx=cx, cy=cy)
 
