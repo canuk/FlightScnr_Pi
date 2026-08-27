@@ -172,12 +172,10 @@ def _draw_rose(surface: pygame.Surface, snap: dict, view: str) -> None:
             _draw_cell(layer, cx, cy, r_in, r_out, a0, a1, (*_CELL_RGB, alpha))
     surface.blit(layer, (0, 0))
 
-    # Grid: faint rings + outer circle.
+    # Outer boundary only — interior ring lines fought with the cell shading.
     grid = (*theme.GRID, 90)
     ring_layer = pygame.Surface(surface.get_size(), pygame.SRCALPHA)
-    for rbin in range(cov.DISPLAY_RING_COUNT + 1):
-        r = inner_r + rbin * ring_w
-        pygame.draw.circle(ring_layer, grid, (int(cx), int(cy)), int(r), 1)
+    pygame.draw.circle(ring_layer, grid, (int(cx), int(cy)), int(outer_r), 1)
     surface.blit(ring_layer, (0, 0))
 
     # Compass labels around the rim.
