@@ -38,9 +38,10 @@ REFRESH_S = 3600.0
 _SHADOW_RGBA = (6, 8, 14, 216)
 MOON_DIAMETER_FRAC = 0.92  # of the visible radius (disc nearly fills the dial)
 _STAR_SEED = 0x20260827
-# Whole-dial scatter; the moon covers most of them, leaving a natural sparse
-# ring visible around the limb (~15% of these).
-_STAR_COUNT = 420
+# Stars live in the visible annulus around the moon limb (the disc hides the
+# interior anyway). Placed with best-candidate (blue-noise) sampling: plain
+# uniform random reads as clumpy to the eye.
+_STAR_COUNT = 72
 
 _ASSET_PATH = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -184,25 +185,51 @@ def format_event_time(dt: datetime | None) -> str:
     return dt.strftime("%H:%M")
 
 
+def _star_points(
+    *, inner: int, outer: int, count: int, rng: random.Random | None = None
+) -> list[tuple[float, float]]:
+    """Blue-noise points in the annulus, centered on (0, 0).
+
+    Best-candidate (Mitchell) sampling: each star picks the candidate farthest
+    from all placed stars, giving an even-but-random field without the
+    clusters and voids of plain uniform sampling.
+    """
+    rng = rng or random.Random(_STAR_SEED)
+    pts: list[tuple[float, float]] = []
+    for _ in range(count):
+        best: tuple[float, float] | None = None
+        best_d = -1.0
+        for _ in range(14):
+            a = rng.uniform(0, 2 * math.pi)
+            r = math.sqrt(rng.uniform(inner * inner, outer * outer))
+            cand = (r * math.cos(a), r * math.sin(a))
+            d = min((math.dist(cand, p) for p in pts), default=float("inf"))
+            if d > best_d:
+                best_d, best = d, cand
+        pts.append(best)
+    return pts
+
+
 def _starfield() -> pygame.Surface:
-    """Deterministic stars scattered over the whole dial; moon draws on top."""
+    """Deterministic blue-noise stars in the ring; moon draws over the rest."""
     global _star_cache
-    key = (theme.SIZE,)
+    key = (theme.SIZE, MOON_DIAMETER_FRAC)
     if _star_cache is not None and _star_cache[0] == key:
         return _star_cache[1]
     surf = pygame.Surface((theme.SIZE, theme.SIZE), pygame.SRCALPHA)
     rng = random.Random(_STAR_SEED)
-    outer = theme.VISIBLE_RADIUS - theme.s(1)
+    # Tuck the inner edge under the limb so partially-hidden stars feel natural.
+    inner = int(theme.VISIBLE_RADIUS * MOON_DIAMETER_FRAC) - theme.s(4)
+    outer = max(inner + 4, theme.VISIBLE_RADIUS - 2)
     tiers = ((100, 100, 112), (155, 155, 168), (215, 215, 228))
-    for _ in range(_STAR_COUNT):
-        a = rng.uniform(0, 2 * math.pi)
-        rr = math.sqrt(rng.uniform(0, outer * outer))
-        x = int(theme.CENTER_X + rr * math.cos(a))
-        y = int(theme.CENTER_Y + rr * math.sin(a))
+    for x, y in _star_points(inner=inner, outer=outer, count=_STAR_COUNT, rng=rng):
         roll = rng.random()
         tier = tiers[0] if roll < 0.5 else (tiers[1] if roll < 0.85 else tiers[2])
         px = 3 if tier is tiers[2] else 2
-        pygame.draw.rect(surf, (*tier, 255), pygame.Rect(x, y, px, px))
+        pygame.draw.rect(
+            surf, (*tier, 255),
+            pygame.Rect(int(theme.CENTER_X + x), int(theme.CENTER_Y + y), px, px),
+        )
     _star_cache = (key, surf)
     return surf
 

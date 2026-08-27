@@ -207,6 +207,30 @@ class TestBigMoonAndStarfield:
         assert lit > 5
 
 
+class TestStarDistribution:
+    def test_ring_stars_spread_evenly_across_sectors(self):
+        inner, outer = 300, 350
+        pts = moon._star_points(inner=inner, outer=outer, count=64)
+        assert len(pts) == 64
+        sectors = [0] * 8
+        for x, y in pts:
+            r = math.hypot(x, y)
+            assert inner <= r <= outer + 3
+            sectors[int((math.atan2(y, x) + math.pi) / (2 * math.pi) * 8) % 8] += 1
+        # Blue-noise placement: no sector starved, none hogging.
+        assert min(sectors) >= 4
+        assert max(sectors) <= 13
+
+    def test_ring_stars_keep_minimum_spacing(self):
+        pts = moon._star_points(inner=300, outer=350, count=48)
+        min_d = min(
+            math.dist(a, b)
+            for i, a in enumerate(pts)
+            for b in pts[i + 1:]
+        )
+        assert min_d > 8
+
+
 class TestArcLayout:
     """Geometry for text/icons that curve along the rim pills."""
 
