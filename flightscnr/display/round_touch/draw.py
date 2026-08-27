@@ -10,6 +10,7 @@
 """Drawing helpers for round FlightScnr-style screens."""
 
 import math
+import os
 import pygame
 
 from display.round_touch import theme
@@ -370,6 +371,73 @@ def _wrap_message(text: str, width: int):
 
 def fill_background(surface: pygame.Surface):
     surface.fill(theme.BG)
+
+
+# Settings / detail screens get a barely-there contour texture (see
+# assets/patterns/ATTRIBUTION.md). Composed once per dial size; the radar,
+# clocks, and other full-art screens keep the plain fill.
+_TEXTURE_ALPHA = 12  # white tile over the near-black BG → lines land ≈ RGB 13-26
+_texture_bg: pygame.Surface | None = None
+_texture_bg_size = 0
+
+
+def _textured_bg_surface() -> pygame.Surface | None:
+    global _texture_bg, _texture_bg_size
+    if _texture_bg is not None and _texture_bg_size == theme.SIZE:
+        return _texture_bg
+    path = os.path.join(
+        os.path.dirname(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        ),
+        "assets", "patterns", "topography.png",
+    )
+    try:
+        # PIL load (same route as buttons.py): pygame's own loader lacks
+        # extended-format support in some builds.
+        from PIL import Image
+
+        img = Image.open(path).convert("RGBA")
+        tile = pygame.image.frombuffer(img.tobytes(), img.size, "RGBA")
+        try:
+            tile = tile.convert_alpha()
+        except pygame.error:
+            pass
+    except Exception:
+        return None
+    tile.set_alpha(_TEXTURE_ALPHA)
+    bg = pygame.Surface((theme.SIZE, theme.SIZE))
+    bg.fill(theme.BG)
+    tw, th = tile.get_size()
+    if tw <= 0 or th <= 0:
+        return None
+    for x in range(0, theme.SIZE, tw):
+        for y in range(0, theme.SIZE, th):
+            bg.blit(tile, (x, y))
+    _texture_bg = bg
+    _texture_bg_size = theme.SIZE
+    return bg
+
+
+def invalidate_background_texture() -> None:
+    """Drop the composed texture cache (setting change / theme size change)."""
+    global _texture_bg, _texture_bg_size
+    _texture_bg = None
+    _texture_bg_size = 0
+
+
+def fill_background_textured(surface: pygame.Surface):
+    """Plain background plus the subtle topo texture; silent plain fallback."""
+    surface.fill(theme.BG)
+    try:
+        from display.round_touch import settings
+
+        if not settings.background_texture():
+            return
+    except Exception:
+        pass
+    bg = _textured_bg_surface()
+    if bg is not None and surface.get_size() == bg.get_size():
+        surface.blit(bg, (0, 0))
 
 
 def _timeout_ring_geom(

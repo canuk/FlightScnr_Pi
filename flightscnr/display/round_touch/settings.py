@@ -373,6 +373,8 @@ _defaults = {
     "radar_zoom_buttons": True,
     # right | left — which rim edge holds the zoom pill.
     "radar_zoom_position": "right",
+    # Topo contour texture behind settings/detail screens.
+    "background_texture": True,
     "radar_hud_arrange": False,  # legacy; arrange is gated by FLIGHTSCNR_HUD_ARRANGE
     "radar_hud_layout_top": copy_radar_hud_layout_top_default(),
     "radar_hud_layout_bottom": copy_radar_hud_layout_bottom_default(),
@@ -1163,6 +1165,7 @@ def _settings_snapshot(state: dict) -> tuple:
         bool(state.get("radar_hud_dark", True)),
         bool(state.get("radar_zoom_buttons", True)),
         str(state.get("radar_zoom_position") or "right"),
+        bool(state.get("background_texture", True)),
         bool(radar_hud_arrange_debug_enabled()),
         tuple(
             sorted(
@@ -2594,6 +2597,21 @@ def set_radar_hud_opacity(value: int, *, persist: bool = True) -> int:
     else:
         _disk_synced = False
     return pct
+
+
+def background_texture() -> bool:
+    """Subtle topo contour texture behind settings/detail screens."""
+    return bool(_state.get("background_texture", True))
+
+
+def set_background_texture(enabled: bool) -> None:
+    _state["background_texture"] = bool(enabled)
+    _save(_state)
+
+
+def toggle_background_texture() -> bool:
+    set_background_texture(not background_texture())
+    return background_texture()
 
 
 def radar_hud_dark() -> bool:

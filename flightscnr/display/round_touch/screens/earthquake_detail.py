@@ -139,7 +139,7 @@ def _quake_rows(
 def draw_earthquake_detail(
     surface, quakes, selected_index, scroll_offset: int = 0
 ) -> int:
-    draw.fill_background(surface)
+    draw.fill_background_textured(surface)
     title_font = draw.load_font(theme.s(18), bold=True)
     body_font = draw.load_font(theme.s(14))
     detail_font = draw.load_font(theme.s(13))
