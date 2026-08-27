@@ -885,6 +885,11 @@ def curved_page_dot_centers(total: int) -> list[tuple[int, int]]:
         return []
     r = int(theme.VISIBLE_RADIUS * 0.90) - theme.s(14)
     gap = theme.s(14) / float(max(1, r))
+    # Long rows (many flights on the detail pager) compress instead of
+    # sweeping down the rim; settings-sized rows are unaffected.
+    max_span = 1.9
+    if total > 1:
+        gap = min(gap, max_span / (total - 1))
     start = -math.pi / 2 - gap * (total - 1) / 2
     return [
         (

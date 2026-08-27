@@ -159,7 +159,7 @@ def draw_earthquake_detail(
     quake = quakes[idx]
     crumb = _fmt_mag(quake)
     nav.draw_curved_breadcrumb(surface, ["Radar", "Quake", crumb])
-    nav.draw_page_dots(surface, idx, len(quakes), active_color=theme.LABEL)
+    nav.draw_curved_page_dots(surface, idx, len(quakes), active_color=theme.LABEL)
 
     rows = _quake_rows(quake, title_font, body_font, detail_font)
     map_path = (quake.get("map_path") or "").strip()
