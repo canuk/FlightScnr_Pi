@@ -1990,7 +1990,12 @@ class RoundTouchDisplay:
             from display.round_touch import airport_overlay
 
             settings.set_airport_min_size(choice)
+            airport_overlay.invalidate()
+            radar.invalidate_frame_layer()
+            return
         if kind == "airport_icon_style":
+            from display.round_touch import airport_overlay
+
             settings.set_airport_icon_style(choice)
             airport_overlay.invalidate()
             radar.invalidate_frame_layer()
