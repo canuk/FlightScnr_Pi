@@ -150,13 +150,76 @@ class TestEventTimeFormat:
         assert moon.format_event_time(None) == "—"
 
 
-class TestInfoToggle:
-    def test_starts_hidden_and_toggles(self):
-        assert not moon.info_visible()
-        moon.toggle_info()
+class TestPillToggle:
+    def test_pills_start_visible_and_toggle_off(self):
         assert moon.info_visible()
         moon.toggle_info()
         assert not moon.info_visible()
+        moon.toggle_info()
+        assert moon.info_visible()
+
+
+def _full_moon_data(lat=32.7, lon=-117.2, **kwargs):
+    return {
+        "phase": 0.5, "age_days": 14.77, "illumination": 1.0,
+        "phase_name": "Full Moon", "moonrise": None, "moonset": None,
+    }
+
+
+class TestBigMoonAndStarfield:
+    def test_disc_nearly_fills_display(self, monkeypatch):
+        monkeypatch.setattr(moon.sun_moon, "compute_moon_data", _full_moon_data)
+        monkeypatch.setattr(moon, "_current_center", lambda: (32.7, -117.2))
+        moon.toggle_info()  # hide pills for a clean sample
+        surface = pygame.Surface((theme.SIZE, theme.SIZE))
+        moon.draw_moon(surface)
+        # 80% of the visible radius is inside the disc → lit moon pixel.
+        x = theme.CENTER_X + int(theme.VISIBLE_RADIUS * 0.80)
+        c = surface.get_at((x, theme.CENTER_Y))
+        assert c[0] + c[1] + c[2] > 60
+
+    def test_starfield_is_deterministic(self, monkeypatch):
+        monkeypatch.setattr(moon.sun_moon, "compute_moon_data", _full_moon_data)
+        monkeypatch.setattr(moon, "_current_center", lambda: (32.7, -117.2))
+        moon.toggle_info()
+        a = pygame.Surface((theme.SIZE, theme.SIZE))
+        b = pygame.Surface((theme.SIZE, theme.SIZE))
+        moon.draw_moon(a)
+        moon.draw_moon(b)
+        assert pygame.image.tobytes(a, "RGB") == pygame.image.tobytes(b, "RGB")
+
+    def test_stars_present_outside_disc(self, monkeypatch):
+        monkeypatch.setattr(moon.sun_moon, "compute_moon_data", _full_moon_data)
+        monkeypatch.setattr(moon, "_current_center", lambda: (32.7, -117.2))
+        moon.toggle_info()
+        surface = pygame.Surface((theme.SIZE, theme.SIZE))
+        moon.draw_moon(surface)
+        moon_r = int(theme.VISIBLE_RADIUS * moon.MOON_DIAMETER_FRAC)
+        lit = 0
+        for x in range(0, theme.SIZE, 3):
+            for y in range(0, theme.SIZE, 3):
+                dx, dy = x - theme.CENTER_X, y - theme.CENTER_Y
+                d2 = dx * dx + dy * dy
+                if moon_r * moon_r < d2 < theme.VISIBLE_RADIUS * theme.VISIBLE_RADIUS:
+                    c = surface.get_at((x, y))
+                    if c[0] + c[1] + c[2] > 90:
+                        lit += 1
+        assert lit > 5
+
+
+class TestRiseSetIcons:
+    def test_up_and_down_icons_draw_and_differ(self):
+        size = 40
+        up = pygame.Surface((size, size), pygame.SRCALPHA)
+        down = pygame.Surface((size, size), pygame.SRCALPHA)
+        moon.draw_rise_set_icon(up, (size // 2, size // 2), size, up_arrow=True,
+                                color=(230, 234, 242))
+        moon.draw_rise_set_icon(down, (size // 2, size // 2), size, up_arrow=False,
+                                color=(230, 234, 242))
+        assert pygame.image.tobytes(up, "RGBA") != pygame.image.tobytes(down, "RGBA")
+        assert any(
+            up.get_at((x, y))[3] > 0 for x in range(size) for y in range(size)
+        )
 
 
 class TestDrawSmoke:
@@ -169,8 +232,15 @@ class TestDrawSmoke:
         assert c[0] + c[1] + c[2] > 0
 
     @pytest.mark.skipif(not _FONT_OK, reason="pygame.font unavailable on this host")
-    def test_draw_with_info_overlay(self, monkeypatch):
+    def test_pills_paint_the_top_arc(self, monkeypatch):
+        monkeypatch.setattr(moon.sun_moon, "compute_moon_data", _full_moon_data)
         monkeypatch.setattr(moon, "_current_center", lambda: (32.7, -117.2))
-        moon.toggle_info()
         surface = pygame.Surface((theme.SIZE, theme.SIZE))
-        moon.draw_moon(surface)
+        moon.draw_moon(surface)  # pills on by default
+        # The top pill sits on the rim arc — some pixel near it is non-black.
+        y = theme.CENTER_Y - int(theme.VISIBLE_RADIUS * 0.84)
+        lit = any(
+            sum(surface.get_at((theme.CENTER_X + dx, y))[:3]) > 30
+            for dx in range(-60, 61, 10)
+        )
+        assert lit

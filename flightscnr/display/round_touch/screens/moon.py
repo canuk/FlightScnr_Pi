@@ -10,16 +10,19 @@
 """Moon phase screen for the round display.
 
 Real moon topography (NASA LRO render, see assets/moon/ATTRIBUTION.md)
-with the un-illuminated part shaded by a terminator mask. Phase and
-rise/set come from utilities/sun_moon.py (the AeroWatch port), computed
-for the currently selected radar location. Tap toggles an info overlay
-with illumination %, phase name, and moonrise/moonset.
+nearly filling the dial over a sparse starfield, with the un-illuminated
+part shaded by a terminator mask. Phase and rise/set come from
+utilities/sun_moon.py (the AeroWatch port), computed for the currently
+selected radar location. Curved rim pills (radar-HUD style) show the
+phase name + illumination up top and moonrise/moonset with vector icons
+below; a tap hides the pills for a clean moon.
 
 Drawn as seen from the northern hemisphere: waxing lights up the right limb.
 """
 
 import math
 import os
+import random
 import time
 from datetime import datetime
 
@@ -33,7 +36,11 @@ REFRESH_S = 3600.0
 # Shadow alpha: dark enough to read as night side, light enough to keep
 # the topography faintly visible — like the real thing.
 _SHADOW_RGBA = (6, 8, 14, 216)
-_MOON_DIAMETER_FRAC = 0.66  # of the visible diameter
+MOON_DIAMETER_FRAC = 0.92  # of the visible radius (disc nearly fills the dial)
+_PILL_FILL = (16, 20, 30, 215)
+_PILL_TEXT = (232, 236, 244)
+_STAR_SEED = 0x20260827
+_STAR_COUNT = 70
 
 _ASSET_PATH = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -43,18 +50,20 @@ _ASSET_PATH = os.path.join(
 _data: dict | None = None
 _data_center: tuple[float, float] | None = None
 _data_at = 0.0
-_info_visible = False
+_info_visible = True
 _moon_img: pygame.Surface | None = None
 _moon_img_size = 0
 _mask_cache: dict[tuple[int, int], pygame.Surface] = {}
+_star_cache: tuple[tuple, pygame.Surface] | None = None
 
 
 def _reset_for_tests() -> None:
-    global _data, _data_center, _data_at, _info_visible
+    global _data, _data_center, _data_at, _info_visible, _star_cache
     _data = None
     _data_center = None
     _data_at = 0.0
-    _info_visible = False
+    _info_visible = True
+    _star_cache = None
     _mask_cache.clear()
 
 
@@ -175,46 +184,133 @@ def format_event_time(dt: datetime | None) -> str:
     return dt.strftime("%H:%M")
 
 
-def _draw_info_overlay(surface: pygame.Surface, data: dict) -> None:
-    title_font = draw.load_font(theme.FONT_BODY, bold=True)
-    body_font = draw.load_font(theme.FONT_DETAIL)
+def _starfield() -> pygame.Surface:
+    """Sparse deterministic stars in the ring between moon limb and bezel."""
+    global _star_cache
+    key = (theme.SIZE, MOON_DIAMETER_FRAC)
+    if _star_cache is not None and _star_cache[0] == key:
+        return _star_cache[1]
+    surf = pygame.Surface((theme.SIZE, theme.SIZE), pygame.SRCALPHA)
+    rng = random.Random(_STAR_SEED)
+    inner = int(theme.VISIBLE_RADIUS * MOON_DIAMETER_FRAC) + theme.s(1)
+    outer = max(inner + 2, theme.VISIBLE_RADIUS - theme.s(1))
+    tiers = ((100, 100, 112), (155, 155, 168), (215, 215, 228))
+    for _ in range(_STAR_COUNT):
+        a = rng.uniform(0, 2 * math.pi)
+        rr = math.sqrt(rng.uniform(inner * inner, outer * outer))
+        x = int(theme.CENTER_X + rr * math.cos(a))
+        y = int(theme.CENTER_Y + rr * math.sin(a))
+        roll = rng.random()
+        tier = tiers[0] if roll < 0.5 else (tiers[1] if roll < 0.85 else tiers[2])
+        px = 3 if tier is tiers[2] else 2
+        pygame.draw.rect(surf, (*tier, 255), pygame.Rect(x, y, px, px))
+    _star_cache = (key, surf)
+    return surf
 
+
+def draw_rise_set_icon(
+    surface: pygame.Surface,
+    center: tuple[int, int],
+    size: int,
+    *,
+    up_arrow: bool,
+    color: tuple[int, int, int],
+) -> None:
+    """Vector moonrise/moonset glyph: half disc on a horizon, chevron above."""
+    side = size + 2
+    icon = pygame.Surface((side, side), pygame.SRCALPHA)
+    ox = side // 2
+    hy = side // 2 + int(size * 0.24)
+    lw = max(2, size // 9)
+    rgba = (*color, 255)
+
+    pygame.draw.circle(icon, rgba, (ox, hy), max(3, int(size * 0.28)))
+    icon.fill((0, 0, 0, 0), pygame.Rect(0, hy, side, side - hy))
+    pygame.draw.line(icon, rgba, (0, hy), (side - 1, hy), lw)
+
+    aw = max(3, int(size * 0.20))
+    tip_y = hy - int(size * 0.72)
+    base_y = tip_y + aw
+    if up_arrow:
+        pts = [(ox - aw, base_y), (ox, tip_y), (ox + aw, base_y)]
+    else:
+        pts = [(ox - aw, tip_y), (ox, base_y), (ox + aw, tip_y)]
+    pygame.draw.lines(icon, rgba, False, pts, lw)
+
+    surface.blit(icon, (center[0] - side // 2, center[1] - side // 2))
+
+
+def _draw_arc_pills(surface: pygame.Surface, data: dict) -> None:
+    """Radar-HUD-style curved pills: phase up top, rise/set below."""
+    from display.round_touch import radar_hud
+
+    body_font = draw.load_font(theme.FONT_BODY, bold=True)
+    detail_font = draw.load_font(theme.FONT_DETAIL)
+    cx, cy = theme.CENTER_X, theme.CENTER_Y
+    r_mid = int(theme.VISIBLE_RADIUS * 0.84)
+    band = theme.s(30)
+
+    def ang(px: float) -> float:
+        return float(px) / float(max(1, r_mid))
+
+    # Top pill: "Waxing Gibbous · 98%"
     pct = int(round(data.get("illumination", 0.0) * 100))
-    rows = [
-        (title_font, data.get("phase_name", "—"), (240, 242, 248)),
-        (body_font, f"{pct}% illuminated", (205, 208, 218)),
-        (body_font, f"Moonrise  {format_event_time(data.get('moonrise'))}", (205, 208, 218)),
-        (body_font, f"Moonset  {format_event_time(data.get('moonset'))}", (205, 208, 218)),
-    ]
-    gap = theme.s(4)
-    total_h = sum(f.get_height() for f, _, _ in rows) + gap * (len(rows) - 1)
-    pad_x, pad_y = theme.s(16), theme.s(10)
-    width = max(f.size(text)[0] for f, text, _ in rows) + pad_x * 2
-
-    panel = pygame.Surface((width, total_h + pad_y * 2), pygame.SRCALPHA)
-    pygame.draw.rect(
-        panel, (10, 14, 22, 205), panel.get_rect(), border_radius=theme.s(12)
+    top = body_font.render(
+        f"{data.get('phase_name', '—')} · {pct}%", True, _PILL_TEXT
     )
-    y = pad_y
-    for font, text, color in rows:
-        text_surf = font.render(text, True, color)
-        panel.blit(text_surf, ((width - text_surf.get_width()) // 2, y))
-        y += font.get_height() + gap
+    half = ang(top.get_width() / 2 + theme.s(16))
+    mid = -math.pi / 2
+    radar_hud._draw_curved_white_pill(
+        surface, cx, cy, r_mid, mid, band, _PILL_FILL,
+        arc_a0=mid - half, arc_a1=mid + half,
+    )
+    surface.blit(
+        top, (cx - top.get_width() // 2, cy - r_mid - top.get_height() // 2)
+    )
 
-    px = theme.CENTER_X - width // 2
-    py = int(theme.CENTER_Y + theme.VISIBLE_RADIUS * 0.30) - panel.get_height() // 2
-    surface.blit(panel, (px, py))
+    # Bottom pill: [rise icon] time   [set icon] time
+    icon_px = theme.s(15)
+    rise_t = detail_font.render(
+        format_event_time(data.get("moonrise")), True, _PILL_TEXT
+    )
+    set_t = detail_font.render(
+        format_event_time(data.get("moonset")), True, _PILL_TEXT
+    )
+    gap = theme.s(6)
+    cluster_gap = theme.s(22)
+    w_rise = icon_px + gap + rise_t.get_width()
+    w_set = icon_px + gap + set_t.get_width()
+    total = w_rise + cluster_gap + w_set
+    half = ang(total / 2 + theme.s(16))
+    mid = math.pi / 2
+    radar_hud._draw_curved_white_pill(
+        surface, cx, cy, r_mid, mid, band, _PILL_FILL,
+        arc_a0=mid - half, arc_a1=mid + half,
+    )
+    by = cy + r_mid
+    x0 = cx - total // 2
+    draw_rise_set_icon(
+        surface, (x0 + icon_px // 2, by), icon_px, up_arrow=True, color=_PILL_TEXT
+    )
+    surface.blit(rise_t, (x0 + icon_px + gap, by - rise_t.get_height() // 2))
+    x1 = x0 + w_rise + cluster_gap
+    draw_rise_set_icon(
+        surface, (x1 + icon_px // 2, by), icon_px, up_arrow=False, color=_PILL_TEXT
+    )
+    surface.blit(set_t, (x1 + icon_px + gap, by - set_t.get_height() // 2))
 
 
 def draw_moon(surface: pygame.Surface) -> None:
-    """Draw the moon screen: starfield-black dial, moon disc, shadow, info."""
+    """Draw the moon screen: starfield, near-full-dial moon, shadow, pills."""
     surface.fill((0, 0, 0))
     data = get_moon_data()
 
-    diameter = int(theme.VISIBLE_RADIUS * 2 * _MOON_DIAMETER_FRAC)
-    radius = diameter // 2
+    radius = int(theme.VISIBLE_RADIUS * MOON_DIAMETER_FRAC)
+    diameter = radius * 2
     center = (theme.CENTER_X, theme.CENTER_Y)
     top_left = (center[0] - radius, center[1] - radius)
+
+    surface.blit(_starfield(), (0, 0))
 
     img = _moon_image(diameter)
     if img is not None:
@@ -225,4 +321,13 @@ def draw_moon(surface: pygame.Surface) -> None:
     surface.blit(build_shadow_mask(diameter, float(data.get("phase", 0.0))), top_left)
 
     if _info_visible:
-        _draw_info_overlay(surface, data)
+        try:
+            _draw_arc_pills(surface, data)
+        except Exception:
+            # A pill failure (e.g. fonts unavailable) must not take down the
+            # display loop — the moon itself still draws.
+            import logging
+
+            logging.getLogger("flightscnr.display").debug(
+                "moon pills draw failed", exc_info=True
+            )
