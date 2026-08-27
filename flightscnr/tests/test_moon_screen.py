@@ -207,6 +207,42 @@ class TestBigMoonAndStarfield:
         assert lit > 5
 
 
+class TestArcLayout:
+    """Geometry for text/icons that curve along the rim pills."""
+
+    def test_top_arc_items_read_left_to_right_and_dip_at_ends(self):
+        placed = moon._arc_layout([20] * 5, r=300, mid=-math.pi / 2, bottom=False)
+        assert len(placed) == 5
+        xs = [p[0] for p in placed]
+        assert xs == sorted(xs)  # left → right
+        mid_item = placed[2]
+        assert mid_item[0] == pytest.approx(0, abs=2)
+        assert mid_item[1] == pytest.approx(-300, abs=2)
+        # End glyphs sit lower (closer to the horizontal midline) than the apex.
+        assert placed[0][1] > mid_item[1] + 1
+        assert placed[-1][1] > mid_item[1] + 1
+        # Leaning follows the curve: CCW on the left, CW on the right.
+        assert placed[0][2] > 1
+        assert placed[-1][2] < -1
+
+    def test_bottom_arc_items_read_left_to_right_and_rise_at_ends(self):
+        placed = moon._arc_layout([20] * 5, r=300, mid=math.pi / 2, bottom=True)
+        xs = [p[0] for p in placed]
+        assert xs == sorted(xs)
+        mid_item = placed[2]
+        assert mid_item[1] == pytest.approx(300, abs=2)
+        assert placed[0][1] < mid_item[1] - 1
+        assert placed[-1][1] < mid_item[1] - 1
+        # Bottom bowl text leans the other way: CW on the left, CCW on the right.
+        assert placed[0][2] < -1
+        assert placed[-1][2] > 1
+
+    def test_layout_is_symmetric_about_mid(self):
+        placed = moon._arc_layout([18] * 4, r=280, mid=-math.pi / 2, bottom=False)
+        assert placed[0][0] == pytest.approx(-placed[-1][0], abs=2)
+        assert placed[0][1] == pytest.approx(placed[-1][1], abs=2)
+
+
 class TestRiseSetIcons:
     def test_up_and_down_icons_draw_and_differ(self):
         size = 40
