@@ -65,9 +65,18 @@ class TestMapStyle(unittest.TestCase):
         self.assertEqual(settings.MAP_STYLE_LABELS["black"], "Dark: Flat")
         self.assertEqual(settings.MAP_STYLE_LABELS["satellite"], "Satellite: Esri")
         self.assertEqual(settings.MAP_STYLE_LABELS["streets"], "Street: Esri")
-        self.assertEqual(settings.MAP_STYLE_LABELS["dark"], "Dark: Carto")
-        self.assertEqual(settings.MAP_STYLE_LABELS["light"], "Light: Carto")
-        self.assertEqual(settings.MAP_STYLE_LABELS["voyager"], "Street: Voyager")
+        self.assertEqual(
+            settings.MAP_STYLE_LABELS["dark"],
+            "Dark: Carto (needs CARTO_BASEMAPS_API_KEY)",
+        )
+        self.assertEqual(
+            settings.MAP_STYLE_LABELS["light"],
+            "Light: Carto (needs CARTO_BASEMAPS_API_KEY)",
+        )
+        self.assertEqual(
+            settings.MAP_STYLE_LABELS["voyager"],
+            "Street: Voyager (needs CARTO_BASEMAPS_API_KEY)",
+        )
 
     def test_map_style_label_flat_black(self):
         import display.round_touch.settings as settings
@@ -106,6 +115,20 @@ class TestMapStyle(unittest.TestCase):
 
         dark = map_bg._tile_url(11, 327, 791, "dark")
         self.assertIn("basemaps.cartocdn.com/dark_nolabels/11/327/791.png", dark)
+        self.assertNotIn("key=", dark)
+
+        with patch.dict(os.environ, {"CARTO_BASEMAPS_API_KEY": "carto-secret"}, clear=False):
+            dark_keyed = map_bg._tile_url(11, 327, 791, "dark")
+            light_keyed = map_bg._tile_url(11, 327, 791, "light")
+            voyager_keyed = map_bg._tile_url(11, 327, 791, "voyager")
+        self.assertIn("key=carto-secret", dark_keyed)
+        self.assertIn("basemaps.cartocdn.com/light_nolabels/11/327/791.png", light_keyed)
+        self.assertIn("key=carto-secret", light_keyed)
+        self.assertIn(
+            "basemaps.cartocdn.com/rastertiles/voyager_nolabels/11/327/791.png",
+            voyager_keyed,
+        )
+        self.assertIn("key=carto-secret", voyager_keyed)
 
         sat = map_bg._tile_url(12, 655, 1583, "satellite")
         self.assertIn("World_Imagery/MapServer/tile/12/1583/655", sat)
@@ -122,6 +145,17 @@ class TestMapStyle(unittest.TestCase):
 
         osm = map_bg._tile_url(9, 81, 197, "osm")
         self.assertEqual(osm, "https://tile.openstreetmap.org/9/81/197.png")
+
+    def test_tile_url_for_log_redacts_carto_key(self):
+        from display.round_touch import map_bg
+
+        redacted = map_bg._tile_url_for_log(
+            "https://a.basemaps.cartocdn.com/dark_nolabels/1/2/3.png?key=secret"
+        )
+        self.assertEqual(
+            redacted,
+            "https://a.basemaps.cartocdn.com/dark_nolabels/1/2/3.png?key=…",
+        )
 
     def test_candidate_attribution(self):
         from display.round_touch import map_bg

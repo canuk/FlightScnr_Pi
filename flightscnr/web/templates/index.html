@@ -202,18 +202,18 @@
             <p class="hint">Sets RUNWAY_DARKMAP — runway centerline color on the dark basemap (skipped on VFR).</p>
             <label for="map_style">Map style</label>
             <select id="map_style">
-                <option value="dark">Dark: Carto</option>
+                <option value="dark">Dark: Carto (needs CARTO_BASEMAPS_API_KEY)</option>
                 <option value="osm">Dark: OSM</option>
                 <option value="stadia_dark">Dark: Stadia (needs STADIA_MAPS_API_KEY)</option>
                 <option value="black">Dark: Flat</option>
-                <option value="light">Light: Carto</option>
+                <option value="light">Light: Carto (needs CARTO_BASEMAPS_API_KEY)</option>
                 <option value="toner">Light: Toner (needs STADIA_MAPS_API_KEY)</option>
                 <option value="vfr">Light: VFR (FAA)</option>
                 <option value="streets">Street: Esri</option>
-                <option value="voyager">Street: Voyager (CARTO)</option>
+                <option value="voyager">Street: Voyager (CARTO, needs CARTO_BASEMAPS_API_KEY)</option>
                 <option value="satellite">Satellite: Esri</option>
             </select>
-            <p class="hint">Dark/Light/Street/Satellite Carto, OSM, Esri, Voyager, Flat, and VFR need no key. Dark: Stadia and Light: Toner need a free STADIA_MAPS_API_KEY. VFR sectionals are public-domain FAA charts (US coverage).</p>
+            <p class="hint">Dark/Light/Voyager Carto need a free CARTO_BASEMAPS_API_KEY. Dark: Stadia and Light: Toner need a free STADIA_MAPS_API_KEY. OSM, Esri, Flat, and VFR need no key. VFR sectionals are public-domain FAA charts (US coverage).</p>
             <label for="vfr_opacity">VFR map opacity <span id="vfr_opacity_label">45%</span></label>
             <input id="vfr_opacity" type="range" min="15" max="100" step="1" value="45">
             <p class="hint">How strong the VFR chart appears under traffic (lower = paler). Applies when map style is VFR.</p>
@@ -740,6 +740,14 @@
             <p class="hint" id="firms-hint"></p>
             <p class="hint">Free key from <a href="https://firms.modaps.eosdis.nasa.gov/api/map_key/" target="_blank" rel="noopener">FIRMS map key</a>. Used for satellite hotspots when the radar is outside the USA and Canada. In California: CAL FIRE; elsewhere in USA/Canada: NIFC WFIGS (no key).</p>
             <div class="chk">
+                <label for="use-carto-basemaps">Use CARTO basemaps</label>
+                <span class="switch"><input id="use-carto-basemaps" type="checkbox" checked><span class="track"></span></span>
+            </div>
+            <label for="carto-key">CARTO basemaps API key</label>
+            <input type="password" id="carto-key" placeholder="API key" autocomplete="off">
+            <p class="hint" id="carto-hint"></p>
+            <p class="hint">Free key from <a href="https://carto.com/basemaps/apikey/" target="_blank" rel="noopener">CARTO basemaps</a> (no CARTO account required). Required for Dark: Carto, Light: Carto, and Street: Voyager — without it tiles show an “API key required” watermark.</p>
+            <div class="chk">
                 <label for="use-stadia-maps">Use Stadia Maps</label>
                 <span class="switch"><input id="use-stadia-maps" type="checkbox" checked><span class="track"></span></span>
             </div>
@@ -945,6 +953,7 @@ function applyKeyHints(keys) {
         ADSBEXCHANGE_API_KEY: "adsbexchange-hint",
         FIRMS_MAP_KEY: "firms-hint",
         STADIA_MAPS_API_KEY: "stadia-hint",
+        CARTO_BASEMAPS_API_KEY: "carto-hint",
     };
     Object.entries(map).forEach(([key, id]) => {
         const el = $(id);
@@ -1378,6 +1387,9 @@ async function loadAll() {
         }
         if ($("use-stadia-maps")) {
             $("use-stadia-maps").checked = toggles.USE_STADIA_MAPS !== false;
+        }
+        if ($("use-carto-basemaps")) {
+            $("use-carto-basemaps").checked = toggles.USE_CARTO_BASEMAPS !== false;
         }
         const rso = keys.route_source_order || {};
         if ($("route_source_order")) {
@@ -2134,6 +2146,7 @@ async function saveApiKeys(restart) {
                 adsbexchange_api_key: $("adsbexchange-key") ? $("adsbexchange-key").value : "",
                 firms_map_key: $("firms-key") ? $("firms-key").value : "",
                 stadia_maps_api_key: $("stadia-key") ? $("stadia-key").value : "",
+                carto_basemaps_api_key: $("carto-key") ? $("carto-key").value : "",
                 use_fr24_api: $("use-fr24-api").checked,
                 use_tomorrow_weather: $("use-tomorrow-weather").checked,
                 use_airlabs_api: $("use-airlabs-api").checked,
@@ -2142,6 +2155,7 @@ async function saveApiKeys(restart) {
                 use_opensky_api: $("use-opensky-api") ? $("use-opensky-api").checked : true,
                 use_adsbexchange_api: $("use-adsbexchange-api") ? $("use-adsbexchange-api").checked : false,
                 use_stadia_maps: $("use-stadia-maps") ? $("use-stadia-maps").checked : true,
+                use_carto_basemaps: $("use-carto-basemaps") ? $("use-carto-basemaps").checked : true,
                 restart: !!restart,
             }),
         });
@@ -2155,6 +2169,7 @@ async function saveApiKeys(restart) {
         if ($("adsbexchange-key")) $("adsbexchange-key").value = "";
         if ($("firms-key")) $("firms-key").value = "";
         if ($("stadia-key")) $("stadia-key").value = "";
+        if ($("carto-key")) $("carto-key").value = "";
         if (data.keys) applyKeyHints(data.keys);
         showStatus("api-keys-status", data.message || "API keys saved.");
     } catch (e) {

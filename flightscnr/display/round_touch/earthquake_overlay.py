@@ -873,11 +873,19 @@ def _carto_export_map(lat: float, lon: float, quake_id: str) -> str | None:
                 f"{zoom}/{x}/{y}.png"
             )
             try:
+                from display.round_touch import map_bg
+
+                key = map_bg._carto_api_key()
+                if key:
+                    url = f"{url}?key={key}"
+            except Exception:
+                pass
+            try:
                 resp = _http_get(url)
                 resp.raise_for_status()
                 tiles[(dx, dy)] = Image.open(BytesIO(resp.content)).convert("RGBA")
             except Exception as exc:
-                logger.debug("CARTO tile %s failed: %s", url, exc)
+                logger.debug("CARTO tile %s failed: %s", url.split("?", 1)[0], exc)
     if not tiles:
         logger.warning("Earthquake CARTO snapshot got no tiles for %s", quake_id)
         return None
