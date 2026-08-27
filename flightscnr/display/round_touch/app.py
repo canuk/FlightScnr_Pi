@@ -3322,6 +3322,12 @@ class RoundTouchDisplay:
         self.input.consume_scroll_drag()
         return changed
 
+    def _breadcrumb_tapped(self, x: int, y: int) -> bool:
+        """Screen-aware breadcrumb hit: curved band on curved-chrome screens."""
+        if self.screen in (SCREEN_SETTINGS, SCREEN_DETAILS):
+            return nav.tap_breadcrumb_curved(x, y)
+        return nav.tap_breadcrumb(x, y)
+
     def _handle_settings_tap(self, x: int | None = None, y: int | None = None):
         if (
             self.settings_page
@@ -3633,7 +3639,7 @@ class RoundTouchDisplay:
                 self._apply_scroll_delta(delta)
         if tap and not theme.in_visible_circle(tap[0], tap[1]):
             tap = None
-        if tap and nav.tap_breadcrumb(tap[0], tap[1]) and self.screen != SCREEN_RADAR:
+        if tap and self._breadcrumb_tapped(tap[0], tap[1]) and self.screen != SCREEN_RADAR:
             if self.screen in (SCREEN_TRACKED, SCREEN_LIVE):
                 self._return_to_radar()
             elif self.screen == SCREEN_FORECAST:
