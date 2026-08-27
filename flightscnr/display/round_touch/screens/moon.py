@@ -361,15 +361,18 @@ def _draw_arc_pills(surface: pygame.Surface, data: dict) -> None:
         for ch in format_event_time(data.get("moonset"))
     ]
     mid = math.pi / 2
+    # Text rides a hair inside the pill centerline: glyph boxes carry descender
+    # space, which reads as outward drift on the bottom bowl otherwise.
+    r_text = r_mid - theme.s(3)
     half = (
-        _arc_span([s.get_width() for s in bottom_items], r_mid) / 2
-        + ang(theme.s(14))
+        _arc_span([s.get_width() for s in bottom_items], r_text) / 2
+        + ang(theme.s(18))
     )
     radar_hud._draw_curved_white_pill(
         surface, cx, cy, r_mid, mid, band, _PILL_FILL,
         arc_a0=mid - half, arc_a1=mid + half,
     )
-    _blit_arc_items(surface, bottom_items, r=r_mid, mid=mid, bottom=True)
+    _blit_arc_items(surface, bottom_items, r=r_text, mid=mid, bottom=True)
 
 
 def draw_moon(surface: pygame.Surface) -> None:
