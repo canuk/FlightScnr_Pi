@@ -718,8 +718,13 @@ def __getattr__(name: str):
     if name == "CURVED_BREADCRUMB_RADIUS":
         return int(theme.VISIBLE_RADIUS * 0.90)
     if name == "CURVED_SCROLL_RADIUS":
-        return int(theme.VISIBLE_RADIUS * 0.94)
+        # Inside the green timeout ring (which hugs the bezel) so both stay
+        # readable at once.
+        return int(theme.VISIBLE_RADIUS * 0.88)
     raise AttributeError(name)
+
+
+RADAR_FOOTER_ICON_PX = 46  # theme.s() units applied at draw/hit time
 
 
 def _footer_arc_metrics() -> tuple[int, float, float, float]:
@@ -728,7 +733,10 @@ def _footer_arc_metrics() -> tuple[int, float, float, float]:
     def ang(px: float) -> float:
         return float(px) / float(max(1, r))
 
-    return r, ang(theme.s(34)), ang(theme.s(30)), ang(theme.s(10))
+    radar_half = ang(theme.s(RADAR_FOOTER_ICON_PX) / 2 + theme.s(8))
+    side_half = ang(theme.s(30))
+    gap = ang(theme.s(12))
+    return r, radar_half, side_half, gap
 
 
 def curved_footer_segments(kinds: list[str]) -> list[tuple[str, float, float]]:
@@ -756,8 +764,8 @@ def curved_footer_hit(x: int, y: int, kinds: list[str]) -> str | None:
     """Kind of the curved footer segment under (x, y), or None."""
     r, _radar_half, _side_half, _gap = _footer_arc_metrics()
     slack = theme.s(4) / float(max(1, r))
-    r_inner = r - theme.s(24)
-    r_outer = min(theme.VISIBLE_RADIUS + theme.s(6), r + theme.s(24))
+    r_inner = r - theme.s(28)
+    r_outer = min(theme.VISIBLE_RADIUS + theme.s(6), r + theme.s(28))
     for kind, mid, half in curved_footer_segments(kinds):
         if arc_ui.arc_band_hit(
             x, y,
@@ -769,21 +777,11 @@ def curved_footer_hit(x: int, y: int, kinds: list[str]) -> str | None:
     return None
 
 
-def _curved_icon(kind: str, size: int, glyph_color) -> pygame.Surface:
-    """Vector chevron / radar glyph for a curved footer segment."""
+def _fallback_radar_glyph(size: int, glyph_color) -> pygame.Surface:
+    """Vector radar glyph when the PNG art is unavailable."""
     side = size + 2
     icon = pygame.Surface((side, side), pygame.SRCALPHA)
     c = side // 2
-    if kind in ("prev", "next"):
-        half_h = int(size * 0.34)
-        reach = int(size * 0.26)
-        if kind == "prev":
-            pts = [(c - reach, c), (c + reach, c - half_h), (c + reach, c + half_h)]
-        else:
-            pts = [(c + reach, c), (c - reach, c - half_h), (c - reach, c + half_h)]
-        pygame.draw.polygon(icon, (*glyph_color, 255), pts)
-        return icon
-    # radar
     r = max(5, int(size * 0.42))
     pygame.draw.circle(icon, (*glyph_color, 255), (c, c), r, max(1, theme.s(2)))
     sweep_rad = math.radians(-35)
@@ -796,8 +794,11 @@ def _curved_icon(kind: str, size: int, glyph_color) -> pygame.Surface:
     return icon
 
 
+_FOOTER_LABELS = {"prev": "Prev", "next": "Next"}
+
+
 def draw_curved_footer(surface: pygame.Surface, kinds: list[str]) -> None:
-    """Frosted pill segments hugging the bottom rim (HUD chrome)."""
+    """Curved footer: outlined Prev/Next pills + bare oversized radar art."""
     if not kinds:
         return
     from display.round_touch import radar_hud
@@ -807,16 +808,38 @@ def draw_curved_footer(surface: pygame.Surface, kinds: list[str]) -> None:
     band = theme.s(30)
     cx, cy = theme.CENTER_X, theme.CENTER_Y
     for kind, mid, half in curved_footer_segments(kinds):
+        if kind == "radar":
+            size = theme.s(RADAR_FOOTER_ICON_PX)
+            icon = buttons.load_button_surface("radar", size, size)
+            if icon is None:
+                icon = _fallback_radar_glyph(size, glyph_color)
+            px = cx + int(round(r * math.cos(mid)))
+            py = cy + int(round(r * math.sin(mid)))
+            surface.blit(icon, icon.get_rect(center=(px, py)))
+            continue
+        # Outline stroke first (slightly larger stamp), then the frosted fill.
+        edge = max(1, theme.s(2))
+        radar_hud._draw_curved_white_pill(
+            surface, cx, cy, r, mid, band + edge * 2,
+            (*glyph_color, 90),
+            arc_a0=mid - half - edge / float(max(1, r)),
+            arc_a1=mid + half + edge / float(max(1, r)),
+        )
         radar_hud._draw_curved_white_pill(
             surface, cx, cy, r, mid, band, fill_rgba,
             arc_a0=mid - half, arc_a1=mid + half,
         )
-        icon = _curved_icon(kind, theme.s(18), glyph_color)
-        rot = -math.degrees(mid - math.pi / 2)
-        rotated = pygame.transform.rotate(icon, rot)
-        px = cx + int(round(r * math.cos(mid)))
-        py = cy + int(round(r * math.sin(mid)))
-        surface.blit(rotated, rotated.get_rect(center=(px, py)))
+        label = _FOOTER_LABELS.get(kind)
+        if not label:
+            continue
+        try:
+            font = draw.load_font(theme.s(12), bold=True)
+            items = [font.render(ch, True, glyph_color) for ch in label]
+        except Exception:
+            continue  # label-less pills still work if fonts are unavailable
+        arc_ui.blit_arc_items(
+            surface, items, r=r, mid=mid, bottom=True, cx=cx, cy=cy
+        )
 
 
 def draw_curved_breadcrumb(
@@ -897,7 +920,7 @@ def draw_curved_scroll_arc(
     a0, a1, t0, t1 = curved_scroll_arc_geometry(
         scroll_offset, max_scroll, viewport_h=viewport_h
     )
-    r = int(theme.VISIBLE_RADIUS * 0.94)
+    r = int(theme.VISIBLE_RADIUS * 0.88)
     cx, cy = theme.CENTER_X, theme.CENTER_Y
     arc_ui.draw_arc_bar(
         surface, cx=cx, cy=cy, r=r, a0=a0, a1=a1,
