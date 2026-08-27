@@ -40,7 +40,9 @@ MOON_DIAMETER_FRAC = 0.92  # of the visible radius (disc nearly fills the dial)
 _PILL_FILL = (16, 20, 30, 215)
 _PILL_TEXT = (232, 236, 244)
 _STAR_SEED = 0x20260827
-_STAR_COUNT = 70
+# Whole-dial scatter; the moon covers most of them, leaving a natural sparse
+# ring visible around the limb (~15% of these).
+_STAR_COUNT = 420
 
 _ASSET_PATH = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -185,19 +187,18 @@ def format_event_time(dt: datetime | None) -> str:
 
 
 def _starfield() -> pygame.Surface:
-    """Sparse deterministic stars in the ring between moon limb and bezel."""
+    """Deterministic stars scattered over the whole dial; moon draws on top."""
     global _star_cache
-    key = (theme.SIZE, MOON_DIAMETER_FRAC)
+    key = (theme.SIZE,)
     if _star_cache is not None and _star_cache[0] == key:
         return _star_cache[1]
     surf = pygame.Surface((theme.SIZE, theme.SIZE), pygame.SRCALPHA)
     rng = random.Random(_STAR_SEED)
-    inner = int(theme.VISIBLE_RADIUS * MOON_DIAMETER_FRAC) + theme.s(1)
-    outer = max(inner + 2, theme.VISIBLE_RADIUS - theme.s(1))
+    outer = theme.VISIBLE_RADIUS - theme.s(1)
     tiers = ((100, 100, 112), (155, 155, 168), (215, 215, 228))
     for _ in range(_STAR_COUNT):
         a = rng.uniform(0, 2 * math.pi)
-        rr = math.sqrt(rng.uniform(inner * inner, outer * outer))
+        rr = math.sqrt(rng.uniform(0, outer * outer))
         x = int(theme.CENTER_X + rr * math.cos(a))
         y = int(theme.CENTER_Y + rr * math.sin(a))
         roll = rng.random()
@@ -206,6 +207,70 @@ def _starfield() -> pygame.Surface:
         pygame.draw.rect(surf, (*tier, 255), pygame.Rect(x, y, px, px))
     _star_cache = (key, surf)
     return surf
+
+
+def _arc_layout(
+    widths: list[int],
+    *,
+    r: int,
+    mid: float,
+    bottom: bool,
+    tracking: int = 2,
+) -> list[tuple[float, float, float]]:
+    """Place items of pixel ``widths`` along the arc at radius ``r``.
+
+    Returns (x, y, rotation_degrees) per item, relative to the dial center.
+    Items read left→right on screen; glyphs lean with the curve — outward-up
+    on the top arc, inward-up (bowl) on the bottom arc.
+    """
+    rr = float(max(1, r))
+    track_a = tracking / rr
+    angs = [(w + tracking) / rr for w in widths]
+    total = sum(angs) - track_a if angs else 0.0
+    placed: list[tuple[float, float, float]] = []
+    if not bottom:
+        a = mid - total / 2
+        for aw in angs:
+            c = a + (aw - track_a) / 2
+            placed.append(
+                (rr * math.cos(c), rr * math.sin(c), -math.degrees(c + math.pi / 2))
+            )
+            a += aw
+    else:
+        a = mid + total / 2
+        for aw in angs:
+            c = a - (aw - track_a) / 2
+            placed.append(
+                (rr * math.cos(c), rr * math.sin(c), -math.degrees(c - math.pi / 2))
+            )
+            a -= aw
+    return placed
+
+
+def _arc_span(widths: list[int], r: int, tracking: int = 2) -> float:
+    rr = float(max(1, r))
+    if not widths:
+        return 0.0
+    return (sum(w + tracking for w in widths) - tracking) / rr
+
+
+def _blit_arc_items(
+    surface: pygame.Surface,
+    items: list[pygame.Surface],
+    *,
+    r: int,
+    mid: float,
+    bottom: bool,
+) -> None:
+    placed = _arc_layout([s.get_width() for s in items], r=r, mid=mid, bottom=bottom)
+    for surf, (x, y, rot) in zip(items, placed):
+        rotated = pygame.transform.rotate(surf, rot)
+        surface.blit(
+            rotated,
+            rotated.get_rect(
+                center=(theme.CENTER_X + int(round(x)), theme.CENTER_Y + int(round(y)))
+            ),
+        )
 
 
 def draw_rise_set_icon(
@@ -240,8 +305,21 @@ def draw_rise_set_icon(
     surface.blit(icon, (center[0] - side // 2, center[1] - side // 2))
 
 
+def _spacer(width: int) -> pygame.Surface:
+    return pygame.Surface((max(1, width), 1), pygame.SRCALPHA)
+
+
+def _icon_surface(size: int, *, up_arrow: bool) -> pygame.Surface:
+    surf = pygame.Surface((size + 2, size + 2), pygame.SRCALPHA)
+    draw_rise_set_icon(
+        surf, ((size + 2) // 2, (size + 2) // 2), size,
+        up_arrow=up_arrow, color=_PILL_TEXT,
+    )
+    return surf
+
+
 def _draw_arc_pills(surface: pygame.Surface, data: dict) -> None:
-    """Radar-HUD-style curved pills: phase up top, rise/set below."""
+    """Radar-HUD-style curved pills with text that follows the arc."""
     from display.round_touch import radar_hud
 
     body_font = draw.load_font(theme.FONT_BODY, bold=True)
@@ -253,51 +331,45 @@ def _draw_arc_pills(surface: pygame.Surface, data: dict) -> None:
     def ang(px: float) -> float:
         return float(px) / float(max(1, r_mid))
 
-    # Top pill: "Waxing Gibbous · 98%"
+    # Top pill: "Waxing Gibbous · 98%" curved along the arc.
     pct = int(round(data.get("illumination", 0.0) * 100))
-    top = body_font.render(
-        f"{data.get('phase_name', '—')} · {pct}%", True, _PILL_TEXT
-    )
-    half = ang(top.get_width() / 2 + theme.s(16))
+    top_text = f"{data.get('phase_name', '—')} · {pct}%"
+    top_items = [body_font.render(ch, True, _PILL_TEXT) for ch in top_text]
     mid = -math.pi / 2
+    half = _arc_span([s.get_width() for s in top_items], r_mid) / 2 + ang(theme.s(14))
     radar_hud._draw_curved_white_pill(
         surface, cx, cy, r_mid, mid, band, _PILL_FILL,
         arc_a0=mid - half, arc_a1=mid + half,
     )
-    surface.blit(
-        top, (cx - top.get_width() // 2, cy - r_mid - top.get_height() // 2)
-    )
+    _blit_arc_items(surface, top_items, r=r_mid, mid=mid, bottom=False)
 
-    # Bottom pill: [rise icon] time   [set icon] time
+    # Bottom pill: [rise icon] time · [set icon] time, curved as a bowl.
     icon_px = theme.s(15)
-    rise_t = detail_font.render(
-        format_event_time(data.get("moonrise")), True, _PILL_TEXT
-    )
-    set_t = detail_font.render(
-        format_event_time(data.get("moonset")), True, _PILL_TEXT
-    )
-    gap = theme.s(6)
-    cluster_gap = theme.s(22)
-    w_rise = icon_px + gap + rise_t.get_width()
-    w_set = icon_px + gap + set_t.get_width()
-    total = w_rise + cluster_gap + w_set
-    half = ang(total / 2 + theme.s(16))
+    bottom_items: list[pygame.Surface] = [
+        _icon_surface(icon_px, up_arrow=True),
+        _spacer(theme.s(4)),
+    ]
+    bottom_items += [
+        detail_font.render(ch, True, _PILL_TEXT)
+        for ch in format_event_time(data.get("moonrise"))
+    ]
+    bottom_items.append(_spacer(theme.s(18)))
+    bottom_items.append(_icon_surface(icon_px, up_arrow=False))
+    bottom_items.append(_spacer(theme.s(4)))
+    bottom_items += [
+        detail_font.render(ch, True, _PILL_TEXT)
+        for ch in format_event_time(data.get("moonset"))
+    ]
     mid = math.pi / 2
+    half = (
+        _arc_span([s.get_width() for s in bottom_items], r_mid) / 2
+        + ang(theme.s(14))
+    )
     radar_hud._draw_curved_white_pill(
         surface, cx, cy, r_mid, mid, band, _PILL_FILL,
         arc_a0=mid - half, arc_a1=mid + half,
     )
-    by = cy + r_mid
-    x0 = cx - total // 2
-    draw_rise_set_icon(
-        surface, (x0 + icon_px // 2, by), icon_px, up_arrow=True, color=_PILL_TEXT
-    )
-    surface.blit(rise_t, (x0 + icon_px + gap, by - rise_t.get_height() // 2))
-    x1 = x0 + w_rise + cluster_gap
-    draw_rise_set_icon(
-        surface, (x1 + icon_px // 2, by), icon_px, up_arrow=False, color=_PILL_TEXT
-    )
-    surface.blit(set_t, (x1 + icon_px + gap, by - set_t.get_height() // 2))
+    _blit_arc_items(surface, bottom_items, r=r_mid, mid=mid, bottom=True)
 
 
 def draw_moon(surface: pygame.Surface) -> None:
