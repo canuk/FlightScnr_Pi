@@ -93,6 +93,7 @@ HUD_ACTIONS = (
     "hud_position",
     "hud_dark",
     "hud_opacity",
+    "zoom_buttons",
     "chime_volume",
     "traffic_sfx_volume",
     "military_sfx_volume",
@@ -1869,6 +1870,7 @@ def _hud_row_labels() -> list[str]:
         f"Clock Position › {hud_pos.title()}",
         f"HUD Style › {hud_style.title()}",
         "",  # HUD opacity slider
+        "Zoom −/+ Buttons",
         "",  # chime switch + volume slider
         "",  # traffic switch + volume slider
         "",  # military switch + volume slider
@@ -1921,6 +1923,7 @@ _TOGGLE_ROW_STATE = {
     "tag_leaders": settings.show_tag_leaders,
     "color_by_altitude": settings.color_by_altitude,
     "radar_hud": settings.radar_hud_enabled,
+    "zoom_buttons": settings.radar_zoom_buttons,
     "precipitation": settings.show_precipitation,
     "wildfires": settings.show_wildfires,
     "earthquakes": settings.show_earthquakes,

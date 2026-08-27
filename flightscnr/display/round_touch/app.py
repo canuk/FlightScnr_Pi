@@ -53,6 +53,7 @@ from display.round_touch import (
     wildfire_overlay,
     earthquake_overlay,
     update_bubble,
+    zoom_buttons,
 )
 from utilities import aircraft_alert
 from display.round_touch import alert_sounds
@@ -1726,6 +1727,9 @@ class RoundTouchDisplay:
             self._open_atc_picker("hud_dark")
         elif action == "hud_opacity":
             return
+        elif action == "zoom_buttons":
+            settings.toggle_radar_zoom_buttons()
+            radar.invalidate_frame_layer()
         elif action in (
             "chime_volume",
             "traffic_sfx_volume",
@@ -2768,6 +2772,15 @@ class RoundTouchDisplay:
         if off_hours.effective_brightness_percent(settings.brightness_percent()) == 0:
             self._off_hours_wake_until = time.time() + OFF_HOURS_TOUCH_WAKE_S
 
+    def _apply_zoom_button(self, action: str) -> None:
+        """Tap on the radar − / + pill: flash it and step the range like pinch."""
+        zoom_buttons.note_tap(action)
+        self._note_activity()
+        self._apply_scale_step(zoom_buttons.step_delta(action))
+        # Flash must show even when clamped at the end of the band list.
+        radar.invalidate_frame_layer()
+        self._safe_draw()
+
     def _apply_scale_step(self, delta: int):
         """delta: -1 closer range, +1 wider range."""
         idx = settings.scale_index()
@@ -3692,6 +3705,10 @@ class RoundTouchDisplay:
                             ):
                                 radar.invalidate_frame_layer()
                             self._safe_draw()
+                        elif (
+                            zoom_action := zoom_buttons.hit_button(tap[0], tap[1])
+                        ) is not None:
+                            self._apply_zoom_button(zoom_action)
                         elif self._open_flight_or_fire_at(tap[0], tap[1]):
                             self._safe_draw()
         elif tap and self.screen == SCREEN_FLIGHT:
@@ -4961,6 +4978,9 @@ class RoundTouchDisplay:
                     self._tick_timeout()
                     self._tick_auto_idle_clock()
                     if radar_hud.tick_popover_timeout():
+                        radar.invalidate_frame_layer()
+                        self._safe_draw()
+                    if zoom_buttons.tick():
                         radar.invalidate_frame_layer()
                         self._safe_draw()
                     hourly_chime.tick()
