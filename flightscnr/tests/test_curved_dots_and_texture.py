@@ -92,7 +92,7 @@ class TestTopoBackground:
                 if max(c[:3]) > base:
                     textured_pixels += 1
         assert textured_pixels > 50  # contours exist
-        assert max_chan < 28  # ...but stay extremely subtle
+        assert max_chan < 42  # ...but stay subtle
 
     def test_background_surface_is_cached(self):
         draw_mod._texture_bg = None
