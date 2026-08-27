@@ -83,6 +83,7 @@ DISPLAY_ACTIONS = (
     "rim_style",
     "units",
     "range",
+    "zoom_buttons",
     "rotate",
     "brightness",
 )
@@ -93,7 +94,6 @@ HUD_ACTIONS = (
     "hud_position",
     "hud_dark",
     "hud_opacity",
-    "zoom_buttons",
     "chime_volume",
     "traffic_sfx_volume",
     "military_sfx_volume",
@@ -1856,6 +1856,7 @@ def _display_row_labels() -> list[str]:
         f"Rim Targets › {settings.rim_target_style_label()}",
         f"Units › {settings.unit_preset_label()}",
         f"Radar Range › {settings.scale_label()}",
+        "Zoom −/+ Buttons",
         f"Rotate Screen › {settings.display_rotation()}°",
         "",  # brightness slider
     ]
@@ -1870,7 +1871,6 @@ def _hud_row_labels() -> list[str]:
         f"Clock Position › {hud_pos.title()}",
         f"HUD Style › {hud_style.title()}",
         "",  # HUD opacity slider
-        "Zoom −/+ Buttons",
         "",  # chime switch + volume slider
         "",  # traffic switch + volume slider
         "",  # military switch + volume slider
