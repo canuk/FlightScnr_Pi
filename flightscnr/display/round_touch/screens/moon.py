@@ -37,8 +37,6 @@ REFRESH_S = 3600.0
 # the topography faintly visible — like the real thing.
 _SHADOW_RGBA = (6, 8, 14, 216)
 MOON_DIAMETER_FRAC = 0.92  # of the visible radius (disc nearly fills the dial)
-_PILL_FILL = (16, 20, 30, 215)
-_PILL_TEXT = (232, 236, 244)
 _STAR_SEED = 0x20260827
 # Whole-dial scatter; the moon covers most of them, leaving a natural sparse
 # ring visible around the limb (~15% of these).
@@ -309,11 +307,11 @@ def _spacer(width: int) -> pygame.Surface:
     return pygame.Surface((max(1, width), 1), pygame.SRCALPHA)
 
 
-def _icon_surface(size: int, *, up_arrow: bool) -> pygame.Surface:
+def _icon_surface(size: int, *, up_arrow: bool, color: tuple[int, int, int]) -> pygame.Surface:
     surf = pygame.Surface((size + 2, size + 2), pygame.SRCALPHA)
     draw_rise_set_icon(
         surf, ((size + 2) // 2, (size + 2) // 2), size,
-        up_arrow=up_arrow, color=_PILL_TEXT,
+        up_arrow=up_arrow, color=color,
     )
     return surf
 
@@ -322,8 +320,11 @@ def _draw_arc_pills(surface: pygame.Surface, data: dict) -> None:
     """Radar-HUD-style curved pills with text that follows the arc."""
     from display.round_touch import radar_hud
 
-    body_font = draw.load_font(theme.FONT_BODY, bold=True)
-    detail_font = draw.load_font(theme.FONT_DETAIL)
+    # Same type and chrome as the radar clock HUD, so the pills track the
+    # user's HUD opacity and dark/light setting.
+    body_font = draw.load_font(theme.s(16), bold=True)
+    detail_font = draw.load_font(max(8, theme.s(11)), bold=True)
+    text_color, fill_rgba = radar_hud._hud_chrome()
     cx, cy = theme.CENTER_X, theme.CENTER_Y
     r_mid = int(theme.VISIBLE_RADIUS * 0.84)
     band = theme.s(30)
@@ -334,11 +335,11 @@ def _draw_arc_pills(surface: pygame.Surface, data: dict) -> None:
     # Top pill: "Waxing Gibbous · 98%" curved along the arc.
     pct = int(round(data.get("illumination", 0.0) * 100))
     top_text = f"{data.get('phase_name', '—')} · {pct}%"
-    top_items = [body_font.render(ch, True, _PILL_TEXT) for ch in top_text]
+    top_items = [body_font.render(ch, True, text_color) for ch in top_text]
     mid = -math.pi / 2
     half = _arc_span([s.get_width() for s in top_items], r_mid) / 2 + ang(theme.s(14))
     radar_hud._draw_curved_white_pill(
-        surface, cx, cy, r_mid, mid, band, _PILL_FILL,
+        surface, cx, cy, r_mid, mid, band, fill_rgba,
         arc_a0=mid - half, arc_a1=mid + half,
     )
     _blit_arc_items(surface, top_items, r=r_mid, mid=mid, bottom=False)
@@ -346,18 +347,18 @@ def _draw_arc_pills(surface: pygame.Surface, data: dict) -> None:
     # Bottom pill: [rise icon] time · [set icon] time, curved as a bowl.
     icon_px = theme.s(15)
     bottom_items: list[pygame.Surface] = [
-        _icon_surface(icon_px, up_arrow=True),
+        _icon_surface(icon_px, up_arrow=True, color=text_color),
         _spacer(theme.s(4)),
     ]
     bottom_items += [
-        detail_font.render(ch, True, _PILL_TEXT)
+        detail_font.render(ch, True, text_color)
         for ch in format_event_time(data.get("moonrise"))
     ]
     bottom_items.append(_spacer(theme.s(18)))
-    bottom_items.append(_icon_surface(icon_px, up_arrow=False))
+    bottom_items.append(_icon_surface(icon_px, up_arrow=False, color=text_color))
     bottom_items.append(_spacer(theme.s(4)))
     bottom_items += [
-        detail_font.render(ch, True, _PILL_TEXT)
+        detail_font.render(ch, True, text_color)
         for ch in format_event_time(data.get("moonset"))
     ]
     mid = math.pi / 2
@@ -369,7 +370,7 @@ def _draw_arc_pills(surface: pygame.Surface, data: dict) -> None:
         + ang(theme.s(18))
     )
     radar_hud._draw_curved_white_pill(
-        surface, cx, cy, r_mid, mid, band, _PILL_FILL,
+        surface, cx, cy, r_mid, mid, band, fill_rgba,
         arc_a0=mid - half, arc_a1=mid + half,
     )
     _blit_arc_items(surface, bottom_items, r=r_text, mid=mid, bottom=True)
