@@ -728,7 +728,7 @@ def _footer_arc_metrics() -> tuple[int, float, float, float]:
     def ang(px: float) -> float:
         return float(px) / float(max(1, r))
 
-    return r, ang(theme.s(34)), ang(theme.s(30)), ang(theme.s(10))
+    return r, ang(theme.s(34)), ang(theme.s(30)), ang(theme.s(36))
 
 
 def curved_footer_segments(kinds: list[str]) -> list[tuple[str, float, float]]:
@@ -812,11 +812,9 @@ def draw_curved_footer(surface: pygame.Surface, kinds: list[str]) -> None:
             arc_a0=mid - half, arc_a1=mid + half,
         )
         icon = _curved_icon(kind, theme.s(18), glyph_color)
-        rot = -math.degrees(mid - math.pi / 2)
-        rotated = pygame.transform.rotate(icon, rot)
         px = cx + int(round(r * math.cos(mid)))
         py = cy + int(round(r * math.sin(mid)))
-        surface.blit(rotated, rotated.get_rect(center=(px, py)))
+        surface.blit(icon, icon.get_rect(center=(px, py)))
 
 
 def draw_curved_breadcrumb(
