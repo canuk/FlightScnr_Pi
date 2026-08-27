@@ -34,6 +34,13 @@ from display.round_touch import settings
 from utilities import airports, runways
 
 
+@pytest.fixture(autouse=True)
+def _reset_size_setting():
+    settings.set_airport_min_size("small")
+    yield
+    settings.set_airport_min_size("small")
+
+
 def _runway_row(surface="ASP", ident="KSAN"):
     return {
         "airport_ident": ident,
@@ -149,3 +156,14 @@ class TestAirportSizeSetting:
     def test_invalid_falls_back_to_small(self):
         settings.set_airport_min_size("gigantic")
         assert settings.airport_min_size() == "small"
+
+
+class TestOnDevicePickerApply:
+    def test_airport_size_choice_applies_without_crashing(self):
+        # Regression: the airport_size branch hit UnboundLocalError because a
+        # later branch's local `airport_overlay` import shadowed the name.
+        from display.round_touch.app import RoundTouchDisplay
+
+        fake = object.__new__(RoundTouchDisplay)
+        RoundTouchDisplay._apply_list_picker_choice(fake, "airport_size", "medium")
+        assert settings.airport_min_size() == "medium"

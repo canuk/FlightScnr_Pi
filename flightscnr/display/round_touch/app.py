@@ -1967,6 +1967,8 @@ class RoundTouchDisplay:
             settings.set_atc_quiet_end(choice)
             return
         if kind == "airport_size":
+            from display.round_touch import airport_overlay
+
             settings.set_airport_min_size(choice)
             airport_overlay.invalidate()
             radar.invalidate_frame_layer()
