@@ -258,7 +258,8 @@ def draw_chart_icon(
     pygame.draw.circle(hi, (*color, 255), (c, c), r * scale)
     if fuel:
         # Four service tines at the cardinal points, sticking out of the ring.
-        half_w = max(1, int(r * 0.16)) * scale
+        # +scale = one logical pixel thicker; thin tines vanished at radar size.
+        half_w = max(1, int(r * 0.16)) * scale + scale // 2
         for dx, dy in ((0, -1), (0, 1), (-1, 0), (1, 0)):
             x0 = c + dx * r * scale
             y0 = c + dy * r * scale
