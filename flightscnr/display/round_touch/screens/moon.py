@@ -343,8 +343,8 @@ def draw_rise_set_icon(
     rgb = color or _MOON_ICON_BLUE
     art = _rise_set_asset("moonrise" if up_arrow else "moonset")
     if art is not None:
-        icon = pygame.transform.smoothscale(art, (size, size)).copy()
-        icon.fill((*rgb, 255), special_flags=pygame.BLEND_RGBA_MULT)
+        # Assets are pre-colored (deep-blue crescent, white arrow) — no tint.
+        icon = pygame.transform.smoothscale(art, (size, size))
         surface.blit(icon, icon.get_rect(center=center))
         return
 

@@ -291,6 +291,22 @@ class TestRiseSetIcons:
         )
         assert blue_px > 10
 
+    def test_arrow_is_white_and_crescent_blue(self):
+        size = 96
+        surf = pygame.Surface((size, size), pygame.SRCALPHA)
+        moon.draw_rise_set_icon(surf, (size // 2, size // 2), size, up_arrow=True)
+        white = blue = 0
+        for x in range(size):
+            for y in range(size):
+                c = surf.get_at((x, y))
+                if c[3] > 150:
+                    if c[0] > 200 and c[1] > 200 and c[2] > 200:
+                        white += 1
+                    elif c[2] > c[0] + 30:
+                        blue += 1
+        assert white > 5   # arrow strokes
+        assert blue > 50   # crescent body
+
     def test_uses_noun_project_assets(self):
         # The committed crescent+arrow art must load for both kinds.
         assert moon._rise_set_asset("moonrise") is not None
