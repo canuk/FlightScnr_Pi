@@ -464,17 +464,21 @@ class RoundTouchDisplay:
         return max(0, int(math.ceil(self._disclaimer_deadline - time.time())))
 
     def _arm_disclaimer_countdown_if_needed(self) -> None:
-        """Start the auto-continue deadline once the disclaimer is visible after splash."""
+        """Skip the gate outright for a remembered Accept, once the splash ends.
+
+        "Don't show again" previously only armed an auto-continue countdown,
+        so the disclaimer still appeared every boot for several seconds. A
+        remembered acceptance now continues immediately; re-showing the
+        disclaimer is done by clearing acceptance from the web portal.
+        """
         if self._disclaimer_countdown_armed:
             return
         if time.time() < self._boot_until:
             return
-        # Arm from the boot-time remember state; checkbox toggles during the
-        # countdown do not cancel or restart the timer.
         if not self._disclaimer_remembered_boot:
             return
         self._disclaimer_countdown_armed = True
-        self._disclaimer_deadline = time.time() + DISCLAIMER_AUTO_CONTINUE_S
+        self._accept_safety_disclaimer(from_auto=True)
 
     def _toggle_disclaimer_remember(self) -> None:
         """Touch-only checkbox; during countdown, value is saved when the timer ends."""

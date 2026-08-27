@@ -140,20 +140,35 @@ class TestDisclaimerBootFlow(unittest.TestCase):
         d._start_update_check_thread = lambda: None
         return d
 
-    def test_arms_countdown_only_when_remembered_and_visible(self):
+    def test_remembered_boot_skips_gate_after_splash(self):
+        """"Don't show again" means the gate never waits: accept immediately."""
         d = self._bare()
         d._disclaimer_remembered_boot = True
         d._disclaimer_remember_checked = True
+        accepted: list[bool] = []
+        d._accept_safety_disclaimer = lambda **kw: accepted.append(
+            kw.get("from_auto", False)
+        )
+        # Splash still up — do not accept yet.
         d._boot_until = time.time() + 30
         d._arm_disclaimer_countdown_if_needed()
+        self.assertEqual(accepted, [])
         self.assertIsNone(d._disclaimer_deadline)
+        # Splash done — skip the gate outright, no countdown.
         d._boot_until = 0.0
         d._arm_disclaimer_countdown_if_needed()
-        self.assertIsNotNone(d._disclaimer_deadline)
-        remaining = d._disclaimer_countdown_remaining()
-        self.assertIsNotNone(remaining)
-        self.assertLessEqual(remaining, app_mod.DISCLAIMER_AUTO_CONTINUE_S)
-        self.assertGreaterEqual(remaining, app_mod.DISCLAIMER_AUTO_CONTINUE_S - 1)
+        self.assertEqual(accepted, [True])
+        self.assertIsNone(d._disclaimer_deadline)
+
+    def test_not_remembered_boot_never_auto_accepts(self):
+        d = self._bare()
+        d._disclaimer_remembered_boot = False
+        accepted: list[bool] = []
+        d._accept_safety_disclaimer = lambda **kw: accepted.append(True)
+        d._boot_until = 0.0
+        d._arm_disclaimer_countdown_if_needed()
+        self.assertEqual(accepted, [])
+        self.assertIsNone(d._disclaimer_deadline)
 
     def test_checkbox_toggle_during_countdown_keeps_timer_and_saves_at_expiry(self):
         d = self._bare()
