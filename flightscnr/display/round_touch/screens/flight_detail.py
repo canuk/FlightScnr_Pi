@@ -29,13 +29,7 @@ def footer_labels(flights) -> tuple[str, ...]:
 
 
 def tap_footer_action(x: int, y: int, flights) -> str | None:
-    labels = footer_labels(flights)
-    idx = nav.tap_footer_button(x, y, len(labels))
-    if idx is None:
-        return None
-    if not flights:
-        return "radar"
-    return ("prev", "next", "radar")[idx]
+    return nav.curved_footer_hit(x, y, list(footer_labels(flights)))
 
 
 def _vessel_rows(f: dict, title_font, body_font, detail_font) -> list[tuple[str, object, tuple]]:
@@ -168,7 +162,7 @@ def draw_flight_detail(surface, flights, selected_index, scroll_offset: int = 0)
 
     if not flights:
         nav.draw_breadcrumb(surface, ["Radar", "Detail"])
-        nav.draw_footer_buttons(surface, list(FOOTER_EMPTY))
+        nav.draw_curved_footer(surface, list(FOOTER_EMPTY))
         common.draw_center_row(surface, "No traffic", chrome_top, body_font, theme.MUTED)
         return 0
 
@@ -215,7 +209,8 @@ def draw_flight_detail(surface, flights, selected_index, scroll_offset: int = 0)
             content_end=y,
             scroll_offset=scroll_offset,
             clip_prev=clip_prev,
+            curved=True,
         )
 
-    nav.draw_footer_buttons(surface, list(FOOTER_BUTTONS))
+    nav.draw_curved_footer(surface, list(FOOTER_BUTTONS))
     return max_scroll
