@@ -38,6 +38,7 @@ from display.round_touch import scale, settings, theme, zoom_buttons
 @pytest.fixture(autouse=True)
 def _reset():
     settings.set_radar_zoom_buttons(True)
+    settings.set_radar_zoom_position("right")
     settings.set_radar_hud_enabled(True)
     settings.set_radar_hud_position("top")
     zoom_buttons._reset_for_tests()
@@ -67,6 +68,19 @@ class TestZoomButtonsSetting:
         settings.set_radar_zoom_buttons(False)
         settings.sync_from_disk()
         assert settings.radar_zoom_buttons() is False
+
+
+class TestZoomPositionSetting:
+    def test_default_is_right(self):
+        assert settings.radar_zoom_position() == "right"
+
+    def test_set_left_and_read_back(self):
+        assert settings.set_radar_zoom_position("left") == "left"
+        assert settings.radar_zoom_position() == "left"
+
+    def test_invalid_value_falls_back_to_right(self):
+        settings.set_radar_zoom_position("diagonal")
+        assert settings.radar_zoom_position() == "right"
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -119,6 +133,15 @@ class TestZoomHitGeometry:
     def test_center_of_screen_is_not_a_hit(self):
         zoom_buttons.draw(_surface())
         assert zoom_buttons.hit_button(theme.CENTER_X, theme.CENTER_Y) is None
+
+    def test_left_position_mirrors_to_left_rim(self):
+        settings.set_radar_zoom_position("left")
+        zoom_buttons.draw(_surface())
+        minus_c, plus_c = zoom_buttons.button_centers()
+        assert minus_c[0] < theme.CENTER_X
+        assert plus_c[0] < theme.CENTER_X
+        # + stays above − on the left side too
+        assert plus_c[1] < theme.CENTER_Y < minus_c[1]
 
     def test_position_ignores_hud_position(self):
         settings.set_radar_hud_position("bottom")

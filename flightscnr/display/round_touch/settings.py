@@ -367,6 +367,8 @@ _defaults = {
     "radar_hud_dark": True,
     # Faint − / + range-step buttons on the radar rim.
     "radar_zoom_buttons": True,
+    # right | left — which rim edge holds the zoom pill.
+    "radar_zoom_position": "right",
     "radar_hud_arrange": False,  # legacy; arrange is gated by FLIGHTSCNR_HUD_ARRANGE
     "radar_hud_layout_top": copy_radar_hud_layout_top_default(),
     "radar_hud_layout_bottom": copy_radar_hud_layout_bottom_default(),
@@ -1154,6 +1156,7 @@ def _settings_snapshot(state: dict) -> tuple:
         clamp_radar_hud_opacity(state.get("radar_hud_opacity", 72)),
         bool(state.get("radar_hud_dark", True)),
         bool(state.get("radar_zoom_buttons", True)),
+        str(state.get("radar_zoom_position") or "right"),
         bool(radar_hud_arrange_debug_enabled()),
         tuple(
             sorted(
@@ -2552,9 +2555,26 @@ def toggle_radar_hud_dark() -> bool:
     return radar_hud_dark()
 
 
+RADAR_ZOOM_POSITIONS = ("right", "left")
+
+
 def radar_zoom_buttons() -> bool:
     """Faint − / + range buttons on the radar rim."""
     return bool(_state.get("radar_zoom_buttons", True))
+
+
+def radar_zoom_position() -> str:
+    pos = str(_state.get("radar_zoom_position") or "right").strip().lower()
+    return pos if pos in RADAR_ZOOM_POSITIONS else "right"
+
+
+def set_radar_zoom_position(position: str) -> str:
+    pos = str(position or "right").strip().lower()
+    if pos not in RADAR_ZOOM_POSITIONS:
+        pos = "right"
+    _state["radar_zoom_position"] = pos
+    _save(_state)
+    return pos
 
 
 def set_radar_zoom_buttons(enabled: bool) -> None:

@@ -105,7 +105,9 @@ def hit_button(x: int, y: int) -> str | None:
 
 
 def _mid_angle() -> float:
-    """Right rim — the clock HUD only ever occupies top or bottom."""
+    """Left or right rim — the clock HUD only ever occupies top or bottom."""
+    if settings.radar_zoom_position() == "left":
+        return math.pi
     return 0.0
 
 
@@ -167,9 +169,11 @@ def draw(surface: pygame.Surface) -> pygame.Rect | None:
             int(round(cy + r_mid * math.sin(angle))),
         )
 
-    # y grows down: mid − δ is above the midline, mid + δ below → + on top.
-    _plus_c = polar(mid - half_gap)
-    _minus_c = polar(mid + half_gap)
+    # y grows down. Right (mid=0): mid − δ is above the midline. Left (mid=π):
+    # mid + δ is above. Either way + sits on top.
+    up = half_gap if mid > 0 else -half_gap
+    _plus_c = polar(mid + up)
+    _minus_c = polar(mid - up)
 
     glyph_rgb, fill_rgba = radar_hud._hud_chrome()
     alpha = fill_rgba[3]

@@ -1730,6 +1730,8 @@ class RoundTouchDisplay:
         elif action == "zoom_buttons":
             settings.toggle_radar_zoom_buttons()
             radar.invalidate_frame_layer()
+        elif action == "zoom_position":
+            self._open_atc_picker("zoom_position")
         elif action in (
             "chime_volume",
             "traffic_sfx_volume",
@@ -1970,6 +1972,10 @@ class RoundTouchDisplay:
             return
         if kind == "hud_position":
             settings.set_radar_hud_position(choice)
+            radar.invalidate_frame_layer()
+            return
+        if kind == "zoom_position":
+            settings.set_radar_zoom_position(choice)
             radar.invalidate_frame_layer()
             return
         if kind == "default_clock":
