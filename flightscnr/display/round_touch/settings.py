@@ -314,6 +314,8 @@ _defaults = {
     "show_airport_centerlines": True,
     # airport.png pins for large/medium/small airports in range.
     "show_airport_icons": True,
+    # large | medium | small_paved | small — smallest airport tier drawn.
+    "airport_min_size": "small",
     # Airport ground vehicles (GRND/GVEH/… icon category) on the radar.
     "show_ground_vehicles": True,
     # Hide AIS vessels at or below this SOG (knots). 0 = show all speeds.
@@ -1117,6 +1119,7 @@ def _settings_snapshot(state: dict) -> tuple:
         state.get("earthquake_voice_enabled"),
         state.get("show_airport_centerlines"),
         state.get("show_airport_icons"),
+        str(state.get("airport_min_size") or "small"),
         state.get("show_ground_vehicles"),
         state.get("vessel_min_speed_kt"),
         state.get("aircraft_min_speed_kt"),
@@ -1611,6 +1614,33 @@ def toggle_show_airport_icons():
 def set_show_airport_icons(enabled: bool):
     _state["show_airport_icons"] = bool(enabled)
     _save(_state)
+
+
+AIRPORT_MIN_SIZES = ("large", "medium", "small_paved", "small")
+AIRPORT_MIN_SIZE_LABELS = {
+    "large": "Large only",
+    "medium": "Large + medium",
+    "small_paved": "Small (paved only)",
+    "small": "All small strips",
+}
+
+
+def airport_min_size() -> str:
+    size = str(_state.get("airport_min_size") or "small").strip().lower()
+    return size if size in AIRPORT_MIN_SIZES else "small"
+
+
+def set_airport_min_size(size: str) -> str:
+    value = str(size or "small").strip().lower()
+    if value not in AIRPORT_MIN_SIZES:
+        value = "small"
+    _state["airport_min_size"] = value
+    _save(_state)
+    return value
+
+
+def airport_min_size_label() -> str:
+    return AIRPORT_MIN_SIZE_LABELS.get(airport_min_size(), "All small strips")
 
 
 def show_ground_vehicles() -> bool:
