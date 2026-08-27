@@ -225,7 +225,8 @@ def _draw_moon_row(surface, y: int, detail_font) -> int:
     if detail_font is None:
         detail_font = draw.load_font(theme.FONT_DETAIL)
 
-    icon_size = weather_icons.sun_icon_size()
+    # A touch smaller than the sun icons — the crescents read heavier.
+    icon_size = max(10, weather_icons.sun_icon_size() - theme.s(2))
     offset = _SUN_OFFSET()
     row_h = 0
     for center_x, time_str, up in (
