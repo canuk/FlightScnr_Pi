@@ -842,6 +842,43 @@ def draw_curved_footer(surface: pygame.Surface, kinds: list[str]) -> None:
         )
 
 
+_BREADCRUMB_MAX_SPAN = 1.84  # radians ≈ 105° of the top rim
+
+
+def _curved_breadcrumb_items(
+    parts: list[str],
+    *,
+    active_color=None,
+) -> tuple[list[pygame.Surface], int]:
+    """(rendered glyph items, radius) fitted to the top-arc angular budget.
+
+    ``_fit_breadcrumb_parts`` measures straight text, while the arc layout
+    adds per-glyph tracking — so refit with a tightened pixel budget until
+    the true arc span (arc_ui.arc_span, tracking included) fits. Long tail
+    parts (callsigns, place names) ellipsize via the fitter's fallback.
+    """
+    active = active_color if active_color is not None else theme.SWEEP
+    font = draw.load_font(theme.FONT_DETAIL)
+    r = int(theme.VISIBLE_RADIUS * 0.90)
+    sep = " › "
+    budget = int(_BREADCRUMB_MAX_SPAN * r)
+    items: list[pygame.Surface] = []
+    for _ in range(4):
+        display = _fit_breadcrumb_parts(parts, font, budget)
+        items = []
+        for i, part in enumerate(display):
+            color = active if i == len(display) - 1 else theme.MUTED
+            text = part if i == 0 else sep + part
+            for j, ch in enumerate(text):
+                is_sep = i > 0 and j < len(sep)
+                items.append(font.render(ch, True, theme.HINT if is_sep else color))
+        span = arc_ui.arc_span([it.get_width() for it in items], r)
+        if span <= _BREADCRUMB_MAX_SPAN:
+            break
+        budget -= max(theme.s(6), int((span - _BREADCRUMB_MAX_SPAN) * r) + 2)
+    return items, r
+
+
 def draw_curved_breadcrumb(
     surface: pygame.Surface,
     parts: list[str],
@@ -851,21 +888,7 @@ def draw_curved_breadcrumb(
     """Breadcrumb trail curved along the top rim, active part highlighted."""
     if not parts:
         return
-    active = active_color if active_color is not None else theme.SWEEP
-    font = draw.load_font(theme.FONT_DETAIL)
-    r = int(theme.VISIBLE_RADIUS * 0.90)
-    # Angular budget ≈ 105° → pixel budget along the arc for the fitter.
-    max_w = int(1.84 * r)
-    display = _fit_breadcrumb_parts(parts, font, max_w)
-
-    sep = " › "
-    items: list[pygame.Surface] = []
-    for i, part in enumerate(display):
-        color = active if i == len(display) - 1 else theme.MUTED
-        text = part if i == 0 else sep + part
-        for j, ch in enumerate(text):
-            is_sep = i > 0 and j < len(sep)
-            items.append(font.render(ch, True, theme.HINT if is_sep else color))
+    items, r = _curved_breadcrumb_items(parts, active_color=active_color)
     arc_ui.blit_arc_items(
         surface, items,
         r=r, mid=-math.pi / 2, bottom=False,
