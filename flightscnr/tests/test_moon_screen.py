@@ -272,14 +272,38 @@ class TestRiseSetIcons:
         size = 40
         up = pygame.Surface((size, size), pygame.SRCALPHA)
         down = pygame.Surface((size, size), pygame.SRCALPHA)
-        moon.draw_rise_set_icon(up, (size // 2, size // 2), size, up_arrow=True,
-                                color=(230, 234, 242))
-        moon.draw_rise_set_icon(down, (size // 2, size // 2), size, up_arrow=False,
-                                color=(230, 234, 242))
+        moon.draw_rise_set_icon(up, (size // 2, size // 2), size, up_arrow=True)
+        moon.draw_rise_set_icon(down, (size // 2, size // 2), size, up_arrow=False)
         assert pygame.image.tobytes(up, "RGBA") != pygame.image.tobytes(down, "RGBA")
         assert any(
             up.get_at((x, y))[3] > 0 for x in range(size) for y in range(size)
         )
+
+    def test_moon_disc_is_blue(self):
+        size = 48
+        surf = pygame.Surface((size, size), pygame.SRCALPHA)
+        moon.draw_rise_set_icon(surf, (size // 2, size // 2), size, up_arrow=True)
+        blue_px = sum(
+            1
+            for x in range(size)
+            for y in range(size)
+            if (c := surf.get_at((x, y)))[3] > 100 and c[2] > c[0] + 20
+        )
+        assert blue_px > 10
+
+    def test_arrow_has_a_head_wider_than_the_shaft(self):
+        # An arrow (shaft + triangular head) — not a bare chevron: the widest
+        # opaque row in the arrow zone must clearly exceed the shaft width.
+        size = 60
+        surf = pygame.Surface((size, size), pygame.SRCALPHA)
+        moon.draw_rise_set_icon(surf, (size // 2, size // 2), size, up_arrow=True)
+        widths = []
+        for y in range(size // 2):  # arrow lives above the disc
+            xs = [x for x in range(size) if surf.get_at((x, y))[3] > 100]
+            if xs:
+                widths.append(max(xs) - min(xs) + 1)
+        assert widths
+        assert max(widths) >= min(widths) + 4
 
 
 class TestDrawSmoke:

@@ -240,8 +240,7 @@ def _draw_moon_row(surface, y: int, detail_font) -> int:
         left = center_x - total_w // 2
         mid_y = y + max(icon_size, text.get_height()) // 2
         moon.draw_rise_set_icon(
-            surface, (left + icon_size // 2, mid_y), icon_size,
-            up_arrow=up, color=theme.HINT,
+            surface, (left + icon_size // 2, mid_y), icon_size, up_arrow=up
         )
         surface.blit(text, text.get_rect(midleft=(left + icon_size + gap, mid_y)))
         row_h = max(row_h, max(icon_size, text.get_height()))
