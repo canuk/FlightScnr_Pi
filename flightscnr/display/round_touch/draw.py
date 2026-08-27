@@ -376,7 +376,7 @@ def fill_background(surface: pygame.Surface):
 # Settings / detail screens get a barely-there contour texture (see
 # assets/patterns/ATTRIBUTION.md). Composed once per dial size; the radar,
 # clocks, and other full-art screens keep the plain fill.
-_TEXTURE_ALPHA = 12  # white tile over the near-black BG → lines land ≈ RGB 13-26
+_TEXTURE_ALPHA = 18  # white tile over the near-black BG → lines land ≈ RGB 13-26
 _texture_bg: pygame.Surface | None = None
 _texture_bg_size = 0
 
