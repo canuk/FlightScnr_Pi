@@ -16,10 +16,16 @@ plot — linear rings read honestly as distance; the strong near-field bias
 in counts is handled by the screen's log color ramp, not by warping the
 geometry.
 
-State persists to ``coverage_histogram.json`` in FLIGHTSCNR_DATA_DIR so
-coverage builds up across restarts. Disk writes are throttled to one per
-``SAVE_INTERVAL_S`` — the overhead grab cycle calls ``record()`` every
-couple of seconds and the histogram must not turn that into SD-card wear.
+Two time views are kept: all-time totals, and a rotating ring of 24
+hourly buckets whose sum is the "last 24 h" view. Buckets roll over as
+epoch hours advance; after 24 idle hours the window drains to empty.
+
+State persists to ``coverage_histogram.json`` (schema version 2) in
+FLIGHTSCNR_DATA_DIR so coverage builds up across restarts; a version-1
+file (all-time only) loads cleanly and keeps its counts as the all-time
+view. Disk writes are throttled to one per ``SAVE_INTERVAL_S`` — the
+overhead grab cycle calls ``record()`` every couple of seconds and the
+histogram must not turn that into SD-card wear.
 """
 
 from __future__ import annotations
@@ -36,6 +42,8 @@ SECTOR_COUNT = 16
 RANGE_BIN_COUNT = 8
 MAX_RANGE_NM = 250.0
 SAVE_INTERVAL_S = 60.0
+HOURLY_BUCKETS = 24
+SCHEMA_VERSION = 2
 
 SECTOR_LABELS = (
     "N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE",
@@ -57,13 +65,27 @@ def _path() -> str:
     return os.path.join(_data_dir(), _FILE_NAME)
 
 
+def _zero_grid() -> list[list[int]]:
+    return [[0] * RANGE_BIN_COUNT for _ in range(SECTOR_COUNT)]
+
+
+def _fresh_hourly() -> dict:
+    return {
+        "hour": None,  # epoch hour of the head bucket; None until first roll
+        "head": 0,
+        "buckets": [_zero_grid() for _ in range(HOURLY_BUCKETS)],
+    }
+
+
 def _fresh_state(now: float | None = None) -> dict:
     return {
-        "counts": [[0] * RANGE_BIN_COUNT for _ in range(SECTOR_COUNT)],
+        "version": SCHEMA_VERSION,
+        "counts": _zero_grid(),
         "total": 0,
         "max_range_nm": 0.0,
         "since": float(now if now is not None else time.time()),
         "updated": 0.0,
+        "hourly": _fresh_hourly(),
     }
 
 
@@ -86,12 +108,32 @@ def _load() -> dict:
             data = json.load(fh)
         if not _valid_counts(data.get("counts")):
             raise ValueError("bad counts shape")
+        # v1 files (no "hourly") migrate: counts become the all-time view and
+        # the 24 h window starts empty.
+        hourly = data.get("hourly")
+        if (
+            not isinstance(hourly, dict)
+            or not isinstance(hourly.get("buckets"), list)
+            or len(hourly["buckets"]) != HOURLY_BUCKETS
+            or not all(_valid_counts(b) for b in hourly["buckets"])
+        ):
+            hourly = _fresh_hourly()
+        else:
+            hourly = {
+                "hour": (
+                    int(hourly["hour"]) if hourly.get("hour") is not None else None
+                ),
+                "head": int(hourly.get("head", 0)) % HOURLY_BUCKETS,
+                "buckets": hourly["buckets"],
+            }
         return {
+            "version": SCHEMA_VERSION,
             "counts": data["counts"],
             "total": int(data.get("total", 0)),
             "max_range_nm": float(data.get("max_range_nm", 0.0)),
             "since": float(data.get("since", time.time())),
             "updated": float(data.get("updated", 0.0)),
+            "hourly": hourly,
         }
     except FileNotFoundError:
         return _fresh_state()
@@ -145,6 +187,27 @@ def range_bin(dist_nm: float) -> int | None:
     return int(dist_nm * RANGE_BIN_COUNT / MAX_RANGE_NM)
 
 
+def _roll_window(now: float) -> None:
+    """Advance the hourly ring to the bucket for ``now``, clearing rolled-out
+    hours. Idempotent within an hour."""
+    global _dirty
+    hourly = _state["hourly"]
+    cur_hour = int(now // 3600)
+    if hourly["hour"] is None:
+        hourly["hour"] = cur_hour
+        return
+    delta = cur_hour - hourly["hour"]
+    if delta <= 0:
+        return
+    for _ in range(min(delta, HOURLY_BUCKETS)):
+        hourly["head"] = (hourly["head"] + 1) % HOURLY_BUCKETS
+        bucket = hourly["buckets"][hourly["head"]]
+        if any(any(row) for row in bucket):
+            _dirty = True
+        hourly["buckets"][hourly["head"]] = _zero_grid()
+    hourly["hour"] = cur_hour
+
+
 def record(
     entries: list[dict],
     home_lat: float,
@@ -156,6 +219,8 @@ def record(
     global _dirty
     _ensure_loaded()
     now = float(now if now is not None else time.time())
+    _roll_window(now)
+    bucket = _state["hourly"]["buckets"][_state["hourly"]["head"]]
     counted = 0
     for entry in entries or []:
         lat = entry.get("plane_latitude")
@@ -175,6 +240,7 @@ def record(
             continue
         sec = sector_index(bearing_deg(home_lat, home_lon, lat_f, lon_f))
         _state["counts"][sec][rbin] += 1
+        bucket[sec][rbin] += 1
         _state["total"] += 1
         counted += 1
     if counted:
@@ -210,12 +276,27 @@ def flush(*, now: float | None = None) -> None:
         logger.warning("coverage histogram save failed", exc_info=True)
 
 
-def snapshot() -> dict:
-    """Copy of the current histogram state for drawing."""
+def snapshot(*, now: float | None = None) -> dict:
+    """Copy of the current histogram state for drawing.
+
+    Rolls the hourly window first so a snapshot taken after idle hours
+    shows a correctly drained last-24 h view.
+    """
     _ensure_loaded()
+    now = float(now if now is not None else time.time())
+    _roll_window(now)
+    counts_24h = _zero_grid()
+    for bucket in _state["hourly"]["buckets"]:
+        for sec in range(SECTOR_COUNT):
+            row = bucket[sec]
+            out = counts_24h[sec]
+            for rbin in range(RANGE_BIN_COUNT):
+                out[rbin] += row[rbin]
     return {
         "counts": [list(row) for row in _state["counts"]],
+        "counts_24h": counts_24h,
         "total": _state["total"],
+        "total_24h": sum(sum(row) for row in counts_24h),
         "max_range_nm": _state["max_range_nm"],
         "since": _state["since"],
         "updated": _state["updated"],
