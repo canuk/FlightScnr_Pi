@@ -298,47 +298,67 @@ def _blit_arc_items(
         )
 
 
+# Cool moon-blue, the lunar counterpart of the golden Tomorrow.io sun icons.
+_MOON_ICON_BLUE = (136, 172, 232)
+
+
 def draw_rise_set_icon(
     surface: pygame.Surface,
     center: tuple[int, int],
     size: int,
     *,
     up_arrow: bool,
-    color: tuple[int, int, int],
+    color: tuple[int, int, int] | None = None,
 ) -> None:
-    """Vector moonrise/moonset glyph: half disc on a horizon, chevron above."""
-    side = size + 2
+    """Vector moonrise/moonset glyph in the sunrise-icon style.
+
+    Blue half disc on a horizon line with a shaft-and-head arrow above —
+    the lunar sibling of the Tomorrow.io sunrise/sunset icons.
+    """
+    rgb = color or _MOON_ICON_BLUE
+    scale = 2
+    side = (size + 2) * scale
     icon = pygame.Surface((side, side), pygame.SRCALPHA)
     ox = side // 2
-    hy = side // 2 + int(size * 0.24)
-    lw = max(2, size // 9)
-    rgba = (*color, 255)
+    hy = side // 2 + int(size * 0.30) * scale
+    lw = max(2, size // 9) * scale
+    rgba = (*rgb, 255)
 
-    pygame.draw.circle(icon, rgba, (ox, hy), max(3, int(size * 0.28)))
+    # Half disc sitting on the horizon.
+    pygame.draw.circle(icon, rgba, (ox, hy), max(3, int(size * 0.30)) * scale)
     icon.fill((0, 0, 0, 0), pygame.Rect(0, hy, side, side - hy))
     pygame.draw.line(icon, rgba, (0, hy), (side - 1, hy), lw)
 
-    aw = max(3, int(size * 0.20))
-    tip_y = hy - int(size * 0.72)
-    base_y = tip_y + aw
+    # Arrow: vertical shaft with a triangular head, like the sun icons.
+    head_w = max(3, int(size * 0.18)) * scale
+    head_h = max(3, int(size * 0.16)) * scale
+    top_y = hy - int(size * 0.42) * scale - int(size * 0.44) * scale
+    bot_y = hy - int(size * 0.42) * scale
     if up_arrow:
-        pts = [(ox - aw, base_y), (ox, tip_y), (ox + aw, base_y)]
+        tip = (ox, top_y)
+        base_y = top_y + head_h
+        shaft = (ox, base_y), (ox, bot_y)
     else:
-        pts = [(ox - aw, tip_y), (ox, base_y), (ox + aw, tip_y)]
-    pygame.draw.lines(icon, rgba, False, pts, lw)
+        tip = (ox, bot_y)
+        base_y = bot_y - head_h
+        shaft = (ox, top_y), (ox, base_y)
+    pygame.draw.line(icon, rgba, *shaft, lw)
+    pygame.draw.polygon(
+        icon, rgba, [tip, (ox - head_w, base_y), (ox + head_w, base_y)]
+    )
 
-    surface.blit(icon, (center[0] - side // 2, center[1] - side // 2))
+    lo = pygame.transform.smoothscale(icon, (side // scale, side // scale))
+    surface.blit(lo, lo.get_rect(center=center))
 
 
 def _spacer(width: int) -> pygame.Surface:
     return pygame.Surface((max(1, width), 1), pygame.SRCALPHA)
 
 
-def _icon_surface(size: int, *, up_arrow: bool, color: tuple[int, int, int]) -> pygame.Surface:
+def _icon_surface(size: int, *, up_arrow: bool) -> pygame.Surface:
     surf = pygame.Surface((size + 2, size + 2), pygame.SRCALPHA)
     draw_rise_set_icon(
-        surf, ((size + 2) // 2, (size + 2) // 2), size,
-        up_arrow=up_arrow, color=color,
+        surf, ((size + 2) // 2, (size + 2) // 2), size, up_arrow=up_arrow
     )
     return surf
 
@@ -374,7 +394,7 @@ def _draw_arc_pills(surface: pygame.Surface, data: dict) -> None:
     # Bottom pill: [rise icon] time · [set icon] time, curved as a bowl.
     icon_px = theme.s(15)
     bottom_items: list[pygame.Surface] = [
-        _icon_surface(icon_px, up_arrow=True, color=text_color),
+        _icon_surface(icon_px, up_arrow=True),
         _spacer(theme.s(4)),
     ]
     bottom_items += [
@@ -382,7 +402,7 @@ def _draw_arc_pills(surface: pygame.Surface, data: dict) -> None:
         for ch in format_event_time(data.get("moonrise"))
     ]
     bottom_items.append(_spacer(theme.s(18)))
-    bottom_items.append(_icon_surface(icon_px, up_arrow=False, color=text_color))
+    bottom_items.append(_icon_surface(icon_px, up_arrow=False))
     bottom_items.append(_spacer(theme.s(4)))
     bottom_items += [
         detail_font.render(ch, True, text_color)
