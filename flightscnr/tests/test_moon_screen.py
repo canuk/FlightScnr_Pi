@@ -291,19 +291,19 @@ class TestRiseSetIcons:
         )
         assert blue_px > 10
 
-    def test_arrow_has_a_head_wider_than_the_shaft(self):
-        # An arrow (shaft + triangular head) — not a bare chevron: the widest
-        # opaque row in the arrow zone must clearly exceed the shaft width.
-        size = 60
+    def test_uses_noun_project_assets(self):
+        # The committed crescent+arrow art must load for both kinds.
+        assert moon._rise_set_asset("moonrise") is not None
+        assert moon._rise_set_asset("moonset") is not None
+
+    def test_missing_asset_falls_back_to_vector(self, monkeypatch):
+        monkeypatch.setattr(moon, "_rise_set_asset", lambda kind: None)
+        size = 40
         surf = pygame.Surface((size, size), pygame.SRCALPHA)
         moon.draw_rise_set_icon(surf, (size // 2, size // 2), size, up_arrow=True)
-        widths = []
-        for y in range(size // 2):  # arrow lives above the disc
-            xs = [x for x in range(size) if surf.get_at((x, y))[3] > 100]
-            if xs:
-                widths.append(max(xs) - min(xs) + 1)
-        assert widths
-        assert max(widths) >= min(widths) + 4
+        assert any(
+            surf.get_at((x, y))[3] > 0 for x in range(size) for y in range(size)
+        )
 
 
 class TestDrawSmoke:
