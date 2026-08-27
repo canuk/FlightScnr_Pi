@@ -159,7 +159,7 @@ def _draw_version_with_update(
 
 def draw_details(surface, boot_splash=False, scroll_offset: int = 0) -> int:
     del scroll_offset
-    surface.fill((0, 0, 0))
+    draw.fill_background_textured(surface)
 
     brand = _brand_surface()
     if brand is None:

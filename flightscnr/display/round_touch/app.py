@@ -1720,6 +1720,9 @@ class RoundTouchDisplay:
         elif action == "radar_hud":
             settings.toggle_radar_hud_enabled()
             radar.invalidate_frame_layer()
+        elif action == "background_texture":
+            settings.toggle_background_texture()
+            draw.invalidate_background_texture()
         elif action == "hud_position":
             self._open_atc_picker("hud_position")
         elif action == "hud_dark":
@@ -3326,6 +3329,7 @@ class RoundTouchDisplay:
         """Screen-aware breadcrumb hit: curved band on curved-chrome screens."""
         if self.screen in (
             SCREEN_SETTINGS, SCREEN_DETAILS, SCREEN_FLIGHT, SCREEN_FIRE, SCREEN_QUAKE,
+            SCREEN_CLOCK,
         ):
             return nav.tap_breadcrumb_curved(x, y)
         return nav.tap_breadcrumb(x, y)

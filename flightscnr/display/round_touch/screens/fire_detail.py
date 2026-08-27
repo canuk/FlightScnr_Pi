@@ -106,7 +106,7 @@ def _fire_rows(fire: dict, title_font, body_font, detail_font) -> list[tuple[str
 
 
 def draw_fire_detail(surface, fires, selected_index, scroll_offset: int = 0) -> int:
-    draw.fill_background(surface)
+    draw.fill_background_textured(surface)
     title_font = draw.load_font(theme.s(18), bold=True)
     body_font = draw.load_font(theme.s(14))
     detail_font = draw.load_font(theme.s(13))

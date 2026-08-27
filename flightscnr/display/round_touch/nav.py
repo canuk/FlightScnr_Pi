@@ -879,6 +879,39 @@ def _curved_breadcrumb_items(
     return items, r
 
 
+def curved_page_dot_centers(total: int) -> list[tuple[int, int]]:
+    """Dot centers on an arc just inside the curved breadcrumb radius."""
+    if total <= 1:
+        return []
+    r = int(theme.VISIBLE_RADIUS * 0.90) - theme.s(14)
+    gap = theme.s(14) / float(max(1, r))
+    start = -math.pi / 2 - gap * (total - 1) / 2
+    return [
+        (
+            int(round(theme.CENTER_X + r * math.cos(start + i * gap))),
+            int(round(theme.CENTER_Y + r * math.sin(start + i * gap))),
+        )
+        for i in range(total)
+    ]
+
+
+def draw_curved_page_dots(
+    surface: pygame.Surface,
+    active: int,
+    total: int,
+    *,
+    active_color=None,
+) -> None:
+    """Page dots curved concentrically inside the breadcrumb arc."""
+    if total <= 1:
+        return
+    active_dot = active_color if active_color is not None else theme.SWEEP
+    radius = max(2, theme.s(4))
+    for i, center in enumerate(curved_page_dot_centers(total)):
+        color = active_dot if i == active else theme.PAGE_DOT_INACTIVE
+        pygame.draw.circle(surface, color, center, radius)
+
+
 def draw_curved_breadcrumb(
     surface: pygame.Surface,
     parts: list[str],

@@ -151,7 +151,7 @@ def _flight_rows(
 
 
 def draw_flight_detail(surface, flights, selected_index, scroll_offset: int = 0) -> int:
-    draw.fill_background(surface)
+    draw.fill_background_textured(surface)
     # Slightly smaller type so photo + details fit the round viewport.
     title_font = draw.load_font(theme.s(18), bold=True)
     body_font = draw.load_font(theme.s(14))

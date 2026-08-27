@@ -84,6 +84,7 @@ DISPLAY_ACTIONS = (
     "units",
     "range",
     "rotate",
+    "background_texture",
     "brightness",
 )
 # Radar clock HUD + hourly chime + enter-range / military / quake SFX.
@@ -680,7 +681,7 @@ def draw_atc_picker(
 
     # Opaque cover — per-pixel SRCALPHA dims often fail on the Pi framebuffer
     # and left ATC settings text bleeding through the picker.
-    draw.fill_background(surface)
+    draw.fill_background_textured(surface)
 
     title_font = draw.load_font(theme.s(15), bold=True)
     body_font = draw.load_font(theme.s(12))
@@ -892,7 +893,7 @@ def draw_system_confirm_popup(surface, action: str) -> None:
     danger = action in ("reboot", "shutdown")
 
     # Opaque cover — SRCALPHA dims are unreliable on the Pi framebuffer.
-    draw.fill_background(surface)
+    draw.fill_background_textured(surface)
 
     title_font = draw.load_font(theme.s(16), bold=True)
     body_font = draw.load_font(theme.s(12))
@@ -974,7 +975,7 @@ def draw_reboot_progress_popup(
 ) -> None:
     """Non-interactive modal shown while a reboot/shutdown is scheduled."""
     # Opaque cover — SRCALPHA dims are unreliable on the Pi framebuffer.
-    draw.fill_background(surface)
+    draw.fill_background_textured(surface)
 
     title_font = draw.load_font(theme.s(16), bold=True)
     body_font = draw.load_font(theme.s(12))
@@ -1853,6 +1854,7 @@ def _display_row_labels() -> list[str]:
         f"Units › {settings.unit_preset_label()}",
         f"Radar Range › {settings.scale_label()}",
         f"Rotate Screen › {settings.display_rotation()}°",
+        "Background Texture",
         "",  # brightness slider
     ]
 
@@ -1918,6 +1920,7 @@ _TOGGLE_ROW_STATE = {
     "tag_leaders": settings.show_tag_leaders,
     "color_by_altitude": settings.color_by_altitude,
     "radar_hud": settings.radar_hud_enabled,
+    "background_texture": settings.background_texture,
     "precipitation": settings.show_precipitation,
     "wildfires": settings.show_wildfires,
     "earthquakes": settings.show_earthquakes,
@@ -2287,9 +2290,9 @@ def draw_info(
             scroll_offset=atc_picker_scroll,
             pressed_id=atc_picker_pressed_id,
         )
-    draw.fill_background(surface)
+    draw.fill_background_textured(surface)
     nav.draw_curved_breadcrumb(surface, _breadcrumb(page))
-    nav.draw_page_dots(surface, page, len(nav.SETTINGS_PAGES))
+    nav.draw_curved_page_dots(surface, page, len(nav.SETTINGS_PAGES))
 
     body_font = _display_font()
     top = nav.content_top_y(has_dots=True)
