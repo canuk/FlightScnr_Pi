@@ -1035,11 +1035,8 @@ def draw_reboot_progress_popup(
 
 
 def tap_footer_action(x: int, y: int, page: int = PAGE_MAIN) -> str | None:
-    kinds = footer_kinds_for_page(page)
-    idx = nav.tap_footer_button(x, y, len(kinds))
-    if idx is None:
-        return None
-    return kinds[idx]
+    kinds = list(footer_kinds_for_page(page))
+    return nav.curved_footer_hit(x, y, kinds)
 
 
 def _theme_slider_metrics() -> tuple[int, int, int, int]:
@@ -2106,8 +2103,10 @@ def _draw_scroll_overflow_cues(
     scroll_offset: int,
     max_scroll: int,
 ) -> None:
-    """Thin right-edge scrollbar when settings rows overflow."""
-    nav.draw_scroll_overflow_cues(surface, top, bottom, scroll_offset, max_scroll)
+    """Curved right-rim scroll arc when settings rows overflow."""
+    nav.draw_curved_scroll_arc(
+        surface, scroll_offset, max_scroll, viewport_h=max(1, bottom - top)
+    )
 
 
 def _draw_brightness_slider_row(surface, ry: int, focused: bool) -> None:
@@ -2322,7 +2321,7 @@ def draw_info(
             pressed_id=atc_picker_pressed_id,
         )
     draw.fill_background(surface)
-    nav.draw_breadcrumb(surface, _breadcrumb(page))
+    nav.draw_curved_breadcrumb(surface, _breadcrumb(page))
     nav.draw_page_dots(surface, page, len(nav.SETTINGS_PAGES))
 
     body_font = _display_font()
@@ -2542,7 +2541,7 @@ def draw_info(
 
     if max_scroll > 0 and page != PAGE_MAIN:
         _draw_scroll_overflow_cues(surface, top, bottom, scroll_offset, max_scroll)
-    nav.draw_footer_buttons(surface, list(footer_kinds_for_page(page)))
+    nav.draw_curved_footer(surface, list(footer_kinds_for_page(page)))
     if page == PAGE_SYSTEM and system_confirm:
         draw_system_confirm_popup(surface, system_confirm)
     return max_scroll
