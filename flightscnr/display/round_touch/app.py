@@ -1735,6 +1735,8 @@ class RoundTouchDisplay:
             radar.invalidate_frame_layer()
         elif action == "airport_size":
             self._open_atc_picker("airport_size")
+        elif action == "airport_icon_style":
+            self._open_atc_picker("airport_icon_style")
         elif action == "hud_position":
             self._open_atc_picker("hud_position")
         elif action == "hud_dark":
@@ -1988,6 +1990,8 @@ class RoundTouchDisplay:
             from display.round_touch import airport_overlay
 
             settings.set_airport_min_size(choice)
+        if kind == "airport_icon_style":
+            settings.set_airport_icon_style(choice)
             airport_overlay.invalidate()
             radar.invalidate_frame_layer()
             return

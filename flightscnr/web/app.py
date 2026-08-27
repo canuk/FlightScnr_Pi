@@ -1138,6 +1138,7 @@ def radar_json():
             "show_airport_centerlines": settings.show_airport_centerlines(),
             "show_airport_icons": settings.show_airport_icons(),
             "airport_min_size": settings.airport_min_size(),
+            "airport_icon_style": settings.airport_icon_style(),
             "show_ground_vehicles": settings.show_ground_vehicles(),
             "traffic_mode": settings.traffic_mode(),
             "ais_enabled": settings.ais_enabled(),
@@ -1323,6 +1324,11 @@ def radar_save():
         from display.round_touch import airport_overlay
 
         settings.set_airport_min_size(str(data.get("airport_min_size") or "small"))
+        airport_overlay.invalidate()
+    if "airport_icon_style" in data:
+        from display.round_touch import airport_overlay
+
+        settings.set_airport_icon_style(str(data.get("airport_icon_style") or "classic"))
         airport_overlay.invalidate()
     if "show_ground_vehicles" in data:
         settings.set_show_ground_vehicles(bool(data.get("show_ground_vehicles")))
