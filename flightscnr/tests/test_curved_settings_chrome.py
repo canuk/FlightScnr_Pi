@@ -35,6 +35,10 @@ os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
 
 pygame.init()
 try:
+    pygame.display.set_mode((1, 1))
+except pygame.error:
+    pass
+try:
     pygame.font.init()
     _FONT_OK = bool(pygame.font.get_init())
 except Exception:
@@ -156,8 +160,36 @@ class TestCurvedFooter:
     def test_draw_smoke_without_fonts(self):
         surface = pygame.Surface((theme.SIZE, theme.SIZE))
         nav.draw_curved_footer(surface, ["prev", "next", "radar"])
-        x, y = _polar(nav.CURVED_FOOTER_RADIUS, math.pi / 2)
-        assert sum(surface.get_at((x, y))[:3]) > 0
+        segs = {k: mid for k, mid, _h in nav.curved_footer_segments(["prev", "next", "radar"])}
+        x, y = _polar(nav.CURVED_FOOTER_RADIUS, segs["prev"])
+        assert sum(surface.get_at((x, y))[:3]) > 0  # outlined pill fill
+
+    def test_radar_art_draws_bare_at_bottom_center(self):
+        surface = pygame.Surface((theme.SIZE, theme.SIZE))
+        nav.draw_curved_footer(surface, ["prev", "next", "radar"])
+        cx = theme.CENTER_X
+        cy = theme.CENTER_Y + nav.CURVED_FOOTER_RADIUS
+        box = theme.s(nav.RADAR_FOOTER_ICON_PX) // 2
+        lit = sum(
+            1
+            for dx in range(-box, box + 1, 4)
+            for dy in range(-box, box + 1, 4)
+            if sum(surface.get_at((cx + dx, cy + dy))[:3]) > 25
+        )
+        assert lit > 4  # icon art (or vector fallback) is present and sizable
+
+    @pytest.mark.skipif(not _FONT_OK, reason="pygame.font unavailable on this host")
+    def test_prev_label_text_renders_on_the_pill(self):
+        surface = pygame.Surface((theme.SIZE, theme.SIZE))
+        nav.draw_curved_footer(surface, ["prev", "next", "radar"])
+        segs = {k: mid for k, mid, _h in nav.curved_footer_segments(["prev", "next", "radar"])}
+        # Text pixels differ from the flat pill fill somewhere near the label.
+        r = nav.CURVED_FOOTER_RADIUS
+        samples = {
+            surface.get_at(_polar(r, segs["prev"] + a))[:3]
+            for a in (-0.05, -0.02, 0.0, 0.02, 0.05)
+        }
+        assert len(samples) > 1
 
 
 class TestSettingsFooterDispatch:
@@ -241,6 +273,19 @@ class TestCurvedBreadcrumb:
 # ═══════════════════════════════════════════════════════════════════════════════
 # Curved scroll arc
 # ═══════════════════════════════════════════════════════════════════════════════
+
+
+class TestScrollRingClearance:
+    def test_scroll_arc_clears_the_timeout_ring(self):
+        from display.round_touch import draw as draw_mod
+
+        surface = pygame.Surface((theme.SIZE, theme.SIZE))
+        geom = draw_mod._timeout_ring_geom(surface)
+        assert geom is not None
+        _cx, _cy, ring_r, ring_w, _start = geom
+        ring_inner = ring_r - ring_w / 2
+        scroll_outer = nav.CURVED_SCROLL_RADIUS + theme.s(5) / 2
+        assert scroll_outer + theme.s(4) < ring_inner
 
 
 class TestCurvedScrollArc:
