@@ -14,6 +14,8 @@ Covers:
   - range bin edges and the beyond-max cutoff
   - record() accumulation, max-range tracking, persistence round-trip
   - save throttling (at most one disk write per interval)
+  - hourly ring rotation (last-24h view) and v1→v2 file migration
+  - view cycle: Local · Last 24 h → Local · All-time → Stats
   - drawing smoke tests for the rose and the no-receiver hint
 """
 
@@ -201,6 +203,105 @@ class TestPersistence:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# Hourly ring (last 24 h) and migration
+# ═══════════════════════════════════════════════════════════════════════════════
+
+_HOUR = 3600.0
+
+
+class TestHourlyRing:
+    def test_recent_counts_appear_in_24h_view(self):
+        lat, lon = HOME
+        now = 100 * _HOUR
+        cov.record([_entry(lat + 0.5, lon)], lat, lon, now=now)
+        snap = cov.snapshot(now=now)
+        assert snap["counts_24h"][0][0] == 1
+        assert snap["total_24h"] == 1
+        assert snap["counts"][0][0] == 1  # all-time keeps counting too
+
+    def test_counts_survive_within_24_hours(self):
+        lat, lon = HOME
+        now = 100 * _HOUR
+        cov.record([_entry(lat + 0.5, lon)], lat, lon, now=now)
+        cov.record([_entry(lat + 0.5, lon)], lat, lon, now=now + _HOUR)
+        snap = cov.snapshot(now=now + _HOUR)
+        assert snap["total_24h"] == 2
+        # 23 hours after the first record, both still inside the window.
+        snap = cov.snapshot(now=now + 23 * _HOUR)
+        assert snap["total_24h"] == 2
+
+    def test_old_buckets_drop_after_24_hours(self):
+        lat, lon = HOME
+        now = 100 * _HOUR
+        cov.record([_entry(lat + 0.5, lon)], lat, lon, now=now)
+        cov.record([_entry(lat, lon + 1.0)], lat, lon, now=now + 25 * _HOUR)
+        snap = cov.snapshot(now=now + 25 * _HOUR)
+        assert snap["total_24h"] == 1
+        assert snap["counts_24h"][0][0] == 0  # the old north cell rolled out
+        # 1° of longitude at 32.7°N ≈ 50 nm → east sector, bin 1.
+        assert snap["counts_24h"][4][1] == 1
+        assert snap["total"] == 2  # all-time keeps both
+
+    def test_snapshot_alone_rolls_the_window(self):
+        lat, lon = HOME
+        now = 100 * _HOUR
+        cov.record([_entry(lat + 0.5, lon)], lat, lon, now=now)
+        # No new records — a snapshot two days later must show an empty window.
+        snap = cov.snapshot(now=now + 48 * _HOUR)
+        assert snap["total_24h"] == 0
+        assert snap["total"] == 1
+
+    def test_hourly_ring_persists_across_reload(self):
+        lat, lon = HOME
+        now = 100 * _HOUR
+        cov.record([_entry(lat + 0.5, lon)], lat, lon, now=now)
+        cov.flush(now=now)
+        cov._reset_for_tests()
+        snap = cov.snapshot(now=now)
+        assert snap["total_24h"] == 1
+        assert snap["counts_24h"][0][0] == 1
+
+
+class TestMigrationFromV1:
+    def test_v1_all_time_file_loads_cleanly(self):
+        counts = [[0] * cov.RANGE_BIN_COUNT for _ in range(cov.SECTOR_COUNT)]
+        counts[0][0] = 7
+        v1 = {
+            "counts": counts,
+            "total": 7,
+            "max_range_nm": 31.0,
+            "since": 123.0,
+            "updated": 456.0,
+        }
+        with open(cov._path(), "w") as fh:
+            json.dump(v1, fh)
+        cov._reset_for_tests()
+        snap = cov.snapshot(now=1000 * _HOUR)
+        assert snap["total"] == 7
+        assert snap["counts"][0][0] == 7
+        # v1 had no hourly data — the window starts empty.
+        assert snap["total_24h"] == 0
+
+    def test_recording_after_migration_feeds_both_views(self):
+        v1 = {
+            "counts": [[0] * cov.RANGE_BIN_COUNT for _ in range(cov.SECTOR_COUNT)],
+            "total": 0,
+            "max_range_nm": 0.0,
+            "since": 123.0,
+            "updated": 0.0,
+        }
+        with open(cov._path(), "w") as fh:
+            json.dump(v1, fh)
+        cov._reset_for_tests()
+        lat, lon = HOME
+        now = 100 * _HOUR
+        cov.record([_entry(lat + 0.5, lon)], lat, lon, now=now)
+        snap = cov.snapshot(now=now)
+        assert snap["total"] == 1
+        assert snap["total_24h"] == 1
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # Screen drawing
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -237,15 +338,27 @@ class TestCoverageScreen:
 
         coverage.draw_coverage(self._surface())
 
-    def test_tap_toggles_stats_view(self):
+    def test_tap_cycles_views(self):
         from display.round_touch.screens import coverage
 
         coverage._reset_for_tests()
+        # Default on entry: Local · Last 24 h.
+        assert coverage.active_view() == coverage.VIEW_LOCAL_24H
         assert coverage.stats_view_active() is False
         assert coverage.handle_tap() is True
+        assert coverage.active_view() == coverage.VIEW_LOCAL_ALL
+        assert coverage.stats_view_active() is False
+        coverage.handle_tap()
+        assert coverage.active_view() == coverage.VIEW_STATS
         assert coverage.stats_view_active() is True
         coverage.handle_tap()
-        assert coverage.stats_view_active() is False
+        assert coverage.active_view() == coverage.VIEW_LOCAL_24H
+
+    def test_view_labels_include_local(self):
+        from display.round_touch.screens import coverage
+
+        assert coverage.view_label(coverage.VIEW_LOCAL_24H) == "Local · Last 24 h"
+        assert coverage.view_label(coverage.VIEW_LOCAL_ALL) == "Local · All-time"
 
     @pytest.mark.skipif(not _FONTS_OK, reason="pygame.font unavailable in this env")
     def test_stats_view_draws(self):

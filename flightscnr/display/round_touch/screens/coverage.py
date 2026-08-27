@@ -12,8 +12,8 @@
 Draws the local receiver's coverage histogram as a polar heatmap:
 16 compass sectors × 8 linear range rings, each cell shaded by how many
 position reports landed there. Counts span orders of magnitude (near
-traffic dominates), so the shade ramp is logarithmic. Tap toggles a
-plain stats view.
+traffic dominates), so the shade ramp is logarithmic. Tap cycles the
+views: Local · Last 24 h → Local · All-time → Stats.
 """
 
 from __future__ import annotations
@@ -35,22 +35,40 @@ _CELL_ALPHA_MAX = 235
 _SECTOR_GAP_RAD = math.radians(1.2)
 _RING_GAP_FRAC = 0.06  # fraction of one ring's thickness left dark between rings
 
-_show_stats = False
+VIEW_LOCAL_24H = "local_24h"
+VIEW_LOCAL_ALL = "local_all"
+VIEW_STATS = "stats"
+_VIEW_CYCLE = (VIEW_LOCAL_24H, VIEW_LOCAL_ALL, VIEW_STATS)
+_VIEW_LABELS = {
+    VIEW_LOCAL_24H: "Local · Last 24 h",
+    VIEW_LOCAL_ALL: "Local · All-time",
+    VIEW_STATS: "Stats",
+}
+
+_view = VIEW_LOCAL_24H
 
 
 def _reset_for_tests() -> None:
-    global _show_stats
-    _show_stats = False
+    global _view
+    _view = VIEW_LOCAL_24H
+
+
+def active_view() -> str:
+    return _view
+
+
+def view_label(view: str) -> str:
+    return _VIEW_LABELS.get(view, "")
 
 
 def stats_view_active() -> bool:
-    return _show_stats
+    return _view == VIEW_STATS
 
 
 def handle_tap() -> bool:
-    """Toggle rose ↔ stats. Returns True (tap always consumed)."""
-    global _show_stats
-    _show_stats = not _show_stats
+    """Advance Local · Last 24 h → Local · All-time → Stats. Always consumed."""
+    global _view
+    _view = _VIEW_CYCLE[(_VIEW_CYCLE.index(_view) + 1) % len(_VIEW_CYCLE)]
     return True
 
 
@@ -121,15 +139,17 @@ def _draw_cell(
     pygame.draw.polygon(layer, rgba, pts)
 
 
-def _draw_rose(surface: pygame.Surface, snap: dict) -> None:
+def _draw_rose(surface: pygame.Surface, snap: dict, view: str) -> None:
     cx, cy = float(theme.CENTER_X), float(theme.CENTER_Y)
     label_font = draw.load_font(max(10, theme.s(13)), bold=True)
     label_band = label_font.get_height() + theme.s(8)
     outer_r = theme.VISIBLE_RADIUS - label_band - theme.s(10)
-    inner_r = outer_r * 0.16  # center hole like the PiAware plot
+    # Generous center hole (PiAware-style) — also fits the view label.
+    inner_r = outer_r * 0.28
     ring_w = (outer_r - inner_r) / cov.RANGE_BIN_COUNT
 
-    counts = snap["counts"]
+    counts = snap["counts_24h"] if view == VIEW_LOCAL_24H else snap["counts"]
+    total = snap["total_24h"] if view == VIEW_LOCAL_24H else snap["total"]
     max_count = max((max(row) for row in counts), default=0)
 
     layer = pygame.Surface(surface.get_size(), pygame.SRCALPHA)
@@ -166,14 +186,21 @@ def _draw_rose(surface: pygame.Surface, snap: dict) -> None:
         img = label_font.render(label, True, color)
         surface.blit(img, img.get_rect(center=(int(x), int(y))))
 
-    # Center hole: live count + max range.
-    detail_font = draw.load_font(max(10, theme.s(12)), bold=False)
-    lines = [f"{snap['total']:,}", "reports"]
-    y = cy - detail_font.get_height()
-    for line in lines:
-        img = detail_font.render(line, True, theme.MUTED)
-        surface.blit(img, img.get_rect(center=(int(cx), int(y))))
-        y += detail_font.get_height()
+    # Center hole: view label + count.
+    title_font = draw.load_font(max(10, theme.s(13)), bold=True)
+    count_font = draw.load_font(max(12, theme.s(20)), bold=True)
+    detail_font = draw.load_font(max(9, theme.s(11)), bold=False)
+    rows = (
+        (view_label(view), title_font, theme.MUTED),
+        (f"{total:,}", count_font, theme.LABEL),
+        ("position reports", detail_font, theme.HINT),
+    )
+    row_h = [f.get_height() for _t, f, _c in rows]
+    y = cy - sum(row_h) / 2
+    for (text, font, color), h in zip(rows, row_h):
+        img = font.render(text, True, color)
+        surface.blit(img, img.get_rect(center=(int(cx), int(y + h / 2))))
+        y += h
 
 
 def _draw_stats(surface: pygame.Surface, snap: dict) -> None:
@@ -183,7 +210,10 @@ def _draw_stats(surface: pygame.Surface, snap: dict) -> None:
     y = draw.draw_center_line(surface, "Receiver Stats", y, title_font, theme.LABEL)
     y += theme.s(8)
 
-    rows = [f"Position reports: {snap['total']:,}"]
+    rows = [
+        f"Position reports: {snap['total']:,}",
+        f"Last 24 h: {snap['total_24h']:,}",
+    ]
     if snap["max_range_nm"] > 0:
         rows.append(f"Max range: {_format_range(snap['max_range_nm'])}")
     live = _live_aircraft_count()
@@ -204,11 +234,12 @@ def draw_coverage(surface: pygame.Surface) -> None:
     draw.fill_background(surface)
     snap = cov.snapshot()
 
-    if _show_stats:
+    if _view == VIEW_STATS:
         _draw_stats(surface, snap)
     else:
-        _draw_rose(surface, snap)
-        if snap["total"] == 0:
+        _draw_rose(surface, snap, _view)
+        shown_total = snap["total_24h"] if _view == VIEW_LOCAL_24H else snap["total"]
+        if shown_total == 0:
             hint_font = draw.load_font(theme.s(14), bold=False)
             hint = (
                 "Waiting for local ADS-B data…"
@@ -216,7 +247,7 @@ def draw_coverage(surface: pygame.Surface) -> None:
                 else "No local receiver configured"
             )
             draw.draw_center_line(
-                surface, hint, theme.CENTER_Y + theme.s(40), hint_font, theme.HINT
+                surface, hint, theme.CENTER_Y + theme.s(60), hint_font, theme.HINT
             )
 
     nav.draw_breadcrumb(surface, ["Radar", "Coverage"])
