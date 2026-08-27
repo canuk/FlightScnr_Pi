@@ -316,6 +316,37 @@ class TestDrawSmoke:
         assert c[0] + c[1] + c[2] > 0
 
     @pytest.mark.skipif(not _FONT_OK, reason="pygame.font unavailable on this host")
+    def test_arc_pills_draw_without_swallowed_errors(self, monkeypatch):
+        # _draw_arc_pills is wrapped in a broad except in draw_moon (display
+        # resilience), which once hid a NameError that silently removed the
+        # bottom pill. Call it directly so any exception fails the test.
+        monkeypatch.setattr(moon.sun_moon, "compute_moon_data", _full_moon_data)
+        monkeypatch.setattr(moon, "_current_center", lambda: (32.7, -117.2))
+        surface = pygame.Surface((theme.SIZE, theme.SIZE))
+        moon._draw_arc_pills(surface, moon.get_moon_data())
+
+    @pytest.mark.skipif(not _FONT_OK, reason="pygame.font unavailable on this host")
+    def test_pills_paint_the_bottom_arc_too(self, monkeypatch):
+        # The bottom band must differ between pills-on and pills-off — the
+        # moon disc alone lights those pixels, so mere brightness proves
+        # nothing (that let a vanished bottom pill slip through once).
+        monkeypatch.setattr(moon.sun_moon, "compute_moon_data", _full_moon_data)
+        monkeypatch.setattr(moon, "_current_center", lambda: (32.7, -117.2))
+        with_pills = pygame.Surface((theme.SIZE, theme.SIZE))
+        moon.draw_moon(with_pills)
+        moon.toggle_info()
+        without = pygame.Surface((theme.SIZE, theme.SIZE))
+        moon.draw_moon(without)
+        y0 = theme.CENTER_Y + int(theme.VISIBLE_RADIUS * 0.74)
+        band_a = pygame.image.tobytes(
+            with_pills.subsurface((0, y0, theme.SIZE, theme.SIZE - y0)), "RGB"
+        )
+        band_b = pygame.image.tobytes(
+            without.subsurface((0, y0, theme.SIZE, theme.SIZE - y0)), "RGB"
+        )
+        assert band_a != band_b
+
+    @pytest.mark.skipif(not _FONT_OK, reason="pygame.font unavailable on this host")
     def test_pills_paint_the_top_arc(self, monkeypatch):
         monkeypatch.setattr(moon.sun_moon, "compute_moon_data", _full_moon_data)
         monkeypatch.setattr(moon, "_current_center", lambda: (32.7, -117.2))

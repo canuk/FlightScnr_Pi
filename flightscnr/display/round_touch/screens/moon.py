@@ -363,6 +363,18 @@ def _icon_surface(size: int, *, up_arrow: bool) -> pygame.Surface:
     return surf
 
 
+def _spacer(width: int) -> pygame.Surface:
+    return pygame.Surface((max(1, width), 1), pygame.SRCALPHA)
+
+
+def _icon_surface(size: int, *, up_arrow: bool) -> pygame.Surface:
+    surf = pygame.Surface((size + 2, size + 2), pygame.SRCALPHA)
+    draw_rise_set_icon(
+        surf, ((size + 2) // 2, (size + 2) // 2), size, up_arrow=up_arrow
+    )
+    return surf
+
+
 def _draw_arc_pills(surface: pygame.Surface, data: dict) -> None:
     """Radar-HUD-style curved pills with text that follows the arc."""
     from display.round_touch import radar_hud
