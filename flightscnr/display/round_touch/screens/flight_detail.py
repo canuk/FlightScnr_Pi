@@ -161,7 +161,7 @@ def draw_flight_detail(surface, flights, selected_index, scroll_offset: int = 0)
     bottom = nav.content_bottom_y()
 
     if not flights:
-        nav.draw_breadcrumb(surface, ["Radar", "Detail"])
+        nav.draw_curved_breadcrumb(surface, ["Radar", "Detail"])
         nav.draw_curved_footer(surface, list(FOOTER_EMPTY))
         common.draw_center_row(surface, "No traffic", chrome_top, body_font, theme.MUTED)
         return 0
@@ -174,7 +174,7 @@ def draw_flight_detail(surface, flights, selected_index, scroll_offset: int = 0)
         if is_vessel
         else display_flight_id_for_flight(f)
     )
-    nav.draw_breadcrumb(
+    nav.draw_curved_breadcrumb(
         surface, ["Radar", "Vessel" if is_vessel else "Flight", crumb]
     )
     nav.draw_page_dots(surface, idx, len(flights), active_color=theme.LABEL)
