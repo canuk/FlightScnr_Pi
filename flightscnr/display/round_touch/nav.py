@@ -699,3 +699,212 @@ def draw_lines_scrolled(
                 surface.blit(rendered, rendered.get_rect(midtop=(theme.CENTER_X, y)))
         y += row_h
     return max_scroll
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Curved settings chrome — breadcrumbs, footer pills, and the scroll arc all
+# follow the round display's rim (arc math shared via arc_ui).
+# ═══════════════════════════════════════════════════════════════════════════
+
+from display.round_touch import arc_ui  # noqa: E402  (kept near its users)
+
+_CURVED_FOOTER_ORDER = ("prev", "radar", "next")  # screen left → right
+
+
+def __getattr__(name: str):
+    # Radii track theme at call time — the framebuffer size is applied late.
+    if name == "CURVED_FOOTER_RADIUS":
+        return int(theme.VISIBLE_RADIUS * 0.84)
+    if name == "CURVED_BREADCRUMB_RADIUS":
+        return int(theme.VISIBLE_RADIUS * 0.90)
+    if name == "CURVED_SCROLL_RADIUS":
+        return int(theme.VISIBLE_RADIUS * 0.94)
+    raise AttributeError(name)
+
+
+def _footer_arc_metrics() -> tuple[int, float, float, float]:
+    r = int(theme.VISIBLE_RADIUS * 0.84)
+
+    def ang(px: float) -> float:
+        return float(px) / float(max(1, r))
+
+    return r, ang(theme.s(34)), ang(theme.s(30)), ang(theme.s(10))
+
+
+def curved_footer_segments(kinds: list[str]) -> list[tuple[str, float, float]]:
+    """(kind, mid_angle, half_span) per segment along the bottom arc.
+
+    Radar always sits at the exact bottom; prev flanks screen-left (larger
+    angle on the bottom arc), next screen-right, regardless of input order.
+    """
+    _r, radar_half, side_half, gap = _footer_arc_metrics()
+    bottom = math.pi / 2
+    present = [k for k in _CURVED_FOOTER_ORDER if k in kinds]
+    out: list[tuple[str, float, float]] = []
+    offset = radar_half + gap + side_half
+    for kind in present:
+        if kind == "radar":
+            out.append((kind, bottom, radar_half))
+        elif kind == "prev":
+            out.append((kind, bottom + offset, side_half))
+        elif kind == "next":
+            out.append((kind, bottom - offset, side_half))
+    return out
+
+
+def curved_footer_hit(x: int, y: int, kinds: list[str]) -> str | None:
+    """Kind of the curved footer segment under (x, y), or None."""
+    r, _radar_half, _side_half, _gap = _footer_arc_metrics()
+    slack = theme.s(4) / float(max(1, r))
+    r_inner = r - theme.s(24)
+    r_outer = min(theme.VISIBLE_RADIUS + theme.s(6), r + theme.s(24))
+    for kind, mid, half in curved_footer_segments(kinds):
+        if arc_ui.arc_band_hit(
+            x, y,
+            cx=theme.CENTER_X, cy=theme.CENTER_Y,
+            r_inner=r_inner, r_outer=r_outer,
+            mid=mid, half_span=half + slack,
+        ):
+            return kind
+    return None
+
+
+def _curved_icon(kind: str, size: int, glyph_color) -> pygame.Surface:
+    """Vector chevron / radar glyph for a curved footer segment."""
+    side = size + 2
+    icon = pygame.Surface((side, side), pygame.SRCALPHA)
+    c = side // 2
+    if kind in ("prev", "next"):
+        half_h = int(size * 0.34)
+        reach = int(size * 0.26)
+        if kind == "prev":
+            pts = [(c - reach, c), (c + reach, c - half_h), (c + reach, c + half_h)]
+        else:
+            pts = [(c + reach, c), (c - reach, c - half_h), (c - reach, c + half_h)]
+        pygame.draw.polygon(icon, (*glyph_color, 255), pts)
+        return icon
+    # radar
+    r = max(5, int(size * 0.42))
+    pygame.draw.circle(icon, (*glyph_color, 255), (c, c), r, max(1, theme.s(2)))
+    sweep_rad = math.radians(-35)
+    sx = c + int(r * math.cos(sweep_rad))
+    sy = c + int(r * math.sin(sweep_rad))
+    pygame.draw.line(icon, (*theme.SWEEP, 255), (c, c), (sx, sy), max(2, theme.s(2)))
+    pygame.draw.circle(
+        icon, (*theme.AIRCRAFT, 255), (c + r // 3, c - r // 4), max(2, theme.s(2))
+    )
+    return icon
+
+
+def draw_curved_footer(surface: pygame.Surface, kinds: list[str]) -> None:
+    """Frosted pill segments hugging the bottom rim (HUD chrome)."""
+    if not kinds:
+        return
+    from display.round_touch import radar_hud
+
+    glyph_color, fill_rgba = radar_hud._hud_chrome()
+    r, _radar_half, _side_half, _gap = _footer_arc_metrics()
+    band = theme.s(30)
+    cx, cy = theme.CENTER_X, theme.CENTER_Y
+    for kind, mid, half in curved_footer_segments(kinds):
+        radar_hud._draw_curved_white_pill(
+            surface, cx, cy, r, mid, band, fill_rgba,
+            arc_a0=mid - half, arc_a1=mid + half,
+        )
+        icon = _curved_icon(kind, theme.s(18), glyph_color)
+        rot = -math.degrees(mid - math.pi / 2)
+        rotated = pygame.transform.rotate(icon, rot)
+        px = cx + int(round(r * math.cos(mid)))
+        py = cy + int(round(r * math.sin(mid)))
+        surface.blit(rotated, rotated.get_rect(center=(px, py)))
+
+
+def draw_curved_breadcrumb(
+    surface: pygame.Surface,
+    parts: list[str],
+    *,
+    active_color=None,
+) -> None:
+    """Breadcrumb trail curved along the top rim, active part highlighted."""
+    if not parts:
+        return
+    active = active_color if active_color is not None else theme.SWEEP
+    font = draw.load_font(theme.FONT_DETAIL)
+    r = int(theme.VISIBLE_RADIUS * 0.90)
+    # Angular budget ≈ 105° → pixel budget along the arc for the fitter.
+    max_w = int(1.84 * r)
+    display = _fit_breadcrumb_parts(parts, font, max_w)
+
+    sep = " › "
+    items: list[pygame.Surface] = []
+    for i, part in enumerate(display):
+        color = active if i == len(display) - 1 else theme.MUTED
+        text = part if i == 0 else sep + part
+        for j, ch in enumerate(text):
+            is_sep = i > 0 and j < len(sep)
+            items.append(font.render(ch, True, theme.HINT if is_sep else color))
+    arc_ui.blit_arc_items(
+        surface, items,
+        r=r, mid=-math.pi / 2, bottom=False,
+        cx=theme.CENTER_X, cy=theme.CENTER_Y,
+    )
+
+
+def tap_breadcrumb_curved(x: int, y: int) -> bool:
+    """Tap anywhere on the top rim band to go back toward Radar."""
+    return arc_ui.arc_band_hit(
+        x, y,
+        cx=theme.CENTER_X, cy=theme.CENTER_Y,
+        r_inner=theme.VISIBLE_RADIUS * 0.80,
+        r_outer=theme.VISIBLE_RADIUS + theme.s(6),
+        mid=-math.pi / 2, half_span=1.1,
+    )
+
+
+_SCROLL_ARC_A0 = -0.62
+_SCROLL_ARC_A1 = 0.62
+
+
+def curved_scroll_arc_geometry(
+    scroll_offset: int,
+    max_scroll: int,
+    *,
+    viewport_h: int | None = None,
+) -> tuple[float, float, float, float]:
+    """(track_a0, track_a1, thumb_a0, thumb_a1) on the right-rim arc."""
+    a0, a1 = _SCROLL_ARC_A0, _SCROLL_ARC_A1
+    if viewport_h is None:
+        viewport_h = max(1, content_bottom_y() - content_top_y(True))
+    content_h = viewport_h + max(0, max_scroll)
+    frac = max(0.12, min(1.0, viewport_h / float(max(1, content_h))))
+    span = (a1 - a0) * frac
+    travel = (a1 - a0) - span
+    t = 0.0 if max_scroll <= 0 else min(1.0, max(0.0, scroll_offset / float(max_scroll)))
+    t0 = a0 + travel * t
+    return a0, a1, t0, t0 + span
+
+
+def draw_curved_scroll_arc(
+    surface: pygame.Surface,
+    scroll_offset: int,
+    max_scroll: int,
+    *,
+    viewport_h: int | None = None,
+) -> None:
+    """Right-rim scroll indicator: frosted track arc + solid thumb arc."""
+    if max_scroll <= 0:
+        return
+    a0, a1, t0, t1 = curved_scroll_arc_geometry(
+        scroll_offset, max_scroll, viewport_h=viewport_h
+    )
+    r = int(theme.VISIBLE_RADIUS * 0.94)
+    cx, cy = theme.CENTER_X, theme.CENTER_Y
+    arc_ui.draw_arc_bar(
+        surface, cx=cx, cy=cy, r=r, a0=a0, a1=a1,
+        width=max(3, theme.s(4)), color_rgba=(*theme.HINT[:3], 70),
+    )
+    thumb_color = theme.MUTED if hasattr(theme, "MUTED") else theme.LABEL
+    arc_ui.draw_arc_bar(
+        surface, cx=cx, cy=cy, r=r, a0=t0, a1=t1,
+        width=max(4, theme.s(5)), color_rgba=(*thumb_color[:3], 255),
+    )
