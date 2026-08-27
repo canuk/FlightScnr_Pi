@@ -66,6 +66,39 @@ class TestCurvedPageDots:
         assert surface.get_at((x, y))[:3] == tuple(theme.SWEEP[:3])
 
 
+class TestDetailScreenDots:
+    def test_detail_dot_row_matches_settings_geometry(self):
+        # Detail pagers use the same arc: radius just inside the breadcrumb.
+        breadcrumb_r = nav.CURVED_BREADCRUMB_RADIUS
+        for x, y in nav.curved_page_dot_centers(4):
+            r = math.hypot(x - theme.CENTER_X, y - theme.CENTER_Y)
+            assert abs(r - (breadcrumb_r - theme.s(14))) <= 1.5
+
+    def test_active_dot_honors_custom_color(self):
+        surface = pygame.Surface((theme.SIZE, theme.SIZE))
+        nav.draw_curved_page_dots(surface, 1, 4, active_color=theme.LABEL)
+        x, y = nav.curved_page_dot_centers(4)[1]
+        assert surface.get_at((x, y))[:3] == tuple(theme.LABEL[:3])
+
+    def test_many_dots_compress_instead_of_sweeping_the_rim(self):
+        centers = nav.curved_page_dot_centers(40)
+        assert len(centers) == 40
+        for x, y in centers:
+            # Every dot stays in the upper half of the dial.
+            assert y < theme.CENTER_Y
+        span = 2 * math.asin(
+            math.hypot(
+                centers[-1][0] - centers[0][0], centers[-1][1] - centers[0][1]
+            ) / 2 / (nav.CURVED_BREADCRUMB_RADIUS - theme.s(14))
+        )
+        assert span <= 1.95
+
+    def test_settings_sized_rows_keep_native_spacing(self):
+        few = nav.curved_page_dot_centers(9)
+        gap_px = math.hypot(few[1][0] - few[0][0], few[1][1] - few[0][1])
+        assert abs(gap_px - theme.s(14)) <= 1.5
+
+
 class TestClockCurvedBreadcrumb:
     def test_clock_screen_uses_curved_band(self):
         from display.round_touch.app import RoundTouchDisplay, SCREEN_CLOCK

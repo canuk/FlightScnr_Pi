@@ -177,7 +177,7 @@ def draw_flight_detail(surface, flights, selected_index, scroll_offset: int = 0)
     nav.draw_curved_breadcrumb(
         surface, ["Radar", "Vessel" if is_vessel else "Flight", crumb]
     )
-    nav.draw_page_dots(surface, idx, len(flights), active_color=theme.LABEL)
+    nav.draw_curved_page_dots(surface, idx, len(flights), active_color=theme.LABEL)
 
     rows = (
         _vessel_rows(f, title_font, body_font, detail_font)

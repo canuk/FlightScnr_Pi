@@ -124,7 +124,7 @@ def draw_fire_detail(surface, fires, selected_index, scroll_offset: int = 0) -> 
     fire = fires[idx]
     crumb = (fire.get("name") or "Fire").strip()
     nav.draw_curved_breadcrumb(surface, ["Radar", "Fire", crumb])
-    nav.draw_page_dots(surface, idx, len(fires), active_color=theme.LABEL)
+    nav.draw_curved_page_dots(surface, idx, len(fires), active_color=theme.LABEL)
 
     map_path = (fire.get("map_path") or "").strip()
     has_map = bool(map_path)
