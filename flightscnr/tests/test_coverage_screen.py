@@ -129,14 +129,19 @@ class TestRangeBin:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
+# 0.5° lat due north ≈ 30 nm → fine bin 9 (3.125 nm bins).
+_N_BIN = 9
+# 1° lon east at 32.7°N ≈ 50.5 nm → fine bin 16.
+_E_BIN = 16
+
+
 class TestRecord:
     def test_counts_land_in_the_right_cell(self):
         lat, lon = HOME
-        # ~30 nm due north → sector 0, bin 0 (31.25 nm bins).
         n = cov.record([_entry(lat + 0.5, lon)], lat, lon, now=1000.0)
         assert n == 1
         snap = cov.snapshot()
-        assert snap["counts"][0][0] == 1
+        assert snap["counts"][0][_N_BIN] == 1
         assert snap["total"] == 1
 
     def test_multiple_entries_accumulate(self):
@@ -145,7 +150,7 @@ class TestRecord:
         cov.record(entries, lat, lon, now=1000.0)
         snap = cov.snapshot()
         assert snap["total"] == 3
-        assert snap["counts"][0][0] == 2
+        assert snap["counts"][0][_N_BIN] == 2
 
     def test_max_range_tracked(self):
         lat, lon = HOME
@@ -176,7 +181,7 @@ class TestPersistence:
         assert os.path.isfile(path)
         cov._reset_for_tests()
         assert cov.snapshot()["total"] == 1
-        assert cov.snapshot()["counts"][0][0] == 1
+        assert cov.snapshot()["counts"][0][_N_BIN] == 1
 
     def test_save_is_throttled(self):
         lat, lon = HOME
@@ -215,9 +220,9 @@ class TestHourlyRing:
         now = 100 * _HOUR
         cov.record([_entry(lat + 0.5, lon)], lat, lon, now=now)
         snap = cov.snapshot(now=now)
-        assert snap["counts_24h"][0][0] == 1
+        assert snap["counts_24h"][0][_N_BIN] == 1
         assert snap["total_24h"] == 1
-        assert snap["counts"][0][0] == 1  # all-time keeps counting too
+        assert snap["counts"][0][_N_BIN] == 1  # all-time keeps counting too
 
     def test_counts_survive_within_24_hours(self):
         lat, lon = HOME
@@ -237,9 +242,8 @@ class TestHourlyRing:
         cov.record([_entry(lat, lon + 1.0)], lat, lon, now=now + 25 * _HOUR)
         snap = cov.snapshot(now=now + 25 * _HOUR)
         assert snap["total_24h"] == 1
-        assert snap["counts_24h"][0][0] == 0  # the old north cell rolled out
-        # 1° of longitude at 32.7°N ≈ 50 nm → east sector, bin 1.
-        assert snap["counts_24h"][4][1] == 1
+        assert snap["counts_24h"][0][_N_BIN] == 0  # the old north cell rolled out
+        assert snap["counts_24h"][4][_E_BIN] == 1  # the fresh east cell remains
         assert snap["total"] == 2  # all-time keeps both
 
     def test_snapshot_alone_rolls_the_window(self):
@@ -259,12 +263,21 @@ class TestHourlyRing:
         cov._reset_for_tests()
         snap = cov.snapshot(now=now)
         assert snap["total_24h"] == 1
-        assert snap["counts_24h"][0][0] == 1
+        assert snap["counts_24h"][0][_N_BIN] == 1
+
+
+# Legacy schemas stored 8 coarse bins of 31.25 nm — exactly 10 fine bins each.
+_COARSE_BINS = 8
+_FINE_PER_COARSE = cov.RANGE_BIN_COUNT // _COARSE_BINS
+
+
+def _coarse_grid():
+    return [[0] * _COARSE_BINS for _ in range(cov.SECTOR_COUNT)]
 
 
 class TestMigrationFromV1:
     def test_v1_all_time_file_loads_cleanly(self):
-        counts = [[0] * cov.RANGE_BIN_COUNT for _ in range(cov.SECTOR_COUNT)]
+        counts = _coarse_grid()
         counts[0][0] = 7
         v1 = {
             "counts": counts,
@@ -278,13 +291,15 @@ class TestMigrationFromV1:
         cov._reset_for_tests()
         snap = cov.snapshot(now=1000 * _HOUR)
         assert snap["total"] == 7
-        assert snap["counts"][0][0] == 7
+        # Coarse bin 0 spreads across fine bins 0..9, total preserved.
+        assert sum(snap["counts"][0][:_FINE_PER_COARSE]) == 7
+        assert sum(snap["counts"][0]) == 7
         # v1 had no hourly data — the window starts empty.
         assert snap["total_24h"] == 0
 
     def test_recording_after_migration_feeds_both_views(self):
         v1 = {
-            "counts": [[0] * cov.RANGE_BIN_COUNT for _ in range(cov.SECTOR_COUNT)],
+            "counts": _coarse_grid(),
             "total": 0,
             "max_range_nm": 0.0,
             "since": 123.0,
@@ -299,6 +314,129 @@ class TestMigrationFromV1:
         snap = cov.snapshot(now=now)
         assert snap["total"] == 1
         assert snap["total_24h"] == 1
+
+
+class TestMigrationFromV2:
+    def _write_v2(self, coarse_counts, bucket0=None):
+        buckets = [_coarse_grid() for _ in range(cov.HOURLY_BUCKETS)]
+        if bucket0 is not None:
+            buckets[0] = bucket0
+        v2 = {
+            "version": 2,
+            "counts": coarse_counts,
+            "total": sum(sum(r) for r in coarse_counts),
+            "max_range_nm": 60.0,
+            "since": 123.0,
+            "updated": 456.0,
+            "hourly": {"hour": 100, "head": 0, "buckets": buckets},
+        }
+        with open(cov._path(), "w") as fh:
+            json.dump(v2, fh)
+
+    def test_even_counts_apportion_uniformly(self):
+        counts = _coarse_grid()
+        counts[2][1] = 20  # coarse bin 1 → fine bins 10..19, 2 each
+        self._write_v2(counts)
+        cov._reset_for_tests()
+        snap = cov.snapshot(now=100 * _HOUR)
+        row = snap["counts"][2]
+        assert row[10:20] == [2] * 10
+        assert sum(row) == 20
+        assert snap["total"] == 20
+
+    def test_remainder_counts_preserve_totals(self):
+        counts = _coarse_grid()
+        counts[5][0] = 7  # not divisible by 10 — largest-remainder split
+        self._write_v2(counts)
+        cov._reset_for_tests()
+        row = cov.snapshot(now=100 * _HOUR)["counts"][5]
+        assert sum(row[:10]) == 7
+        assert sum(row) == 7
+        assert max(row[:10]) == 1  # spread, not lumped
+
+    def test_hourly_buckets_apportioned_too(self):
+        bucket0 = _coarse_grid()
+        bucket0[3][2] = 10  # coarse bin 2 → fine bins 20..29
+        self._write_v2(_coarse_grid(), bucket0=bucket0)
+        cov._reset_for_tests()
+        snap = cov.snapshot(now=100 * _HOUR)
+        assert sum(snap["counts_24h"][3][20:30]) == 10
+        assert snap["total_24h"] == 10
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Dynamic display scale
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+def _fine_grid():
+    return [[0] * cov.RANGE_BIN_COUNT for _ in range(cov.SECTOR_COUNT)]
+
+
+class TestPickDisplayMax:
+    def test_near_field_traffic_picks_small_scale(self):
+        grid = _fine_grid()
+        for b in range(6):  # everything inside ~19 nm
+            grid[0][b] = 100
+        assert cov.pick_display_max_nm(grid) == 25
+
+    def test_mid_range_traffic_picks_matching_scale(self):
+        grid = _fine_grid()
+        for b in range(18):  # inside ~56 nm
+            grid[3][b] = 10
+        assert cov.pick_display_max_nm(grid) == 75
+
+    def test_single_distant_sighting_does_not_blow_up_scale(self):
+        grid = _fine_grid()
+        for b in range(12):  # bulk inside ~38 nm
+            grid[0][b] = 100
+        grid[8][76] = 1  # one report at ~240 nm
+        assert cov.pick_display_max_nm(grid) == 50
+
+    def test_distant_traffic_with_weight_expands_scale(self):
+        grid = _fine_grid()
+        grid[0][0] = 10
+        grid[8][70] = 90  # real traffic near 220 nm
+        assert cov.pick_display_max_nm(grid) == 250
+
+    def test_empty_grid_uses_full_scale(self):
+        assert cov.pick_display_max_nm(_fine_grid()) == 250
+
+
+class TestAggregateDisplay:
+    def test_sums_preserved_within_scale(self):
+        grid = _fine_grid()
+        grid[1][9] = 5  # 28-31 nm
+        grid[1][0] = 3
+        out = cov.aggregate_display(grid, 100)
+        assert len(out) == cov.SECTOR_COUNT
+        assert all(len(row) == cov.DISPLAY_RING_COUNT for row in out)
+        assert sum(sum(r) for r in out) == 8
+
+    def test_ring_placement(self):
+        grid = _fine_grid()
+        grid[1][9] = 5  # 28.1-31.25 nm; max 100 → 12.5 nm rings → ring 2
+        out = cov.aggregate_display(grid, 100)
+        assert out[1][2] == 5
+
+    def test_counts_beyond_scale_are_dropped(self):
+        grid = _fine_grid()
+        grid[0][0] = 4
+        grid[0][40] = 9  # 125-128 nm, beyond a 100 nm scale
+        out = cov.aggregate_display(grid, 100)
+        assert sum(sum(r) for r in out) == 4
+
+    def test_views_scale_independently(self):
+        lat, lon = HOME
+        now = 100 * _HOUR
+        # Old far traffic (~120 nm), then >24 h later fresh near traffic.
+        cov.record([_entry(lat + 2.0, lon)] * 60, lat, lon, now=now)
+        cov.record([_entry(lat + 0.25, lon)] * 60, lat, lon, now=now + 30 * _HOUR)
+        snap = cov.snapshot(now=now + 30 * _HOUR)
+        all_time_max = cov.pick_display_max_nm(snap["counts"])
+        last_24h_max = cov.pick_display_max_nm(snap["counts_24h"])
+        assert last_24h_max == 25  # only ~15 nm traffic in the window
+        assert all_time_max >= 100  # the far traffic still dominates all-time
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

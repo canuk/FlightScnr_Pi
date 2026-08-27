@@ -10,11 +10,14 @@
 """Antenna coverage histogram for the local dump1090/PiAware receiver.
 
 Accumulates aircraft position reports into a PiAware-stats-style polar
-histogram: 16 compass sectors × 8 range bins, counted from the radar home
-center. Range bins are LINEAR (MAX_RANGE_NM / 8 each) like the PiAware
-plot — linear rings read honestly as distance; the strong near-field bias
-in counts is handled by the screen's log color ramp, not by warping the
-geometry.
+histogram: 16 compass sectors × 80 fine range bins of 3.125 nm, counted
+from the radar home center out to 250 nm. 3.125 nm was chosen so every
+"nice" display scale (25/50/75/100/150/200/250 nm) is a whole multiple of
+8 fine bins — the screen aggregates fine bins into 8 display rings of
+scale/8 with no fractional overlap — and so the legacy 31.25 nm coarse
+bins are exactly 10 fine bins each (clean migration). Bins are LINEAR:
+rings read honestly as distance; the near-field count bias is handled by
+the screen's log color ramp and its dynamic ring scale.
 
 Two time views are kept: all-time totals, and a rotating ring of 24
 hourly buckets whose sum is the "last 24 h" view. Buckets roll over as
@@ -39,11 +42,24 @@ import time
 logger = logging.getLogger(__name__)
 
 SECTOR_COUNT = 16
-RANGE_BIN_COUNT = 8
+RANGE_BIN_COUNT = 80
 MAX_RANGE_NM = 250.0
+FINE_BIN_NM = MAX_RANGE_NM / RANGE_BIN_COUNT  # 3.125
 SAVE_INTERVAL_S = 60.0
 HOURLY_BUCKETS = 24
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
+
+# Display scale options — all multiples of 25 nm so scale/8 rings align
+# exactly with the 3.125 nm fine bins.
+NICE_MAX_NM = (25, 50, 75, 100, 150, 200, 250)
+DISPLAY_RING_COUNT = 8
+# The display scale covers this fraction of observed reports — one stray
+# distant sighting must not stretch the rose.
+_SCALE_PERCENTILE = 0.98
+
+# Legacy (v1/v2) coarse geometry: 8 bins of 31.25 nm = 10 fine bins each.
+_LEGACY_BIN_COUNT = 8
+_LEGACY_FINE_PER_BIN = RANGE_BIN_COUNT // _LEGACY_BIN_COUNT
 
 SECTOR_LABELS = (
     "N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE",
@@ -89,34 +105,63 @@ def _fresh_state(now: float | None = None) -> dict:
     }
 
 
-def _valid_counts(counts) -> bool:
+def _valid_counts(counts, bins: int = RANGE_BIN_COUNT) -> bool:
     return (
         isinstance(counts, list)
         and len(counts) == SECTOR_COUNT
         and all(
             isinstance(row, list)
-            and len(row) == RANGE_BIN_COUNT
+            and len(row) == bins
             and all(isinstance(v, int) and v >= 0 for v in row)
             for row in counts
         )
     )
 
 
+def _apportion_row(row: list[int]) -> list[int]:
+    """Spread one legacy coarse row over the fine bins it covers.
+
+    Each 31.25 nm coarse bin overlaps exactly 10 fine bins uniformly, so
+    proportional-by-overlap means count/10 per fine bin; largest-remainder
+    keeps the grid integer while preserving the exact total.
+    """
+    fine = [0] * RANGE_BIN_COUNT
+    for coarse_idx, count in enumerate(row):
+        base, rem = divmod(int(count), _LEGACY_FINE_PER_BIN)
+        start = coarse_idx * _LEGACY_FINE_PER_BIN
+        for k in range(_LEGACY_FINE_PER_BIN):
+            fine[start + k] = base + (1 if k < rem else 0)
+    return fine
+
+
+def _upgrade_grid(counts) -> list[list[int]] | None:
+    """Return a fine grid from a stored grid of either width, else None."""
+    if _valid_counts(counts):
+        return counts
+    if _valid_counts(counts, bins=_LEGACY_BIN_COUNT):
+        return [_apportion_row(row) for row in counts]
+    return None
+
+
 def _load() -> dict:
     try:
         with open(_path(), encoding="utf-8") as fh:
             data = json.load(fh)
-        if not _valid_counts(data.get("counts")):
+        counts = _upgrade_grid(data.get("counts"))
+        if counts is None:
             raise ValueError("bad counts shape")
         # v1 files (no "hourly") migrate: counts become the all-time view and
-        # the 24 h window starts empty.
+        # the 24 h window starts empty. v2 hourly buckets (coarse bins) are
+        # apportioned into fine bins the same way as the all-time grid.
         hourly = data.get("hourly")
-        if (
-            not isinstance(hourly, dict)
-            or not isinstance(hourly.get("buckets"), list)
-            or len(hourly["buckets"]) != HOURLY_BUCKETS
-            or not all(_valid_counts(b) for b in hourly["buckets"])
-        ):
+        buckets = None
+        if isinstance(hourly, dict) and isinstance(hourly.get("buckets"), list) and len(
+            hourly["buckets"]
+        ) == HOURLY_BUCKETS:
+            upgraded = [_upgrade_grid(b) for b in hourly["buckets"]]
+            if all(b is not None for b in upgraded):
+                buckets = upgraded
+        if buckets is None:
             hourly = _fresh_hourly()
         else:
             hourly = {
@@ -124,11 +169,11 @@ def _load() -> dict:
                     int(hourly["hour"]) if hourly.get("hour") is not None else None
                 ),
                 "head": int(hourly.get("head", 0)) % HOURLY_BUCKETS,
-                "buckets": hourly["buckets"],
+                "buckets": buckets,
             }
         return {
             "version": SCHEMA_VERSION,
-            "counts": data["counts"],
+            "counts": counts,
             "total": int(data.get("total", 0)),
             "max_range_nm": float(data.get("max_range_nm", 0.0)),
             "since": float(data.get("since", time.time())),
@@ -301,3 +346,47 @@ def snapshot(*, now: float | None = None) -> dict:
         "since": _state["since"],
         "updated": _state["updated"],
     }
+
+
+def pick_display_max_nm(counts: list[list[int]]) -> int:
+    """Smallest nice ring scale covering ~98 % of the grid's reports.
+
+    An empty grid gets the full 250 nm scale (nothing to fit yet)."""
+    per_bin = [0] * RANGE_BIN_COUNT
+    for row in counts:
+        for rbin, v in enumerate(row):
+            per_bin[rbin] += v
+    total = sum(per_bin)
+    if total <= 0:
+        return int(NICE_MAX_NM[-1])
+    threshold = _SCALE_PERCENTILE * total
+    cum = 0
+    p_dist = MAX_RANGE_NM
+    for rbin, v in enumerate(per_bin):
+        cum += v
+        if cum >= threshold:
+            p_dist = (rbin + 1) * FINE_BIN_NM
+            break
+    for nice in NICE_MAX_NM:
+        if nice >= p_dist:
+            return int(nice)
+    return int(NICE_MAX_NM[-1])
+
+
+def aggregate_display(counts: list[list[int]], max_nm: float) -> list[list[int]]:
+    """Sum fine bins into DISPLAY_RING_COUNT rings of ``max_nm / 8`` each.
+
+    ``max_nm`` must be a multiple of 25 (see NICE_MAX_NM) so rings align
+    exactly with fine bins; counts beyond ``max_nm`` are not displayed.
+    """
+    fine_used = int(round(max_nm / FINE_BIN_NM))
+    per_ring = max(1, fine_used // DISPLAY_RING_COUNT)
+    out = []
+    for row in counts:
+        out.append(
+            [
+                sum(row[ring * per_ring:(ring + 1) * per_ring])
+                for ring in range(DISPLAY_RING_COUNT)
+            ]
+        )
+    return out
