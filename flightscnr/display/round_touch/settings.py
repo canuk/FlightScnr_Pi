@@ -2650,13 +2650,17 @@ def lofi_volume() -> int:
         return 25
 
 
-def set_lofi_volume(value: int) -> int:
+def set_lofi_volume(value: int, *, persist: bool = True) -> int:
+    global _disk_synced
     try:
         vol = max(0, min(100, int(value)))
     except (TypeError, ValueError):
         vol = 25
     _state["lofi_volume"] = vol
-    _save(_state)
+    if persist:
+        _save(_state)
+    else:
+        _disk_synced = False
     return vol
 
 
