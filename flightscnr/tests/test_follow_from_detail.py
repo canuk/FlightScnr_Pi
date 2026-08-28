@@ -51,6 +51,19 @@ _FLIGHT = {
     "gs": 120,
 }
 
+_FULL_FLIGHT = {
+    "callsign": "UA1668",
+    "airline": "United Airlines Inc",
+    "origin": "SFO",
+    "destination": "SAN",
+    "plane": "B738",
+    "altitude": 12475,
+    "ground_speed": 391,
+    "heading": 187,
+    "plane_latitude": 32.8,
+    "plane_longitude": -117.1,
+}
+
 
 def _surface():
     return pygame.Surface((theme.SIZE, theme.SIZE))
@@ -76,6 +89,36 @@ class TestFollowButton:
         rect = flight_detail._follow_btn_rect
         assert rect is not None
         assert flight_detail.follow_button_hit(rect.centerx, rect.centery) is True
+
+    def test_follow_row_sits_below_text_rows(self, monkeypatch):
+        from display.round_touch.screens import common
+
+        rows_end = [0]
+        orig = common.draw_detail_rows
+
+        def tracking(*args, **kwargs):
+            y = orig(*args, **kwargs)
+            rows_end[0] = y
+            return y
+
+        monkeypatch.setattr(common, "draw_detail_rows", tracking)
+        flight_detail.draw_flight_detail(_surface(), [_FULL_FLIGHT], 0)
+        rect = flight_detail._follow_btn_rect
+        assert rect is not None
+        assert rect.top >= rows_end[0]
+
+    def test_follow_button_scrolls_with_content(self):
+        surface = _surface()
+        flight_detail.draw_flight_detail(surface, [_FULL_FLIGHT], 0, scroll_offset=0)
+        rect_at_zero = flight_detail._follow_btn_rect
+        assert rect_at_zero is not None
+        flight_detail.draw_flight_detail(surface, [_FULL_FLIGHT], 0, scroll_offset=40)
+        rect_scrolled = flight_detail._follow_btn_rect
+        assert rect_scrolled is not None
+        assert rect_scrolled.top < rect_at_zero.top
+        assert flight_detail.follow_button_hit(
+            rect_scrolled.centerx, rect_scrolled.centery
+        )
 
     def test_no_button_for_vessels(self):
         vessel = {"kind": "vessel", "name": "Ever Given", "lat": 32.8, "lon": -117.2}
