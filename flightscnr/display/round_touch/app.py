@@ -985,7 +985,7 @@ class RoundTouchDisplay:
             else:
                 draw.fill_background(self.surface)
                 tracked.draw_footer(self.surface, None)
-                nav.draw_breadcrumb(
+                nav.draw_curved_breadcrumb(
                     self.surface, ["Radar", "Follow"], with_scrim=True
                 )
             self._scroll.max_offset = 0
@@ -1149,7 +1149,7 @@ class RoundTouchDisplay:
             if self._follow_photo_open:
                 tracked.draw_follow_photo_popup(self.surface, overlay)
             tracked.draw_footer(self.surface, display_data)
-            nav.draw_breadcrumb(self.surface, trail, with_scrim=True)
+            nav.draw_curved_breadcrumb(self.surface, trail, with_scrim=True)
             return
 
         # Full-panel pygame.transform.rotate of satellite (and large vector)
@@ -1177,7 +1177,7 @@ class RoundTouchDisplay:
         if self._follow_photo_open:
             tracked.draw_follow_photo_popup(self.surface, overlay)
         tracked.draw_footer(self.surface, display_data)
-        nav.draw_breadcrumb(self.surface, trail, with_scrim=True)
+        nav.draw_curved_breadcrumb(self.surface, trail, with_scrim=True)
 
     def _timeout_duration_s(self) -> float | None:
         """Active secondary-screen timeout in seconds, or None if no countdown."""
@@ -3442,7 +3442,7 @@ class RoundTouchDisplay:
         """Screen-aware breadcrumb hit: curved band on curved-chrome screens."""
         if self.screen in (
             SCREEN_SETTINGS, SCREEN_DETAILS, SCREEN_FLIGHT, SCREEN_FIRE, SCREEN_QUAKE,
-            SCREEN_CLOCK,
+            SCREEN_CLOCK, SCREEN_FORECAST, SCREEN_UPDATE_NOTES, SCREEN_TRACKED,
         ):
             return nav.tap_breadcrumb_curved(x, y)
         return nav.tap_breadcrumb(x, y)
