@@ -131,6 +131,45 @@ def _service_chips(ident: str) -> list[str]:
     return chips
 
 
+def place_rect(
+    size: tuple[int, int], anchor: tuple[int, int]
+) -> pygame.Rect:
+    """Rect for the tile near an anchor point, kept inside the round screen.
+
+    Prefers hovering above the anchor (so the tapped pin stays visible);
+    flips below when there is no headroom, then slides the rect toward the
+    display center until every corner clears the visible circle.
+    """
+    w, h = size
+    gap = theme.s(10)
+    rect = pygame.Rect(0, 0, w, h)
+    above_y = anchor[1] - gap - h // 2
+    below_y = anchor[1] + gap + h // 2
+    r_limit = theme.VISIBLE_RADIUS - theme.s(2)
+
+    def _fits(center: tuple[float, float]) -> bool:
+        rect.center = (int(center[0]), int(center[1]))
+        for cx, cy in (rect.topleft, rect.topright, rect.bottomleft, rect.bottomright):
+            dx, dy = cx - theme.CENTER_X, cy - theme.CENTER_Y
+            if dx * dx + dy * dy > r_limit * r_limit:
+                return False
+        return True
+
+    # Prefer above unless the top would leave the circle even after sliding a
+    # little; a high anchor flips the tile underneath instead.
+    prefer_above = anchor[1] - gap - h > theme.CENTER_Y - r_limit * 0.92
+    cy = above_y if prefer_above else below_y
+    cx, cyf = float(anchor[0]), float(cy)
+    # Slide toward the display center until the rect fits (rim anchors).
+    for _ in range(60):
+        if _fits((cx, cyf)):
+            break
+        cx += (theme.CENTER_X - cx) * 0.08
+        cyf += (theme.CENTER_Y - cyf) * 0.08
+    rect.center = (int(cx), int(cyf))
+    return rect
+
+
 def draw_tile(surface: pygame.Surface) -> pygame.Rect | None:
     return draw(surface)
 
@@ -223,9 +262,18 @@ def draw(surface: pygame.Surface) -> pygame.Rect | None:
     if footer:
         panel.blit(name_font.render(footer, True, theme.MUTED), (pad, y + gap))
 
-    rect = panel.get_rect(
-        center=(theme.CENTER_X, int(theme.CENTER_Y + theme.VISIBLE_RADIUS * 0.30))
-    )
+    anchor_xy = None
+    try:
+        from display.round_touch.airport_overlay import _screen_xy
+
+        lat, lon = _airport.get("lat"), _airport.get("lon")
+        if lat is not None and lon is not None:
+            anchor_xy = _screen_xy(float(lat), float(lon))
+    except Exception:
+        anchor_xy = None
+    if anchor_xy is None:
+        anchor_xy = (theme.CENTER_X, int(theme.CENTER_Y + theme.VISIBLE_RADIUS * 0.45))
+    rect = place_rect((width, height), (int(anchor_xy[0]), int(anchor_xy[1])))
     surface.blit(panel, rect)
     return rect
 
