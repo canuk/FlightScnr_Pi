@@ -70,6 +70,35 @@
         .switch input:checked + .track{background:var(--accent);border-color:var(--accent2);}
         .switch input:checked + .track::after{left:1.32rem;background:#fff;}
         a{color:var(--link);}
+        .lofi-player{display:flex;gap:.8rem;align-items:center;background:var(--card2);
+        border:1px solid var(--fline);border-radius:12px;padding:.7rem;margin:.9rem 0 .5rem;}
+        .lofi-art-lg{width:72px;height:72px;border-radius:9px;object-fit:cover;background:#222;flex:none;}
+        .lofi-player-main{flex:1;min-width:0;}
+        .lofi-player-title{font-size:.95rem;font-weight:600;white-space:nowrap;overflow:hidden;
+        text-overflow:ellipsis;margin-bottom:.4rem;}
+        .lofi-player-controls{display:flex;align-items:center;gap:.6rem;}
+        .lofi-play-lg{width:2.4rem;height:2.4rem;border-radius:50%;border:1px solid var(--accent2);
+        background:var(--accent);color:#fff;font-size:.95rem;cursor:pointer;flex:none;
+        display:grid;place-items:center;padding:0;}
+        .lofi-seek{flex:1;min-width:0;width:auto;padding:0;height:.35rem;accent-color:var(--accent2);}
+        .lofi-time{color:var(--muted);font-size:.75rem;flex:none;font-variant-numeric:tabular-nums;}
+        .lofi-list{margin:.6rem 0 0;border:1px solid var(--fline);border-radius:12px;
+        background:var(--card2);max-height:21rem;overflow-y:auto;}
+        .lofi-row{display:flex;align-items:center;gap:.6rem;padding:.45rem .6rem;
+        border-bottom:1px solid rgba(120,120,120,.18);cursor:pointer;}
+        .lofi-row:last-child{border-bottom:none;}
+        .lofi-row.is-playing{background:rgba(34,194,76,.12);}
+        .lofi-row.is-off .lofi-thumb,.lofi-row.is-off .lofi-row-title{opacity:.35;}
+        .lofi-thumb{width:40px;height:40px;border-radius:7px;object-fit:cover;background:#222;
+        flex:none;display:grid;place-items:center;color:var(--muted);font-size:1rem;}
+        .lofi-row-title{flex:1;min-width:0;font-size:.88rem;white-space:nowrap;overflow:hidden;
+        text-overflow:ellipsis;}
+        .lofi-badge{flex:none;font-size:.6rem;color:var(--muted);border:1px solid var(--fline);
+        border-radius:999px;padding:.1rem .45rem;text-transform:uppercase;letter-spacing:.04em;}
+        .lofi-row .switch{transform:scale(.82);}
+        .lofi-remove{flex:none;background:none;border:none;color:var(--muted);font-size:1rem;
+        cursor:pointer;padding:.2rem .3rem;line-height:1;}
+        .lofi-remove:hover{color:#e66;}
         .wifi-note,.foot{text-align:center;font-size:.8rem;color:var(--muted);}
         .wifi-note{margin-top:.6rem}
         .foot{margin:1rem 0 .2rem}
@@ -590,27 +619,50 @@
             <label for="earthquake_voice_volume">Earthquake alert volume <span id="earthquake_voice_volume_label">80%</span></label>
             <input id="earthquake_voice_volume" type="range" min="0" max="100" step="1" value="80">
             <p class="hint">Off by default. Plays a voice clip once per new USGS event M3.0+ in radar range. Not earthquake early warning — catalog events can be minutes old. Silent during quiet hours and display off-hours. Needs the earthquake layer on, plus a USB or Bluetooth speaker.</p>
+            <button class="btn btn-primary" id="btn-save-reload" style="margin-top:.7rem" type="button">Save &amp; reload on display</button>
+            <div id="display-status" class="status"></div>
+        </div>
+    </details>
+
+    <details class="card">
+        <summary><span class="ico">&#9835;</span>LoFi Beats<span class="sum">background music, playlist, uploads</span><span class="chev">&#9656;</span></summary>
+        <div class="body">
             <div class="chk">
                 <label for="lofi_enabled">Background lofi beats</label>
                 <span class="switch"><input id="lofi_enabled" type="checkbox"><span class="track"></span></span>
             </div>
-            <label for="lofi_volume">Lofi volume <span id="lofi_volume_label">25%</span></label>
+            <p class="hint">Mellow music under the live ATC stream, crossfading through the playlist. Plays only while ATC audio is on, so it follows ATC quiet hours.</p>
+            <label for="lofi_volume" style="margin-top:.6rem">Lofi volume <span id="lofi_volume_label">25%</span></label>
             <input id="lofi_volume" type="range" min="0" max="100" step="1" value="25" oninput="document.getElementById('lofi_volume_label').textContent = this.value + '%'">
             <div class="chk">
                 <label for="lofi_controls_enabled">Track buttons on radar</label>
                 <span class="switch"><input id="lofi_controls_enabled" type="checkbox"><span class="track"></span></span>
             </div>
             <p class="hint">Prev/next pill on the rim opposite the clock HUD. Shows only while the beats are enabled.</p>
+
+            <div id="lofi-player" class="lofi-player" hidden>
+                <img id="lofi-player-art" class="lofi-art-lg" alt="" src="">
+                <div class="lofi-player-main">
+                    <div id="lofi-player-title" class="lofi-player-title">&nbsp;</div>
+                    <div class="lofi-player-controls">
+                        <button class="lofi-play-lg" id="lofi-player-btn" type="button" aria-label="Play or pause">&#9654;</button>
+                        <input id="lofi-seek" type="range" min="0" max="1000" step="1" value="0" class="lofi-seek">
+                        <span id="lofi-time" class="lofi-time">0:00</span>
+                    </div>
+                </div>
+            </div>
             <audio id="lofi_preview" preload="none"></audio>
-            <p class="hint">Mellow music under the live ATC stream, crossfading through the playlist below. Plays only while ATC audio is on, so it follows ATC quiet hours.</p>
-            <div id="lofi_tracks" class="hint" style="margin:4px 0"></div>
+
+            <div id="lofi_tracks" class="lofi-list"></div>
+            <p class="hint">Tap a track to preview it here. Switch a built-in off to drop it from the rotation on the display. Your uploads can be removed with &#10005;.</p>
+
             <div class="chk">
                 <input id="lofi_file" type="file" accept=".mp3,audio/mpeg" style="max-width:60%">
                 <button class="btn btn-sm" id="btn-lofi-upload" type="button">Add track</button>
             </div>
             <p class="hint" id="lofi_upload_msg"></p>
-            <button class="btn btn-primary" id="btn-save-reload" style="margin-top:.7rem" type="button">Save &amp; reload on display</button>
-            <div id="display-status" class="status"></div>
+            <button class="btn btn-primary" id="btn-save-lofi" style="margin-top:.7rem" type="button">Save &amp; reload on display</button>
+            <div id="lofi-status" class="status"></div>
         </div>
     </details>
 
@@ -1927,8 +1979,9 @@ async function resetPositionSources() {
     await savePositionSources();
 }
 
-async function saveAndReloadSettings() {
-    clearStatus("display-status");
+async function saveAndReloadSettings(statusId) {
+    if (typeof statusId !== "string") statusId = "display-status";
+    clearStatus(statusId);
     try {
         await jsonFetch("/radar", {
             method: "POST",
@@ -2010,12 +2063,12 @@ async function saveAndReloadSettings() {
         }
         const data = await jsonFetch("/settings/reload", { method: "POST" });
         showStatus(
-            "display-status",
+            statusId,
             data.message || "Settings saved; display will reload shortly."
         );
         await loadAll();
     } catch (e) {
-        showStatus("display-status", e.message, true);
+        showStatus(statusId, e.message, true);
     }
 }
 
@@ -2852,7 +2905,8 @@ $("btn-dump1090").addEventListener("click", saveDump1090);
 $("btn-route-source-order").addEventListener("click", saveRouteSourceOrder);
 $("btn-position-sources").addEventListener("click", savePositionSources);
 $("btn-position-sources-reset").addEventListener("click", resetPositionSources);
-$("btn-save-reload").addEventListener("click", saveAndReloadSettings);
+$("btn-save-reload").addEventListener("click", () => saveAndReloadSettings("display-status"));
+$("btn-save-lofi").addEventListener("click", () => saveAndReloadSettings("lofi-status"));
 $("btn-offhours").addEventListener("click", saveOffHours);
 $("btn-weather").addEventListener("click", saveWeather);
 $("btn-weather-fetch").addEventListener("click", fetchWeatherNow);
@@ -3227,6 +3281,66 @@ document.addEventListener("DOMContentLoaded", () => {
     startDump1090LivePoll();
 });
 
+    const lofiPrettyName = (name) =>
+        name.replace(/\.mp3$/i, "").replace(/[-_]+/g, " ").trim();
+    const lofiFmtTime = (secs) => {
+        if (!isFinite(secs) || secs < 0) return "0:00";
+        const m = Math.floor(secs / 60), s = Math.floor(secs % 60);
+        return m + ":" + String(s).padStart(2, "0");
+    };
+    let lofiCurrent = null;
+    function lofiSetRowHighlight() {
+        document.querySelectorAll(".lofi-row").forEach(row => {
+            row.classList.toggle("is-playing", row.dataset.name === lofiCurrent);
+        });
+    }
+    function lofiPlay(name) {
+        const audio = $("lofi_preview");
+        const panel = $("lofi-player");
+        if (!audio || !panel) return;
+        if (lofiCurrent === name) {
+            if (audio.paused) audio.play().catch(() => {});
+            else audio.pause();
+            return;
+        }
+        lofiCurrent = name;
+        panel.hidden = false;
+        $("lofi-player-title").textContent = lofiPrettyName(name);
+        const art = $("lofi-player-art");
+        art.src = "/lofi/cover/" + encodeURIComponent(name);
+        audio.src = "/lofi/stream/" + encodeURIComponent(name);
+        audio.play().catch(() => {});
+        lofiSetRowHighlight();
+    }
+    function wireLofiPlayer() {
+        const audio = $("lofi_preview");
+        const btn = $("lofi-player-btn");
+        const seek = $("lofi-seek");
+        const time = $("lofi-time");
+        if (!audio || !btn || !seek) return;
+        btn.addEventListener("click", () => {
+            if (!lofiCurrent) return;
+            if (audio.paused) audio.play().catch(() => {});
+            else audio.pause();
+        });
+        audio.addEventListener("play", () => { btn.innerHTML = "&#10074;&#10074;"; });
+        audio.addEventListener("pause", () => { btn.innerHTML = "&#9654;"; });
+        audio.addEventListener("ended", () => { btn.innerHTML = "&#9654;"; });
+        audio.addEventListener("timeupdate", () => {
+            if (audio.duration > 0 && !seek.matches(":active")) {
+                seek.value = String(Math.round(1000 * audio.currentTime / audio.duration));
+            }
+            if (time) time.textContent = lofiFmtTime(audio.currentTime);
+        });
+        seek.addEventListener("input", () => {
+            if (audio.duration > 0) {
+                audio.currentTime = (Number(seek.value) / 1000) * audio.duration;
+            }
+        });
+        const art = $("lofi-player-art");
+        if (art) art.addEventListener("error", () => { art.removeAttribute("src"); });
+    }
+    wireLofiPlayer();
     async function loadLofiTracks() {
         const box = $("lofi_tracks");
         if (!box) return;
@@ -3237,53 +3351,78 @@ document.addEventListener("DOMContentLoaded", () => {
             const disabled = new Set(d.disabled || []);
             const addRow = (name, builtin) => {
                 const row = document.createElement("div");
-                row.textContent = "\u266B " + name + " ";
-                if (disabled.has(name)) row.style.opacity = ".45";
-                const prev = document.createElement("a");
-                prev.href = "#";
-                prev.textContent = "\u25B6";
-                prev.title = "Preview";
-                prev.addEventListener("click", (e) => {
-                    e.preventDefault();
-                    const player = $("lofi_preview");
-                    if (!player) return;
-                    const src = "/lofi/stream/" + encodeURIComponent(name);
-                    if (player.dataset.current === name && !player.paused) {
-                        player.pause();
-                        return;
-                    }
-                    player.src = src;
-                    player.dataset.current = name;
-                    player.play().catch(() => {});
+                row.className = "lofi-row" + (disabled.has(name) ? " is-off" : "");
+                row.dataset.name = name;
+
+                const art = document.createElement("img");
+                art.className = "lofi-thumb";
+                art.loading = "lazy";
+                art.alt = "";
+                art.src = "/lofi/cover/" + encodeURIComponent(name);
+                art.addEventListener("error", () => {
+                    const ph = document.createElement("span");
+                    ph.className = "lofi-thumb";
+                    ph.textContent = "\u266B";
+                    art.replaceWith(ph);
                 });
-                row.appendChild(prev);
-                row.appendChild(document.createTextNode(" "));
+                row.appendChild(art);
+
+                const title = document.createElement("span");
+                title.className = "lofi-row-title";
+                title.textContent = lofiPrettyName(name);
+                row.appendChild(title);
+
+                const badge = document.createElement("span");
+                badge.className = "lofi-badge";
+                badge.textContent = builtin ? "built-in" : "yours";
+                row.appendChild(badge);
+
                 if (builtin) {
-                    const tog = document.createElement("a");
-                    tog.href = "#";
-                    tog.textContent = disabled.has(name) ? "enable" : "disable";
-                    tog.addEventListener("click", async (e) => {
-                        e.preventDefault();
+                    const sw = document.createElement("span");
+                    sw.className = "switch";
+                    const input = document.createElement("input");
+                    input.type = "checkbox";
+                    input.checked = !disabled.has(name);
+                    input.title = "Include in the rotation";
+                    input.addEventListener("click", (e) => e.stopPropagation());
+                    input.addEventListener("change", async () => {
                         await fetch("/lofi/toggle_disabled", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({name})});
-                        loadLofiTracks();
+                        row.classList.toggle("is-off", !input.checked);
                     });
-                    row.appendChild(tog);
+                    const track = document.createElement("span");
+                    track.className = "track";
+                    sw.appendChild(input);
+                    sw.appendChild(track);
+                    row.appendChild(sw);
                 } else {
-                    const del = document.createElement("a");
-                    del.href = "#";
-                    del.textContent = "remove";
+                    const del = document.createElement("button");
+                    del.type = "button";
+                    del.className = "lofi-remove";
+                    del.title = "Remove this upload";
+                    del.textContent = "\u2715";
                     del.addEventListener("click", async (e) => {
-                        e.preventDefault();
+                        e.stopPropagation();
                         await fetch("/lofi/delete", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({name})});
+                        if (lofiCurrent === name) {
+                            const audio = $("lofi_preview");
+                            if (audio) audio.pause();
+                            lofiCurrent = null;
+                            $("lofi-player").hidden = true;
+                        }
                         loadLofiTracks();
                     });
                     row.appendChild(del);
                 }
+                row.addEventListener("click", () => lofiPlay(name));
                 box.appendChild(row);
             };
             (d.bundled || []).forEach(n => addRow(n, true));
             (d.user || []).forEach(n => addRow(n, false));
-            if (!box.childNodes.length) box.textContent = "No tracks yet.";
+            if (!box.childNodes.length) {
+                box.textContent = "No tracks yet.";
+                box.style.padding = ".6rem";
+            }
+            lofiSetRowHighlight();
         } catch (_) {}
     }
     if ($("btn-lofi-upload")) $("btn-lofi-upload").addEventListener("click", async () => {

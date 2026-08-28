@@ -1050,6 +1050,28 @@ def lofi_stream(name):
     return send_file(path, mimetype="audio/mpeg", conditional=True)
 
 
+@app.get("/lofi/cover/<path:name>")
+def lofi_cover(name):
+    """Embedded album art (ID3 APIC) for a playlist track."""
+    from utilities import lofi_audio
+
+    path = lofi_audio.track_path(name)
+    if path is None:
+        return jsonify({"message": "Unknown track."}), 404
+    try:
+        from mutagen.id3 import ID3
+
+        pics = ID3(path).getall("APIC")
+    except Exception:
+        pics = []
+    if not pics:
+        return jsonify({"message": "No cover art."}), 404
+    pic = pics[0]
+    resp = app.response_class(pic.data, mimetype=pic.mime or "image/jpeg")
+    resp.headers["Cache-Control"] = "public, max-age=86400"
+    return resp
+
+
 @app.post("/lofi/toggle_disabled")
 def lofi_toggle_disabled():
     from display.round_touch import settings
