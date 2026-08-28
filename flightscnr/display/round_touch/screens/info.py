@@ -83,6 +83,8 @@ DISPLAY_ACTIONS = (
     "rim_style",
     "units",
     "range",
+    "zoom_buttons",
+    "zoom_position",
     "rotate",
     "brightness",
 )
@@ -187,6 +189,7 @@ LIST_PICKER_KINDS = frozenset(
         "default_clock",
         "default_clock_off_hours",
         "hud_dark",
+        "zoom_position",
     }
 )
 _LIST_PICKER_TITLES = {
@@ -209,6 +212,7 @@ _LIST_PICKER_TITLES = {
     "quiet_start": "Quiet start",
     "quiet_end": "Quiet end",
     "hud_position": "Clock position",
+    "zoom_position": "Zoom position",
     "default_clock": "Daytime clock",
     "default_clock_off_hours": "Off-hours clock",
     "hud_dark": "HUD style",
@@ -530,6 +534,12 @@ def _build_settings_picker_items(kind: str) -> list[dict]:
         return _enum_picker_items(
             settings.RADAR_HUD_POSITIONS,
             settings.radar_hud_position(),
+            lambda pos: str(pos).title(),
+        )
+    if kind == "zoom_position":
+        return _enum_picker_items(
+            settings.RADAR_ZOOM_POSITIONS,
+            settings.radar_zoom_position(),
             lambda pos: str(pos).title(),
         )
     if kind == "default_clock":
@@ -1855,6 +1865,8 @@ def _display_row_labels() -> list[str]:
         f"Rim Targets › {settings.rim_target_style_label()}",
         f"Units › {settings.unit_preset_label()}",
         f"Radar Range › {settings.scale_label()}",
+        "Zoom −/+ Buttons",
+        f"Zoom Position › {settings.radar_zoom_position().title()}",
         f"Rotate Screen › {settings.display_rotation()}°",
         "",  # brightness slider
     ]
@@ -1921,6 +1933,7 @@ _TOGGLE_ROW_STATE = {
     "tag_leaders": settings.show_tag_leaders,
     "color_by_altitude": settings.color_by_altitude,
     "radar_hud": settings.radar_hud_enabled,
+    "zoom_buttons": settings.radar_zoom_buttons,
     "precipitation": settings.show_precipitation,
     "wildfires": settings.show_wildfires,
     "earthquakes": settings.show_earthquakes,

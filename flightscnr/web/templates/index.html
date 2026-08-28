@@ -531,6 +531,16 @@
             <input id="radar_hud_opacity" type="range" min="0" max="100" step="1" value="72">
             <p class="hint">Frosted glass pill behind the radar clock and icons (0% = invisible fill, 100% = solid). Dark mode uses a dark pill with light glyphs.</p>
             <div class="chk">
+                <label for="radar_zoom_buttons">Radar zoom &minus;/+ buttons</label>
+                <span class="switch"><input id="radar_zoom_buttons" type="checkbox" checked><span class="track"></span></span>
+            </div>
+            <p class="hint">Faint &minus;/+ pill on the edge of the radar. Taps step the range like pinch zoom.</p>
+            <label for="radar_zoom_position">Zoom buttons position</label>
+            <select id="radar_zoom_position">
+                <option value="right">Right</option>
+                <option value="left">Left</option>
+            </select>
+            <div class="chk">
                 <label for="hourly_chime">Hourly chime</label>
                 <button class="btn btn-sm" id="btn-chime-preview" type="button">Preview</button>
                 <span class="switch"><input id="hourly_chime" type="checkbox"><span class="track"></span></span>
@@ -1298,6 +1308,8 @@ async function loadAll() {
         }
         if ($("radar_hud")) $("radar_hud").checked = d.radar_hud_enabled !== false;
         if ($("radar_hud_dark")) $("radar_hud_dark").checked = !!d.radar_hud_dark;
+        if ($("radar_zoom_buttons")) $("radar_zoom_buttons").checked = d.radar_zoom_buttons !== false;
+        if ($("radar_zoom_position")) $("radar_zoom_position").value = d.radar_zoom_position || "right";
         if ($("radar_hud_position")) $("radar_hud_position").value = d.radar_hud_position === "bottom" ? "bottom" : "top";
         if ($("radar_hud_opacity")) {
             $("radar_hud_opacity").value = String(d.radar_hud_opacity ?? 72);
@@ -1918,6 +1930,8 @@ async function saveAndReloadSettings() {
                     : "digital",
                 radar_hud_enabled: $("radar_hud") ? $("radar_hud").checked : true,
                 radar_hud_dark: $("radar_hud_dark") ? $("radar_hud_dark").checked : false,
+                radar_zoom_buttons: $("radar_zoom_buttons") ? $("radar_zoom_buttons").checked : true,
+                radar_zoom_position: $("radar_zoom_position") ? $("radar_zoom_position").value : "right",
                 radar_hud_position: $("radar_hud_position") ? $("radar_hud_position").value : "top",
                 radar_hud_opacity: $("radar_hud_opacity") ? Number($("radar_hud_opacity").value) : 72,
                 hourly_chime_enabled: $("hourly_chime") ? $("hourly_chime").checked : false,
