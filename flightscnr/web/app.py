@@ -1366,6 +1366,7 @@ def radar_json():
             "scale_index": idx,
             "range_value": scale.format_display_value(idx, units),
             "range_presets_mi": list(scale.PRESET_STATUTE_MILES),
+            "range_presets": {u: list(v) for u, v in scale.UNIT_BANDS.items()},
             "min_height_ft": settings.min_height_ft(),
             "max_height_ft": settings.max_height_ft(),
             "theme_rgb": list(settings.theme_rgb()),
@@ -1456,11 +1457,26 @@ def radar_save():
     from display.round_touch import map_bg, rainviewer_overlay, scale, settings
 
     data = request.get_json(silent=True) or {}
+    units_before = settings.distance_units()
     if "unit_preset" in data:
         settings.set_unit_preset(str(data.get("unit_preset") or ""))
     elif "distance_units" in data:
         settings.set_distance_units(data.get("distance_units"))
     units = settings.distance_units()
+    if units != units_before:
+        # Round-number bands are per-unit, so a unit switch moves the real
+        # coverage a few percent — refetch the basemap and overlays.
+        map_bg.request_background()
+        rainviewer_overlay.request_overlay()
+        try:
+            from display.round_touch import earthquake_overlay, wildfire_overlay
+
+            wildfire_overlay.invalidate()
+            wildfire_overlay.request_refresh(force=True)
+            earthquake_overlay.invalidate()
+            earthquake_overlay.request_refresh(force=True)
+        except Exception:
+            pass
     if "range_value" in data:
         raw = str(data.get("range_value", "")).strip()
         try:
