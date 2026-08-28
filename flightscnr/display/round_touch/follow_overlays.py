@@ -98,6 +98,8 @@ def _airport_cache_key(lat: float, lon: float, radius_km: float) -> tuple:
         bool(settings.show_airport_icons()),
         bool(settings.show_airport_centerlines()),
         settings.map_style(),
+        settings.airport_icon_style(),
+        settings.airport_min_size(),
     )
 
 
@@ -106,10 +108,21 @@ def _load_airports(key: tuple, lat: float, lon: float, radius_km: float) -> None
     points: list[dict[str, Any]] = []
     segs: list[dict[str, Any]] = []
     try:
-        from utilities.airports import iter_airports_near
+        from utilities.airports import iter_airports_near, types_for_min_size
         from utilities.runways import runways_for_idents
 
-        points = iter_airports_near(lat, lon, max(radius_km, 8.0) * 1.15)
+        # Same preference-aware query the radar overlay runs.
+        size = settings.airport_min_size()
+        points = iter_airports_near(
+            lat, lon, max(radius_km, 8.0) * 1.15,
+            types=types_for_min_size(size),
+            small_paved_only=size == "small_paved",
+        )
+        if settings.airport_icon_style() == "chart":
+            from display.round_touch.airport_overlay import chart_icon_flags
+
+            for ap in points:
+                ap["chart"] = chart_icon_flags(str(ap.get("ident") or ""))
         if settings.show_airport_centerlines() and settings.map_style() != "vfr":
             segs = runways_for_idents(ap.get("ident") for ap in points)
     except Exception:
@@ -196,12 +209,21 @@ def _draw_airports(
             pygame.draw.line(surface, color, p0, p1, width_px)
 
     if icons:
+        chart_style = settings.airport_icon_style() == "chart"
         for airport in airports:
             try:
                 pos = _project(float(airport["lat"]), float(airport["lon"]), project)
             except (KeyError, TypeError, ValueError):
                 continue
             if pos is None or not _in_panel(pos[0], pos[1], width, height):
+                continue
+            if chart_style:
+                towered, fuel, beacon = airport.get("chart") or (False, False, False)
+                ao.draw_chart_icon(
+                    surface, (int(pos[0]), int(pos[1])),
+                    ao.chart_icon_radius(airport),
+                    towered=towered, fuel=fuel, beacon=beacon,
+                )
                 continue
             icon = ao.airport_icon(ao._icon_height(airport))
             if icon is not None:
