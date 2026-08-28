@@ -114,6 +114,16 @@ def tick() -> bool:
     return True
 
 
+def _temp_unit() -> str:
+    """Follow the app-wide weather unit (portal Weather card)."""
+    try:
+        from weather_prefs import unit_symbol
+
+        return "f" if unit_symbol().upper().lstrip("°") == "F" else "c"
+    except Exception:
+        return "c"
+
+
 def _service_chips(ident: str) -> list[str]:
     try:
         from display.round_touch.airport_overlay import chart_icon_flags
@@ -198,7 +208,7 @@ def draw(surface: pygame.Surface) -> pygame.Rect | None:
             ("WIND", metar_mod.wind_text(m)),
             ("VIS", metar_mod.visibility_text(m)),
             ("SKY", metar_mod.sky_text(m)),
-            ("TEMP", metar_mod.temp_text(m)),
+            ("TEMP", metar_mod.temp_text(m, unit=_temp_unit())),
             ("ALT", metar_mod.altimeter_text(m)),
         ]
         footer = metar_mod.age_text(m)
