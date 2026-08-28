@@ -9,6 +9,8 @@
 
 """Flight / vessel detail screen — photo header + compact text for the round display."""
 
+import pygame
+
 from display.round_touch import aircraft, draw, geo, nav, theme
 from display.round_touch.screens import common
 from utilities.airline_branding import display_flight_id_for_flight
@@ -22,6 +24,97 @@ except ImportError:
 
 FOOTER_BUTTONS = ("prev", "next", "radar")
 FOOTER_EMPTY = ("radar",)
+
+# "Follow this Flight" pill + its confirm popup (replace-follow warning).
+_follow_btn_rect = None
+_confirm_follow_rect = None
+_confirm_cancel_rect = None
+
+
+def follow_button_hit(x: int, y: int) -> bool:
+    if _follow_btn_rect is None:
+        return False
+    return _follow_btn_rect.collidepoint(int(x), int(y))
+
+
+def follow_confirm_hit(x: int, y: int) -> str | None:
+    """"follow" / "cancel" when a popup button is hit, else None."""
+    if _confirm_follow_rect is not None and _confirm_follow_rect.collidepoint(x, y):
+        return "follow"
+    if _confirm_cancel_rect is not None and _confirm_cancel_rect.collidepoint(x, y):
+        return "cancel"
+    return None
+
+
+def _draw_follow_button(surface, flight) -> None:
+    global _follow_btn_rect
+    _follow_btn_rect = None
+    callsign = str(flight.get("callsign") or "").strip()
+    if not callsign or flight.get("kind") == "vessel":
+        return
+    try:
+        from utilities.overhead import load_tracked_callsign
+
+        already = load_tracked_callsign() == callsign.upper()
+    except Exception:
+        already = False
+    label_text = "Following" if already else "Follow this Flight"
+    try:
+        font = draw.load_font(theme.s(13), bold=True)
+        label = font.render(label_text, True, theme.LABEL if already else theme.MUTED)
+    except Exception:
+        return
+    pad_x, pad_y = theme.s(16), theme.s(7)
+    rect = pygame.Rect(0, 0, label.get_width() + 2 * pad_x, label.get_height() + 2 * pad_y)
+    rect.center = (
+        theme.CENTER_X,
+        nav.content_bottom_y() - rect.height // 2 - theme.s(2),
+    )
+    pygame.draw.rect(surface, (24, 27, 31), rect, border_radius=rect.height // 2)
+    pygame.draw.rect(surface, theme.GRID, rect, width=1, border_radius=rect.height // 2)
+    surface.blit(label, label.get_rect(center=rect.center))
+    if not already:
+        _follow_btn_rect = pygame.Rect(rect).inflate(theme.s(8), theme.s(8))
+
+
+def draw_follow_confirm(surface, new_id: str, current_id: str) -> None:
+    """Modal: following ``new_id`` will stop following ``current_id``."""
+    global _confirm_follow_rect, _confirm_cancel_rect
+    title_font = draw.load_font(theme.s(15), bold=True)
+    body_font = draw.load_font(theme.s(13))
+    btn_font = draw.load_font(theme.s(13), bold=True)
+    lines = [
+        title_font.render(f"Follow {new_id}?", True, theme.MUTED),
+        body_font.render(f"This stops following {current_id}.", True, theme.HINT),
+    ]
+    w = max(l.get_width() for l in lines) + theme.s(44)
+    panel = pygame.Rect(0, 0, max(w, theme.s(230)), theme.s(118))
+    panel.center = (theme.CENTER_X, theme.CENTER_Y)
+    pygame.draw.rect(surface, (18, 20, 24), panel, border_radius=theme.s(14))
+    pygame.draw.rect(surface, theme.GRID, panel, width=1, border_radius=theme.s(14))
+    y = panel.top + theme.s(14)
+    for line in lines:
+        surface.blit(line, line.get_rect(midtop=(panel.centerx, y)))
+        y += line.get_height() + theme.s(4)
+
+    def _btn(label_text, cx, accent):
+        label = btn_font.render(label_text, True, (240, 244, 248) if accent else theme.MUTED)
+        r = pygame.Rect(0, 0, label.get_width() + theme.s(28), label.get_height() + theme.s(12))
+        r.center = (cx, panel.bottom - theme.s(24))
+        pygame.draw.rect(surface, (26, 120, 52) if accent else (30, 33, 38), r,
+                         border_radius=r.height // 2)
+        pygame.draw.rect(surface, theme.GRID, r, width=1, border_radius=r.height // 2)
+        surface.blit(label, label.get_rect(center=r.center))
+        return pygame.Rect(r).inflate(theme.s(6), theme.s(6))
+
+    _confirm_follow_rect = _btn("Follow", panel.centerx - panel.width // 4, True)
+    _confirm_cancel_rect = _btn("Cancel", panel.centerx + panel.width // 4, False)
+
+
+def clear_follow_confirm() -> None:
+    global _confirm_follow_rect, _confirm_cancel_rect
+    _confirm_follow_rect = None
+    _confirm_cancel_rect = None
 
 
 def footer_labels(flights) -> tuple[str, ...]:
@@ -160,7 +253,9 @@ def draw_flight_detail(surface, flights, selected_index, scroll_offset: int = 0)
     line_gap = theme.s(1)
     bottom = nav.content_bottom_y()
 
+    global _follow_btn_rect
     if not flights:
+        _follow_btn_rect = None
         nav.draw_curved_breadcrumb(surface, ["Radar", "Detail"])
         nav.draw_curved_footer(surface, list(FOOTER_EMPTY))
         common.draw_center_row(surface, "No traffic", chrome_top, body_font, theme.MUTED)
@@ -212,5 +307,6 @@ def draw_flight_detail(surface, flights, selected_index, scroll_offset: int = 0)
             curved=True,
         )
 
+    _draw_follow_button(surface, f)
     nav.draw_curved_footer(surface, list(FOOTER_BUTTONS))
     return max_scroll

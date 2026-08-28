@@ -94,6 +94,18 @@ def tap_footer_action(x: int, y: int, tracked_data=None) -> str | None:
         return None
     return buttons[idx]
 
+def draw_follow_loading(surface: pygame.Surface, callsign: str) -> None:
+    """Immediate feedback after Follow starts, before live data resolves."""
+    title_font = draw.load_font(theme.s(20), bold=True)
+    hint_font = draw.load_font(theme.s(13))
+    title = title_font.render(f"Following {callsign}", True, theme.MUTED)
+    hint = hint_font.render("Locating flight\u2026", True, theme.HINT)
+    surface.blit(title, title.get_rect(
+        center=(theme.CENTER_X, theme.CENTER_Y - theme.s(12))))
+    surface.blit(hint, hint.get_rect(
+        center=(theme.CENTER_X, theme.CENTER_Y + theme.s(16))))
+
+
 def draw_footer(surface: pygame.Surface, tracked_data=None) -> None:
     """Draw the shared Tracked footer, including the pin state."""
     nav.draw_footer_buttons(

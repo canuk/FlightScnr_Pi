@@ -172,6 +172,9 @@ class RoundTouchDisplay:
         self._last_firms_poll = 0.0
         self._last_quake_poll = 0.0
         self.flight_index = 0
+        # Pending "Follow this Flight" confirmation: {"callsign", "display",
+        # "current"} while the replace-follow popup is up.
+        self._follow_confirm = None
         # Stable identity for the open detail page (index alone drifts as traffic changes).
         self._selected_flight_id: str | None = None
         self.fire_index = 0
@@ -908,6 +911,14 @@ class RoundTouchDisplay:
                 self.flight_index,
                 self._scroll.offset,
             )
+            if self._follow_confirm is not None:
+                flight_detail.draw_follow_confirm(
+                    self.surface,
+                    self._follow_confirm["display"],
+                    self._follow_confirm["current"],
+                )
+            else:
+                flight_detail.clear_follow_confirm()
         elif self.screen == SCREEN_FIRE:
             self._scroll.max_offset = fire_detail.draw_fire_detail(
                 self.surface,
@@ -988,6 +999,11 @@ class RoundTouchDisplay:
                 nav.draw_curved_breadcrumb(
                     self.surface, ["Radar", "Follow"], with_scrim=True
                 )
+                from utilities.overhead import load_tracked_callsign as _ltc
+
+                pending = _ltc()
+                if pending:
+                    tracked.draw_follow_loading(self.surface, pending)
             self._scroll.max_offset = 0
         self._scroll.clamp()
         remaining = self._timeout_remaining_fraction()
@@ -3438,6 +3454,37 @@ class RoundTouchDisplay:
         self.input.consume_scroll_drag()
         return changed
 
+    def _request_follow_current_flight(self) -> None:
+        """Follow the flight on the detail page, confirming a replacement."""
+        from utilities.airline_branding import display_flight_id_for_flight
+        from utilities.overhead import load_tracked_callsign
+
+        ordered = self._ordered_flights()
+        if not ordered:
+            return
+        idx = max(0, min(self.flight_index, len(ordered) - 1))
+        flight = ordered[idx]
+        callsign = str(flight.get("callsign") or "").strip().upper()
+        if not callsign:
+            return
+        current = load_tracked_callsign()
+        if current and current != callsign:
+            self._follow_confirm = {
+                "callsign": callsign,
+                "display": display_flight_id_for_flight(flight) or callsign,
+                "current": current,
+            }
+            self._safe_draw()
+            return
+        self._start_following(callsign)
+
+    def _start_following(self, callsign: str) -> None:
+        from utilities.overhead import set_tracked_callsign
+
+        set_tracked_callsign(callsign)
+        self._open_screen(SCREEN_LIVE)
+        self._safe_draw()
+
     def _breadcrumb_tapped(self, x: int, y: int) -> bool:
         """Screen-aware breadcrumb hit: curved band on curved-chrome screens."""
         if self.screen in (
@@ -3841,6 +3888,18 @@ class RoundTouchDisplay:
         elif tap and self.screen == SCREEN_FLIGHT:
             # Any tap (content or footer) restarts the idle countdown.
             self._note_activity()
+            if self._follow_confirm is not None:
+                choice = flight_detail.follow_confirm_hit(tap[0], tap[1])
+                pending, self._follow_confirm = self._follow_confirm, None
+                flight_detail.clear_follow_confirm()
+                if choice == "follow":
+                    self._start_following(pending["callsign"])
+                else:
+                    self._safe_draw()
+                return
+            if flight_detail.follow_button_hit(tap[0], tap[1]):
+                self._request_follow_current_flight()
+                return
             self._sync_selected_flight_index()
             ordered = self._ordered_flights()
             action = flight_detail.tap_footer_action(tap[0], tap[1], ordered)
@@ -3934,7 +3993,8 @@ class RoundTouchDisplay:
                 self._safe_draw()
                 return
             action = tracked.tap_footer_action(
-                tap[0], tap[1], self.overhead.tracked_data
+                tap[0], tap[1],
+                tracked.resolve_display_data(self.overhead.tracked_data, self.flights),
             )
             if action == "pin":
                 tracked.toggle_pinned()
@@ -3948,7 +4008,8 @@ class RoundTouchDisplay:
                 self._safe_draw()
         elif tap and self.screen == SCREEN_TRACKED:
             action = tracked.tap_footer_action(
-                tap[0], tap[1], self.overhead.tracked_data
+                tap[0], tap[1],
+                tracked.resolve_display_data(self.overhead.tracked_data, self.flights),
             )
             if action == "pin":
                 tracked.toggle_pinned()
