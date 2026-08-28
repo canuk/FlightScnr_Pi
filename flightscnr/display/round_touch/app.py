@@ -1780,6 +1780,8 @@ class RoundTouchDisplay:
         elif action == "lofi_controls":
             settings.toggle_lofi_controls_enabled()
             radar.invalidate_frame_layer()
+        elif action == "lofi_title_scroll":
+            settings.toggle_lofi_title_scroll()
         elif action == "quiet":
             settings.set_atc_quiet_hours_enabled(not settings.atc_quiet_hours_enabled())
         elif action == "quiet_start":
