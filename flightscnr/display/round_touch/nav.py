@@ -915,11 +915,27 @@ def draw_curved_breadcrumb(
     parts: list[str],
     *,
     active_color=None,
+    with_scrim: bool = False,
 ) -> None:
-    """Breadcrumb trail curved along the top rim, active part highlighted."""
+    """Breadcrumb trail curved along the top rim, active part highlighted.
+
+    ``with_scrim`` lays a soft dark arc band behind the text for busy
+    backgrounds (Follow's live map), mirroring the straight scrim.
+    """
     if not parts:
         return
     items, r = _curved_breadcrumb_items(parts, active_color=active_color)
+    if with_scrim and items:
+        from display.round_touch import radar_hud
+
+        half = arc_ui.arc_span([it.get_width() for it in items], r) / 2
+        pad = theme.s(12) / max(1, r)
+        band = max(it.get_height() for it in items) + theme.s(10)
+        radar_hud._draw_curved_white_pill(
+            surface, theme.CENTER_X, theme.CENTER_Y, r,
+            -math.pi / 2, band, (10, 12, 14, 190),
+            arc_a0=-math.pi / 2 - half - pad, arc_a1=-math.pi / 2 + half + pad,
+        )
     arc_ui.blit_arc_items(
         surface, items,
         r=r, mid=-math.pi / 2, bottom=False,

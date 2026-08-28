@@ -83,6 +83,30 @@ class TestCurvedBreadcrumbStragglers:
         assert not crumb_spy["straight"]
 
 
+@pytest.mark.skipif(not _FONT_OK, reason="pygame.font unavailable")
+class TestFollowBreadcrumb:
+    def test_curved_breadcrumb_supports_scrim(self, monkeypatch):
+        from display.round_touch import radar_hud
+
+        pills = []
+        monkeypatch.setattr(
+            radar_hud, "_draw_curved_white_pill",
+            lambda *a, **kw: pills.append((a, kw)))
+        nav.draw_curved_breadcrumb(_surface(), ["Radar", "Follow"], with_scrim=True)
+        assert len(pills) == 1
+        nav.draw_curved_breadcrumb(_surface(), ["Radar", "Follow"])
+        assert len(pills) == 1  # no scrim without the flag
+
+    def test_follow_paths_use_curved_breadcrumb(self):
+        import inspect
+
+        from display.round_touch import app as app_mod
+
+        src = inspect.getsource(app_mod)
+        assert 'nav.draw_breadcrumb(\n                    self.surface, ["Radar", "Follow"]' not in src
+        assert "draw_breadcrumb(self.surface, trail, with_scrim=True)" not in src
+
+
 class TestCurvedTapBand:
     def test_screens_route_to_curved_tap(self):
         from display.round_touch import app as app_mod
