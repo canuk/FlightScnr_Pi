@@ -3379,6 +3379,8 @@ class RoundTouchDisplay:
         if self.screen in (
             SCREEN_SETTINGS, SCREEN_DETAILS, SCREEN_FLIGHT, SCREEN_FIRE, SCREEN_QUAKE,
             SCREEN_CLOCK,
+            # Coverage screen ships on another branch; matched by name here.
+            "coverage",
         ):
             return nav.tap_breadcrumb_curved(x, y)
         return nav.tap_breadcrumb(x, y)
