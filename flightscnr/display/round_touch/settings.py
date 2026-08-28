@@ -372,6 +372,8 @@ _defaults = {
     # Lofi music bed under the live ATC stream.
     "lofi_enabled": False,
     "lofi_volume": 25,
+    # Prev/next track pill on the radar rim (needs lofi_enabled too).
+    "lofi_controls_enabled": False,
     # Topo contour texture behind settings/detail screens.
     "background_texture": True,
     # Faint − / + range-step buttons on the radar rim.
@@ -1168,6 +1170,8 @@ def _settings_snapshot(state: dict) -> tuple:
         bool(state.get("radar_hud_dark", True)),
         bool(state.get("lofi_enabled", False)),
         int(state.get("lofi_volume", 25) or 0),
+        bool(state.get("lofi_controls_enabled", False)),
+        tuple(sorted(str(n) for n in (state.get("lofi_disabled_tracks") or []))),
         bool(state.get("background_texture", True)),
         bool(state.get("radar_zoom_buttons", True)),
         str(state.get("radar_zoom_position") or "right"),
@@ -2641,6 +2645,36 @@ def set_lofi_enabled(enabled: bool) -> None:
 def toggle_lofi_enabled() -> bool:
     set_lofi_enabled(not lofi_enabled())
     return lofi_enabled()
+
+
+def lofi_disabled_tracks() -> list[str]:
+    """Built-in track filenames the user has switched off."""
+    raw = _state.get("lofi_disabled_tracks")
+    if not isinstance(raw, list):
+        return []
+    return [str(n) for n in raw if str(n).strip()]
+
+
+def set_lofi_disabled_tracks(names) -> list[str]:
+    clean = sorted({str(n).strip() for n in (names or []) if str(n).strip()})
+    _state["lofi_disabled_tracks"] = clean
+    _save(_state)
+    return clean
+
+
+def lofi_controls_enabled() -> bool:
+    """Prev/next track pill on the radar rim opposite the HUD."""
+    return bool(_state.get("lofi_controls_enabled", False))
+
+
+def set_lofi_controls_enabled(enabled: bool) -> None:
+    _state["lofi_controls_enabled"] = bool(enabled)
+    _save(_state)
+
+
+def toggle_lofi_controls_enabled() -> bool:
+    set_lofi_controls_enabled(not lofi_controls_enabled())
+    return lofi_controls_enabled()
 
 
 def lofi_volume() -> int:
