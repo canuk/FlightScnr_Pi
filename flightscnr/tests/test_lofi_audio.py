@@ -37,10 +37,12 @@ class FakePlayer:
         self.volume = None
         self.dur = duration
         self.stopped = 0
+        self.plays = 0
 
     def play(self, path, volume):
         self.path = path
         self.volume = volume
+        self.plays += 1
 
     def set_volume(self, volume):
         self.volume = volume
@@ -131,6 +133,61 @@ class TestCrossfadeScheduler:
         clock.t += 10.0
         s.tick(50.0)
         assert pa.volume == pytest.approx(50.0)
+
+
+class TestSelfHealing:
+    def test_active_death_mid_fade_promotes_incoming(self):
+        s, pa, pb, clock = _sched(duration=120.0, fade=8.0)
+        s.tick(25.0)
+        clock.t += 113.0
+        s.tick(25.0)          # incoming (pb) starts
+        assert pb.alive()
+        pa.path = None        # active dies (EOF / device flap)
+        plays_before = pa.plays
+        s.tick(25.0)
+        assert pa.plays == plays_before
+        assert s.current_track() == "b.mp3"
+        assert pb.volume == pytest.approx(25.0)
+
+    def test_death_outside_fade_advances_to_next_track(self):
+        s, pa, pb, clock = _sched(duration=120.0, fade=8.0)
+        s.tick(25.0)
+        clock.t += 10.0
+        pa.path = None
+        s.tick(25.0)
+        active = pa if pa.alive() else pb
+        assert active.path == "b.mp3"
+
+    def test_rapid_crash_loop_is_backed_off(self):
+        s, pa, pb, clock = _sched(duration=120.0, fade=8.0)
+        s.tick(25.0)
+        clock.t += 0.5
+        pa.path = None
+        plays = pa.plays + pb.plays
+        s.tick(25.0)
+        assert pa.plays + pb.plays == plays
+        clock.t += 2.5
+        s.tick(25.0)
+        assert pa.plays + pb.plays == plays + 1
+
+    def test_overlap_outside_fade_is_healed(self):
+        s, pa, pb, clock = _sched(duration=120.0, fade=8.0)
+        s.tick(25.0)
+        pb.play("ghost.mp3", 25.0)
+        clock.t += 10.0
+        s.tick(25.0)
+        assert not pb.alive()
+
+
+class TestOrphanReaping:
+    def test_new_scheduler_reaps_orphans_first(self, monkeypatch):
+        events = []
+        monkeypatch.setattr(lofi_audio, "_scheduler", None)
+        monkeypatch.setattr(lofi_audio, "_reap_orphans", lambda: events.append("reap"))
+        sched = lofi_audio._ensure_scheduler()
+        assert events == ["reap"]
+        assert sched is not None
+        lofi_audio._scheduler = None
 
 
 class TestSettings:
