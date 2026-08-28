@@ -27,7 +27,11 @@ ZOOM_IN = zoom_buttons.ZOOM_IN
 ZOOM_OUT = zoom_buttons.ZOOM_OUT
 
 # Discrete Follow radii (km). Auto (speed-based) until the first tap.
-STEPS_KM = (2.0, 4.0, 8.0, 16.0, 32.0, 64.0, 120.0)
+# Every value MUST be one of live_map._LIVE_MAP_RADIUS_STEPS_KM — the
+# basemap snaps its fetch to that list, and the rain overlay fetches at
+# the radius we pass, so an off-list step would superimpose the two
+# rasters at different scales.
+STEPS_KM = (3.22, 4.8, 8.0, 16.0, 32.0, 64.0, 120.0)
 
 _manual_index: int | None = None
 _minus_rect = pygame.Rect(0, 0, 0, 0)

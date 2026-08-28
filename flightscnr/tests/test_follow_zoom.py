@@ -55,7 +55,8 @@ class TestZoomSteps:
         assert km == 8.0
         assert follow_zoom.manual_radius_km() == 8.0
         km = follow_zoom.zoom(follow_zoom.ZOOM_IN, current_km=10.0)
-        assert km == 4.0  # manual state wins over the passed current
+        # Manual state wins over the passed current — next smaller step.
+        assert km == follow_zoom.STEPS_KM[follow_zoom.STEPS_KM.index(8.0) - 1]
 
     def test_zoom_out_picks_next_larger_step(self):
         km = follow_zoom.zoom(follow_zoom.ZOOM_OUT, current_km=10.0)
@@ -77,6 +78,15 @@ class TestZoomSteps:
         follow_zoom.zoom(follow_zoom.ZOOM_IN, current_km=follow_zoom.STEPS_KM[1])
         assert follow_zoom.can_step(follow_zoom.ZOOM_IN) is False
         assert follow_zoom.can_step(follow_zoom.ZOOM_OUT) is True
+
+
+class TestBasemapAlignment:
+    def test_steps_are_basemap_fetch_steps(self):
+        # Every manual step must be a radius live_map actually fetches at,
+        # or the rain raster and basemap render at different scales.
+        from display.round_touch import live_map
+
+        assert set(follow_zoom.STEPS_KM) <= set(live_map._LIVE_MAP_RADIUS_STEPS_KM)
 
 
 class TestDrawAndHits:
