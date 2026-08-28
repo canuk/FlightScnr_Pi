@@ -888,6 +888,8 @@ def display_json():
             "military_sfx_volume": settings.military_sfx_volume(),
             "earthquake_voice_enabled": settings.earthquake_voice_enabled(),
             "earthquake_voice_volume": settings.earthquake_voice_volume(),
+            "lofi_enabled": settings.lofi_enabled(),
+            "lofi_volume": settings.lofi_volume(),
         }
     )
 
@@ -971,6 +973,13 @@ def display_save():
             settings.set_earthquake_voice_volume(int(data.get("earthquake_voice_volume")))
         except (TypeError, ValueError):
             return jsonify({"message": "earthquake_voice_volume must be a number"}), 400
+    if "lofi_enabled" in data:
+        settings.set_lofi_enabled(bool(data.get("lofi_enabled")))
+    if "lofi_volume" in data:
+        try:
+            settings.set_lofi_volume(int(data.get("lofi_volume")))
+        except (TypeError, ValueError):
+            return jsonify({"message": "lofi_volume must be a number"}), 400
     return jsonify(
         {
             "ok": True,
@@ -998,6 +1007,8 @@ def display_save():
             "military_sfx_volume": settings.military_sfx_volume(),
             "earthquake_voice_enabled": settings.earthquake_voice_enabled(),
             "earthquake_voice_volume": settings.earthquake_voice_volume(),
+            "lofi_enabled": settings.lofi_enabled(),
+            "lofi_volume": settings.lofi_volume(),
             "message": "Display settings saved.",
         }
     )
@@ -1077,11 +1088,20 @@ def display_earthquake_voice_preview():
             settings.set_earthquake_voice_volume(int(data.get("earthquake_voice_volume")))
         except (TypeError, ValueError):
             return jsonify({"message": "earthquake_voice_volume must be a number"}), 400
+    if "lofi_enabled" in data:
+        settings.set_lofi_enabled(bool(data.get("lofi_enabled")))
+    if "lofi_volume" in data:
+        try:
+            settings.set_lofi_volume(int(data.get("lofi_volume")))
+        except (TypeError, ValueError):
+            return jsonify({"message": "lofi_volume must be a number"}), 400
     earthquake_overlay.play_voice_preview()
     return jsonify(
         {
             "ok": True,
             "earthquake_voice_volume": settings.earthquake_voice_volume(),
+            "lofi_enabled": settings.lofi_enabled(),
+            "lofi_volume": settings.lofi_volume(),
             "message": "Playing earthquake alert preview.",
         }
     )

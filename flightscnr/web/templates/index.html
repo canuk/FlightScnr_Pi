@@ -589,6 +589,13 @@
             </div>
             <label for="earthquake_voice_volume">Earthquake alert volume <span id="earthquake_voice_volume_label">80%</span></label>
             <input id="earthquake_voice_volume" type="range" min="0" max="100" step="1" value="80">
+            <div class="chk">
+                <label for="lofi_enabled">ATC lofi bed</label>
+                <span class="switch"><input id="lofi_enabled" type="checkbox"><span class="track"></span></span>
+            </div>
+            <label for="lofi_volume">Lofi volume <span id="lofi_volume_label">25%</span></label>
+            <input id="lofi_volume" type="range" min="0" max="100" step="1" value="25" oninput="document.getElementById('lofi_volume_label').textContent = this.value + '%'">
+            <p class="hint">Mellow music under the live ATC stream, crossfading through the bundled tracks plus any MP3s in /var/lib/flightscnr/lofi. Plays only while ATC audio is on, so it follows ATC quiet hours.</p>
             <p class="hint">Off by default. Plays a voice clip once per new USGS event M3.0+ in radar range. Not earthquake early warning — catalog events can be minutes old. Silent during quiet hours and display off-hours. Needs the earthquake layer on, plus a USB or Bluetooth speaker.</p>
             <button class="btn btn-primary" id="btn-save-reload" style="margin-top:.7rem" type="button">Save &amp; reload on display</button>
             <div id="display-status" class="status"></div>
@@ -1353,6 +1360,12 @@ async function loadAll() {
         if ($("earthquake_voice_volume")) {
             $("earthquake_voice_volume").value = String(d.earthquake_voice_volume ?? 80);
         }
+        if ($("lofi_enabled")) $("lofi_enabled").checked = !!d.lofi_enabled;
+        if ($("lofi_volume")) {
+            $("lofi_volume").value = String(d.lofi_volume ?? 25);
+            const ll = $("lofi_volume_label");
+            if (ll) ll.textContent = `${$("lofi_volume").value}%`;
+        }
         syncChimeVolumeLabel();
     } catch (_) {}
 
@@ -1968,6 +1981,8 @@ async function saveAndReloadSettings() {
                 military_sfx_volume: $("military_sfx_volume") ? Number($("military_sfx_volume").value) : 80,
                 earthquake_voice_enabled: $("earthquake_voice") ? $("earthquake_voice").checked : false,
                 earthquake_voice_volume: $("earthquake_voice_volume") ? Number($("earthquake_voice_volume").value) : 80,
+                lofi_enabled: $("lofi_enabled") ? $("lofi_enabled").checked : false,
+                lofi_volume: $("lofi_volume") ? Number($("lofi_volume").value) : 25,
             }),
         });
         const loc = ($("radar_center").value || "").trim();
