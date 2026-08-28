@@ -39,7 +39,10 @@ from display.round_touch import lofi_controls, settings, theme
 
 
 @pytest.fixture(autouse=True)
-def _reset():
+def _reset(monkeypatch):
+    from utilities import lofi_audio
+
+    monkeypatch.setattr(lofi_audio, "has_tracks", lambda ttl=5.0: True)
     settings.set_lofi_enabled(True)
     settings.set_lofi_controls_enabled(True)
     settings.set_lofi_title_scroll(True)
@@ -68,6 +71,12 @@ class TestVisibilityGate:
         settings.set_lofi_controls_enabled(False)
         assert lofi_controls.draw(_surface()) is None
         assert lofi_controls.hit_button(theme.CENTER_X, theme.SIZE - 40) is None
+
+    def test_hidden_without_any_tracks(self, monkeypatch):
+        from utilities import lofi_audio
+
+        monkeypatch.setattr(lofi_audio, "has_tracks", lambda ttl=5.0: False)
+        assert lofi_controls.visible() is False
 
 
 class TestPlacement:

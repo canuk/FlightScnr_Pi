@@ -55,6 +55,16 @@ class TestLofiTracksEndpoint:
         assert r.status_code == 200
         assert r.get_json().get("disabled") == []
 
+    def test_tracks_lists_pack_as_bundled(self, client, tmp_path, monkeypatch):
+        from utilities import lofi_audio
+
+        pack = tmp_path / "pack"
+        pack.mkdir()
+        (pack / "Packed Song.mp3").write_bytes(b"x")
+        monkeypatch.setattr(lofi_audio, "PACK_DIR", str(pack))
+        body = client.get("/lofi/tracks").get_json()
+        assert "Packed Song.mp3" in body["bundled"]
+
     def test_toggle_rejects_bad_name(self, client):
         r = client.post("/lofi/toggle_disabled", json={"name": "../evil.mp3"})
         assert r.status_code == 400
@@ -113,3 +123,82 @@ class TestLofiCoverEndpoint:
         self._make_track("sniff-test.mp3", art=png)
         r = client.get("/lofi/cover/sniff-test.mp3")
         assert r.headers.get("X-Content-Type-Options") == "nosniff"
+
+
+class TestLofiPackEndpoints:
+    def test_status_reports_not_installed(self, client, tmp_path, monkeypatch):
+        from utilities import lofi_audio
+        from web import app as web_app
+
+        monkeypatch.setattr(lofi_audio, "PACK_DIR", str(tmp_path / "pack"))
+        web_app._pack_progress.update(
+            {"state": "idle", "received": 0, "total": 0, "message": ""})
+        r = client.get("/lofi/pack/status")
+        assert r.status_code == 200
+        body = r.get_json()
+        assert body["installed"] is False
+        assert body["state"] == "idle"
+        assert body["url"].startswith("https://")
+
+    def test_status_counts_installed_pack(self, client, tmp_path, monkeypatch):
+        from utilities import lofi_audio
+
+        pack = tmp_path / "pack"
+        pack.mkdir()
+        (pack / "one.mp3").write_bytes(b"x")
+        monkeypatch.setattr(lofi_audio, "PACK_DIR", str(pack))
+        body = client.get("/lofi/pack/status").get_json()
+        assert body["installed"] is True
+        assert body["count"] == 1
+
+    def test_download_worker_installs_from_stream(self, tmp_path, monkeypatch):
+        import io
+        import zipfile
+
+        from utilities import lofi_audio
+        from web import app as web_app
+
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as z:
+            z.writestr("Song One.mp3", b"ID3one")
+            z.writestr("Song Two.mp3", b"ID3two")
+        payload = buf.getvalue()
+
+        class FakeResp:
+            headers = {"Content-Length": str(len(payload))}
+
+            def raise_for_status(self):
+                pass
+
+            def iter_content(self, chunk_size):
+                yield payload
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        monkeypatch.setattr(lofi_audio, "PACK_DIR", str(tmp_path / "pack"))
+        monkeypatch.setattr(
+            web_app, "_pack_tmp_path", lambda: str(tmp_path / "pack.zip.part"))
+        import requests
+
+        monkeypatch.setattr(requests, "get", lambda *a, **k: FakeResp())
+        web_app._pack_progress.update(
+            {"state": "idle", "received": 0, "total": 0, "message": ""})
+        web_app._pack_download_worker("https://example.invalid/pack.zip")
+        assert web_app._pack_progress["state"] == "done"
+        assert sorted(os.listdir(tmp_path / "pack")) == [
+            "Song One.mp3", "Song Two.mp3"]
+        assert not os.path.exists(tmp_path / "pack.zip.part")
+
+    def test_download_endpoint_rejects_concurrent(self, client):
+        from web import app as web_app
+
+        web_app._pack_progress["state"] = "downloading"
+        try:
+            r = client.post("/lofi/pack/download")
+            assert r.status_code == 409
+        finally:
+            web_app._pack_progress["state"] = "idle"

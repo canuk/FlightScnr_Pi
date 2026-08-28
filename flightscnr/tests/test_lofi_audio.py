@@ -297,10 +297,56 @@ class TestGating:
         monkeypatch.setattr(lofi_audio, "BUNDLED_DIR", str(tmp_path / "none"))
         assert [os.path.basename(p) for p in lofi_audio.playlist()] == ["a.mp3", "b.mp3"]
 
-    def test_bundled_starter_tracks_ship(self):
+    def test_playlist_includes_pack_dir(self, tmp_path, monkeypatch):
+        pack = tmp_path / "pack"
+        pack.mkdir()
+        (pack / "packed.mp3").write_bytes(b"x")
+        monkeypatch.setattr(lofi_audio, "BUNDLED_DIR", str(tmp_path / "none"))
+        monkeypatch.setattr(lofi_audio, "PACK_DIR", str(pack))
+        monkeypatch.setattr(lofi_audio, "PLAYLIST_DIR", str(tmp_path / "user"))
         names = [os.path.basename(p) for p in lofi_audio.playlist()]
-        assert "rain-on-vinyl.mp3" in names
-        assert "late-night-static.mp3" in names
+        assert names == ["packed.mp3"]
+        assert lofi_audio.track_path("packed.mp3") == str(pack / "packed.mp3")
+
+    def test_has_tracks_reflects_files_on_disk(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(lofi_audio, "BUNDLED_DIR", str(tmp_path / "a"))
+        monkeypatch.setattr(lofi_audio, "PACK_DIR", str(tmp_path / "b"))
+        monkeypatch.setattr(lofi_audio, "PLAYLIST_DIR", str(tmp_path / "c"))
+        assert lofi_audio.has_tracks(ttl=0) is False
+        (tmp_path / "b").mkdir()
+        (tmp_path / "b" / "one.mp3").write_bytes(b"x")
+        assert lofi_audio.has_tracks(ttl=0) is True
+
+
+class TestPackInstall:
+    def _zip(self, tmp_path, entries):
+        import zipfile
+
+        zpath = tmp_path / "pack.zip"
+        with zipfile.ZipFile(zpath, "w") as z:
+            for name, data in entries:
+                z.writestr(name, data)
+        return str(zpath)
+
+    def test_install_extracts_only_safe_mp3s(self, tmp_path, monkeypatch):
+        pack = tmp_path / "pack"
+        monkeypatch.setattr(lofi_audio, "PACK_DIR", str(pack))
+        zpath = self._zip(tmp_path, [
+            ("Attic Glow.mp3", b"ID3aaa"),
+            ("sub/dir/Nested.mp3", b"ID3bbb"),      # flattened to basename
+            ("../escape.mp3", b"ID3ccc"),            # flattened — traversal dies
+            ("notes.txt", b"nope"),                  # not an mp3 → dropped
+            ("bad<name>.mp3", b"ID3ddd"),            # hostile chars → dropped
+        ])
+        count = lofi_audio.install_pack_zip(zpath)
+        assert count == 3
+        assert sorted(os.listdir(pack)) == [
+            "Attic Glow.mp3", "Nested.mp3", "escape.mp3",
+        ]
+
+    def test_install_missing_zip_returns_zero(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(lofi_audio, "PACK_DIR", str(tmp_path / "pack"))
+        assert lofi_audio.install_pack_zip(str(tmp_path / "nope.zip")) == 0
 
 
 class TestUserTrackManagement:
@@ -329,16 +375,39 @@ class TestUserTrackManagement:
 
 
 class TestAtcPageVolume:
-    def test_lofi_volume_row_on_atc_page(self):
+    def test_lofi_volume_row_on_atc_page(self, monkeypatch):
         from display.round_touch.screens import info
 
+        monkeypatch.setattr(lofi_audio, "has_tracks", lambda ttl=5.0: True)
         assert "lofi_volume" in info.ATC_ACTIONS
         assert info.lofi_volume_row_index() == info.ATC_ACTIONS.index("lofi_volume")
         assert "lofi_volume" not in info._HUD_VOLUME_ACTIONS
 
-    def test_atc_row_labels_match_actions(self):
+    def test_atc_row_labels_match_actions(self, monkeypatch):
         from display.round_touch.screens import info
 
+        monkeypatch.setattr(lofi_audio, "has_tracks", lambda ttl=5.0: True)
+        info._atc_rows_cache = None
+        assert len(info._atc_row_labels()) == len(info.ATC_ACTIONS)
+
+
+class TestAtcLofiGating:
+    def test_lofi_rows_hidden_without_tracks(self, monkeypatch):
+        from display.round_touch.screens import info
+
+        monkeypatch.setattr(lofi_audio, "has_tracks", lambda ttl=5.0: False)
+        info._atc_rows_cache = None
+        acts = info.atc_actions()
+        assert not any(a.startswith("lofi") for a in acts)
+        assert len(info._atc_row_labels()) == len(acts)
+        assert info.lofi_volume_row_index() == -1
+
+    def test_lofi_rows_present_with_tracks(self, monkeypatch):
+        from display.round_touch.screens import info
+
+        monkeypatch.setattr(lofi_audio, "has_tracks", lambda ttl=5.0: True)
+        info._atc_rows_cache = None
+        assert info.atc_actions() == info.ATC_ACTIONS
         assert len(info._atc_row_labels()) == len(info.ATC_ACTIONS)
 
     def test_toggle_action_still_works(self):
@@ -398,9 +467,11 @@ class TestTrackSkipping:
 
 
 class TestDisabledTracks:
-    def test_disabled_tracks_leave_the_playlist(self, monkeypatch):
+    def test_disabled_tracks_leave_the_playlist(self, tmp_path, monkeypatch):
         from display.round_touch import settings as dsettings
 
+        (tmp_path / "rain-on-vinyl.mp3").write_bytes(b"x")
+        monkeypatch.setattr(lofi_audio, "PLAYLIST_DIR", str(tmp_path))
         names = [os.path.basename(p) for p in lofi_audio.playlist()]
         assert "rain-on-vinyl.mp3" in names
         dsettings.set_lofi_disabled_tracks(["rain-on-vinyl.mp3"])
@@ -408,7 +479,9 @@ class TestDisabledTracks:
         assert "rain-on-vinyl.mp3" not in names
         dsettings.set_lofi_disabled_tracks([])
 
-    def test_track_path_resolves_known_and_rejects_hostile(self):
+    def test_track_path_resolves_known_and_rejects_hostile(self, tmp_path, monkeypatch):
+        (tmp_path / "rain-on-vinyl.mp3").write_bytes(b"x")
+        monkeypatch.setattr(lofi_audio, "PLAYLIST_DIR", str(tmp_path))
         assert lofi_audio.track_path("rain-on-vinyl.mp3") is not None
         assert lofi_audio.track_path("../etc/passwd") is None
         assert lofi_audio.track_path("nope.mp3") is None

@@ -649,6 +649,17 @@
             </div>
             <p class="hint">Marquee the track name through the pill. Off = truncate long names at 20 characters.</p>
 
+            <div id="lofi-pack" hidden style="margin:.8rem 0 0">
+                <p class="hint" id="lofi_pack_hint">The starter playlist is not installed yet — the beats need tracks to play.</p>
+                <button class="btn btn-primary" id="btn-lofi-pack" type="button" style="margin-top:.4rem">Download starter playlist (~190 MB)</button>
+                <div id="lofi_pack_progress" hidden style="margin-top:.55rem">
+                    <div style="height:.5rem;border-radius:999px;background:var(--field);border:1px solid var(--fline);overflow:hidden">
+                        <div id="lofi_pack_bar" style="height:100%;width:0%;background:var(--accent2);transition:width .4s"></div>
+                    </div>
+                    <p class="hint" id="lofi_pack_msg"></p>
+                </div>
+            </div>
+
             <div id="lofi-player" class="lofi-player" hidden>
                 <div class="lofi-art-wrap"><span class="lofi-art-ph">&#9835;</span><img id="lofi-player-art" class="lofi-art-lg" alt="" src=""></div>
                 <div class="lofi-player-main">
@@ -1437,6 +1448,7 @@ async function loadAll() {
         if ($("lofi_controls_enabled")) $("lofi_controls_enabled").checked = !!d.lofi_controls_enabled;
         if ($("lofi_title_scroll")) $("lofi_title_scroll").checked = d.lofi_title_scroll !== false;
         loadLofiTracks();
+        refreshLofiPack();
         if ($("lofi_volume")) {
             $("lofi_volume").value = String(d.lofi_volume ?? 25);
             const ll = $("lofi_volume_label");
@@ -3356,6 +3368,35 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     }
     wireLofiPlayer();
+    async function refreshLofiPack() {
+        const box = $("lofi-pack");
+        if (!box) return;
+        try {
+            const d = await (await fetch("/lofi/pack/status")).json();
+            const busy = d.state === "downloading" || d.state === "installing";
+            box.hidden = d.installed && !busy && d.state !== "error";
+            $("btn-lofi-pack").disabled = busy;
+            $("lofi_pack_progress").hidden = !busy && d.state !== "error";
+            if (busy) {
+                const pct = d.total > 0 ? Math.round(100 * d.received / d.total) : 0;
+                $("lofi_pack_bar").style.width = pct + "%";
+                $("lofi_pack_msg").textContent = d.state === "installing"
+                    ? "Unpacking tracks…"
+                    : `Downloading… ${pct}% (${Math.round(d.received / 1048576)} MB)`;
+                setTimeout(refreshLofiPack, 1000);
+            } else if (d.state === "error") {
+                $("lofi_pack_msg").textContent = "Download failed: " + (d.message || "unknown error");
+            } else if (d.state === "done") {
+                $("lofi_pack_bar").style.width = "100%";
+                loadLofiTracks();
+            }
+        } catch (_) {}
+    }
+    if ($("btn-lofi-pack")) $("btn-lofi-pack").addEventListener("click", async () => {
+        $("btn-lofi-pack").disabled = true;
+        try { await fetch("/lofi/pack/download", {method: "POST"}); } catch (_) {}
+        refreshLofiPack();
+    });
     async function loadLofiTracks() {
         const box = $("lofi_tracks");
         if (!box) return;

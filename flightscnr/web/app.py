@@ -1027,14 +1027,15 @@ def lofi_tracks():
     from display.round_touch import settings
     from utilities import lofi_audio
 
-    bundled = []
-    try:
-        bundled = sorted(
-            n for n in os.listdir(lofi_audio.BUNDLED_DIR)
-            if n.lower().endswith(".mp3")
-        )
-    except OSError:
-        pass
+    bundled_set: set[str] = set()
+    for folder in (lofi_audio.BUNDLED_DIR, lofi_audio.PACK_DIR):
+        try:
+            bundled_set.update(
+                n for n in os.listdir(folder) if n.lower().endswith(".mp3")
+            )
+        except OSError:
+            continue
+    bundled = sorted(bundled_set)
     return jsonify({
         "bundled": bundled,
         "user": lofi_audio.user_tracks(),
@@ -1052,6 +1053,101 @@ def lofi_stream(name):
     from flask import send_file
 
     return send_file(path, mimetype="audio/mpeg", conditional=True)
+
+
+# Starter-pack download — MP3s live on a GitHub Release, not in git, so the
+# OTA `git pull` stays light. Upstream forks can repoint via LOFI_PACK_URL.
+DEFAULT_LOFI_PACK_URL = (
+    "https://github.com/canuk/FlightScnr_Pi/releases/download/"
+    "lofi-pack-v1/lofi-pack.zip"
+)
+_pack_progress = {"state": "idle", "received": 0, "total": 0, "message": ""}
+
+
+def _lofi_pack_url() -> str:
+    return os.environ.get("LOFI_PACK_URL") or DEFAULT_LOFI_PACK_URL
+
+
+def _pack_tmp_path() -> str:
+    from utilities import lofi_audio
+
+    return lofi_audio.PACK_DIR + ".zip.part"
+
+
+def _pack_installed_count() -> int:
+    from utilities import lofi_audio
+
+    try:
+        return sum(
+            1 for n in os.listdir(lofi_audio.PACK_DIR)
+            if n.lower().endswith(".mp3")
+        )
+    except OSError:
+        return 0
+
+
+def _pack_download_worker(url: str) -> None:
+    import requests
+
+    from utilities import lofi_audio
+
+    tmp = _pack_tmp_path()
+    _pack_progress.update(
+        {"state": "downloading", "received": 0, "total": 0, "message": ""})
+    try:
+        os.makedirs(os.path.dirname(tmp), exist_ok=True)
+        with requests.get(url, stream=True, timeout=60,
+                          allow_redirects=True) as r:
+            r.raise_for_status()
+            _pack_progress["total"] = int(r.headers.get("Content-Length") or 0)
+            with open(tmp, "wb") as fh:
+                for chunk in r.iter_content(chunk_size=1024 * 1024):
+                    if chunk:
+                        fh.write(chunk)
+                        _pack_progress["received"] += len(chunk)
+        _pack_progress["state"] = "installing"
+        count = lofi_audio.install_pack_zip(tmp)
+        if count > 0:
+            _pack_progress.update(
+                {"state": "done", "message": f"Installed {count} tracks."})
+        else:
+            _pack_progress.update(
+                {"state": "error", "message": "Pack contained no tracks."})
+    except Exception as exc:
+        _pack_progress.update({"state": "error", "message": str(exc)})
+    finally:
+        try:
+            if os.path.exists(tmp):
+                os.unlink(tmp)
+        except OSError:
+            pass
+
+
+@app.get("/lofi/pack/status")
+def lofi_pack_status():
+    count = _pack_installed_count()
+    return jsonify({
+        "installed": count > 0,
+        "count": count,
+        "url": _lofi_pack_url(),
+        "state": _pack_progress["state"],
+        "received": _pack_progress["received"],
+        "total": _pack_progress["total"],
+        "message": _pack_progress["message"],
+    })
+
+
+@app.post("/lofi/pack/download")
+def lofi_pack_download():
+    import threading
+
+    if _pack_progress["state"] in ("downloading", "installing"):
+        return jsonify({"message": "Download already running."}), 409
+    url = _lofi_pack_url()
+    threading.Thread(
+        target=_pack_download_worker, args=(url,), daemon=True
+    ).start()
+    return jsonify({"ok": True, "url": url})
 
 
 @app.get("/lofi/cover/<path:name>")
