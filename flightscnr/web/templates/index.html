@@ -596,6 +596,12 @@
             </div>
             <label for="lofi_volume">Lofi volume <span id="lofi_volume_label">25%</span></label>
             <input id="lofi_volume" type="range" min="0" max="100" step="1" value="25" oninput="document.getElementById('lofi_volume_label').textContent = this.value + '%'">
+            <div class="chk">
+                <label for="lofi_controls_enabled">Track buttons on radar</label>
+                <span class="switch"><input id="lofi_controls_enabled" type="checkbox"><span class="track"></span></span>
+            </div>
+            <p class="hint">Prev/next pill on the rim opposite the clock HUD. Shows only while the beats are enabled.</p>
+            <audio id="lofi_preview" preload="none"></audio>
             <p class="hint">Mellow music under the live ATC stream, crossfading through the playlist below. Plays only while ATC audio is on, so it follows ATC quiet hours.</p>
             <div id="lofi_tracks" class="hint" style="margin:4px 0"></div>
             <div class="chk">
@@ -1367,6 +1373,7 @@ async function loadAll() {
             $("earthquake_voice_volume").value = String(d.earthquake_voice_volume ?? 80);
         }
         if ($("lofi_enabled")) $("lofi_enabled").checked = !!d.lofi_enabled;
+        if ($("lofi_controls_enabled")) $("lofi_controls_enabled").checked = !!d.lofi_controls_enabled;
         loadLofiTracks();
         if ($("lofi_volume")) {
             $("lofi_volume").value = String(d.lofi_volume ?? 25);
@@ -1990,6 +1997,7 @@ async function saveAndReloadSettings() {
                 earthquake_voice_volume: $("earthquake_voice_volume") ? Number($("earthquake_voice_volume").value) : 80,
                 lofi_enabled: $("lofi_enabled") ? $("lofi_enabled").checked : false,
                 lofi_volume: $("lofi_volume") ? Number($("lofi_volume").value) : 25,
+                lofi_controls_enabled: $("lofi_controls_enabled") ? $("lofi_controls_enabled").checked : false,
             }),
         });
         const loc = ($("radar_center").value || "").trim();
@@ -3226,14 +3234,40 @@ document.addEventListener("DOMContentLoaded", () => {
             const r = await fetch("/lofi/tracks");
             const d = await r.json();
             box.textContent = "";
+            const disabled = new Set(d.disabled || []);
             const addRow = (name, builtin) => {
                 const row = document.createElement("div");
                 row.textContent = "\u266B " + name + " ";
+                if (disabled.has(name)) row.style.opacity = ".45";
+                const prev = document.createElement("a");
+                prev.href = "#";
+                prev.textContent = "\u25B6";
+                prev.title = "Preview";
+                prev.addEventListener("click", (e) => {
+                    e.preventDefault();
+                    const player = $("lofi_preview");
+                    if (!player) return;
+                    const src = "/lofi/stream/" + encodeURIComponent(name);
+                    if (player.dataset.current === name && !player.paused) {
+                        player.pause();
+                        return;
+                    }
+                    player.src = src;
+                    player.dataset.current = name;
+                    player.play().catch(() => {});
+                });
+                row.appendChild(prev);
+                row.appendChild(document.createTextNode(" "));
                 if (builtin) {
-                    const tag = document.createElement("span");
-                    tag.style.opacity = ".6";
-                    tag.textContent = "(built-in)";
-                    row.appendChild(tag);
+                    const tog = document.createElement("a");
+                    tog.href = "#";
+                    tog.textContent = disabled.has(name) ? "enable" : "disable";
+                    tog.addEventListener("click", async (e) => {
+                        e.preventDefault();
+                        await fetch("/lofi/toggle_disabled", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({name})});
+                        loadLofiTracks();
+                    });
+                    row.appendChild(tog);
                 } else {
                     const del = document.createElement("a");
                     del.href = "#";
