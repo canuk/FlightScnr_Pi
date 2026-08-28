@@ -13,7 +13,8 @@ Draws the local receiver's coverage histogram as a polar heatmap:
 16 compass sectors × 8 linear range rings, each cell shaded by how many
 position reports landed there. Counts span orders of magnitude (near
 traffic dominates), so the shade ramp is logarithmic. Tap cycles the
-views: Local · Last 24 h → Local · All-time → Stats.
+views: Local · Last 24 h → Stats. Reached from Settings › Main
+(ADSB Coverage button, local-receiver setups only); Back returns there.
 """
 
 from __future__ import annotations
@@ -36,12 +37,10 @@ _SECTOR_GAP_RAD = math.radians(1.2)
 _RING_GAP_FRAC = 0.06  # fraction of one ring's thickness left dark between rings
 
 VIEW_LOCAL_24H = "local_24h"
-VIEW_LOCAL_ALL = "local_all"
 VIEW_STATS = "stats"
-_VIEW_CYCLE = (VIEW_LOCAL_24H, VIEW_LOCAL_ALL, VIEW_STATS)
+_VIEW_CYCLE = (VIEW_LOCAL_24H, VIEW_STATS)
 _VIEW_LABELS = {
     VIEW_LOCAL_24H: "Local · Last 24 h",
-    VIEW_LOCAL_ALL: "Local · All-time",
     VIEW_STATS: "Stats",
 }
 
@@ -66,10 +65,15 @@ def stats_view_active() -> bool:
 
 
 def handle_tap() -> bool:
-    """Advance Local · Last 24 h → Local · All-time → Stats. Always consumed."""
+    """Advance Local · Last 24 h → Stats. Always consumed."""
     global _view
     _view = _VIEW_CYCLE[(_VIEW_CYCLE.index(_view) + 1) % len(_VIEW_CYCLE)]
     return True
+
+
+def receiver_enabled() -> bool:
+    """Public gate for the Settings › Main entry button."""
+    return _receiver_enabled()
 
 
 def _receiver_enabled() -> bool:
@@ -267,8 +271,9 @@ def draw_coverage(surface: pygame.Surface) -> None:
                 surface, hint, theme.CENTER_Y + theme.s(60), hint_font, theme.HINT
             )
 
-    # Curved breadcrumb when the curved-chrome branch is present (falls back
-    # to the straight trail when this feature merges standalone).
-    getattr(nav, "draw_curved_breadcrumb", nav.draw_breadcrumb)(
-        surface, ["Radar", "Coverage"]
-    )
+    nav.draw_curved_breadcrumb(surface, ["Radar", "Settings", "Coverage"])
+    nav.draw_curved_footer(surface, ["back"])
+
+
+def footer_back_hit(x: int, y: int) -> bool:
+    return nav.curved_footer_hit(x, y, ["back"]) == "back"

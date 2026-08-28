@@ -3391,6 +3391,15 @@ class RoundTouchDisplay:
 
     def _handle_settings_tap(self, x: int | None = None, y: int | None = None):
         if (
+            self.settings_page == info.PAGE_MAIN
+            and x is not None
+            and y is not None
+            and info.adsb_coverage_hit(x, y)
+        ):
+            self._open_screen(SCREEN_COVERAGE)
+            self._safe_draw()
+            return
+        if (
             self.settings_page
             in (
                 info.PAGE_DISPLAY,
@@ -3617,12 +3626,6 @@ class RoundTouchDisplay:
         elif swipe == input_handler.SWIPE_LEFT and self.screen == SCREEN_FLIEGER_CLOCK:
             self._open_screen(SCREEN_MOON)
             self._safe_draw()
-        elif swipe == input_handler.SWIPE_LEFT and self.screen == SCREEN_MOON:
-            self._open_screen(SCREEN_COVERAGE)
-            self._safe_draw()
-        elif swipe == input_handler.SWIPE_RIGHT and self.screen == SCREEN_COVERAGE:
-            self._open_screen(SCREEN_MOON)
-            self._safe_draw()
         elif swipe == input_handler.SWIPE_RIGHT and self.screen == SCREEN_MOON:
             self._open_screen(SCREEN_FLIEGER_CLOCK)
             self._safe_draw()
@@ -3640,7 +3643,6 @@ class RoundTouchDisplay:
             SCREEN_ANALOG_NIGHT,
             SCREEN_FLIEGER_CLOCK,
             SCREEN_MOON,
-            SCREEN_COVERAGE,
         ):
             self._return_to_radar()
             self._safe_draw()
@@ -3725,6 +3727,8 @@ class RoundTouchDisplay:
                     self._set_settings_page(prev)
                 else:
                     self._open_screen(SCREEN_DETAILS)
+            elif self.screen == SCREEN_COVERAGE:
+                self._open_screen(SCREEN_SETTINGS)
             else:
                 self._return_to_radar()
             self._note_activity()
@@ -3902,7 +3906,10 @@ class RoundTouchDisplay:
         elif tap and self.screen == SCREEN_MOON:
             moon.toggle_info()
         elif tap and self.screen == SCREEN_COVERAGE:
-            coverage.handle_tap()
+            if coverage.footer_back_hit(tap[0], tap[1]):
+                self._open_screen(SCREEN_SETTINGS)
+            else:
+                coverage.handle_tap()
             self._note_activity()
             self._safe_draw()
         elif tap and self.screen in (SCREEN_ANALOG_CLOCK, SCREEN_ANALOG_NIGHT, SCREEN_FLIEGER_CLOCK):

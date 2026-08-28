@@ -57,6 +57,44 @@ PAGE_COUNT = 9
 
 FOOTER_BUTTONS = ("prev", "next", "radar")
 
+# Settings › Main "ADSB Coverage" entry (local-receiver setups only).
+_adsb_button_rect = None
+
+
+def adsb_coverage_hit(x: int, y: int) -> bool:
+    if _adsb_button_rect is None:
+        return False
+    return _adsb_button_rect.collidepoint(int(x), int(y))
+
+
+def _draw_adsb_coverage_button(surface, bottom: int) -> None:
+    """Pill on Settings › Main opening the ADSB coverage diagnostic."""
+    global _adsb_button_rect
+    _adsb_button_rect = None
+    try:
+        from display.round_touch.screens import coverage
+
+        if not coverage.receiver_enabled():
+            return
+    except Exception:
+        return
+    try:
+        font = draw.load_font(theme.s(13), bold=True)
+        label = font.render("ADSB Coverage  \u203a", True, theme.MUTED)
+    except Exception:
+        return
+    pad_x, pad_y = theme.s(16), theme.s(7)
+    rect = pygame.Rect(
+        0, 0, label.get_width() + 2 * pad_x, label.get_height() + 2 * pad_y
+    )
+    rect.center = (theme.CENTER_X, bottom - rect.height // 2 - theme.s(2))
+    pygame.draw.rect(surface, (28, 30, 34), rect, border_radius=rect.height // 2)
+    pygame.draw.rect(
+        surface, theme.GRID, rect, width=1, border_radius=rect.height // 2
+    )
+    surface.blit(label, label.get_rect(center=rect.center))
+    _adsb_button_rect = pygame.Rect(rect).inflate(theme.s(8), theme.s(8))
+
 
 def footer_kinds_for_page(page: int) -> tuple[str, ...]:
     """Settings footer: Prev always (Main returns to About); omit Next on last."""
@@ -2383,6 +2421,7 @@ def draw_info(
             bottom=bottom,
             gap=gap,
         )
+        _draw_adsb_coverage_button(surface, bottom)
 
     elif page == PAGE_DISPLAY:
         max_scroll = _draw_settings_rows(
