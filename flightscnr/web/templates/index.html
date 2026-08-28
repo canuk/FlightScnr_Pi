@@ -1013,7 +1013,13 @@ function formatRangeUnit(index, units) {
     return value.toFixed(1);
 }
 
+let rangePresetUnits = null;
+
 function formatRangeOptionLabel(index) {
+    if (rangePresetUnits) {
+        const mi = rangePresetUnits.mi[index], km = rangePresetUnits.km[index], nm = rangePresetUnits.nm[index];
+        return `${mi}mi / ${km}km / ${nm}nm`;
+    }
     return `${formatRangeUnit(index, "mi")}mi / ${formatRangeUnit(index, "km")}km / ${formatRangeUnit(index, "nm")}nm`;
 }
 
@@ -1254,6 +1260,7 @@ async function loadAll() {
         const r = await jsonFetch("/radar/json");
         currentScaleIndex = Number(r.scale_index ?? 1);
         $("dist_units").value = r.unit_preset || legacyUnitPreset(r.distance_units) || "km_kph";
+        if (r.range_presets) rangePresetUnits = r.range_presets;
         populateRangeSelect(r.range_presets_mi);
         syncMinSpeedUnitLabels();
         $("min_height").value = String(r.min_height_ft ?? 1000);
