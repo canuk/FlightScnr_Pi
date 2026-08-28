@@ -3864,7 +3864,8 @@ class RoundTouchDisplay:
                 self._safe_draw()
                 return
             action = tracked.tap_footer_action(
-                tap[0], tap[1], self.overhead.tracked_data
+                tap[0], tap[1],
+                tracked.resolve_display_data(self.overhead.tracked_data, self.flights),
             )
             if action == "pin":
                 tracked.toggle_pinned()
@@ -3878,7 +3879,8 @@ class RoundTouchDisplay:
                 self._safe_draw()
         elif tap and self.screen == SCREEN_TRACKED:
             action = tracked.tap_footer_action(
-                tap[0], tap[1], self.overhead.tracked_data
+                tap[0], tap[1],
+                tracked.resolve_display_data(self.overhead.tracked_data, self.flights),
             )
             if action == "pin":
                 tracked.toggle_pinned()
