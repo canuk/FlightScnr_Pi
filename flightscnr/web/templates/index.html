@@ -643,6 +643,11 @@
                 <span class="switch"><input id="lofi_controls_enabled" type="checkbox"><span class="track"></span></span>
             </div>
             <p class="hint">Prev/next pill on the rim opposite the clock HUD. Shows only while the beats are enabled.</p>
+            <div class="chk">
+                <label for="lofi_title_scroll">Scroll track name</label>
+                <span class="switch"><input id="lofi_title_scroll" type="checkbox" checked><span class="track"></span></span>
+            </div>
+            <p class="hint">Marquee the track name through the pill. Off = truncate long names at 20 characters.</p>
 
             <div id="lofi-player" class="lofi-player" hidden>
                 <div class="lofi-art-wrap"><span class="lofi-art-ph">&#9835;</span><img id="lofi-player-art" class="lofi-art-lg" alt="" src=""></div>
@@ -1430,6 +1435,7 @@ async function loadAll() {
         }
         if ($("lofi_enabled")) $("lofi_enabled").checked = !!d.lofi_enabled;
         if ($("lofi_controls_enabled")) $("lofi_controls_enabled").checked = !!d.lofi_controls_enabled;
+        if ($("lofi_title_scroll")) $("lofi_title_scroll").checked = d.lofi_title_scroll !== false;
         loadLofiTracks();
         if ($("lofi_volume")) {
             $("lofi_volume").value = String(d.lofi_volume ?? 25);
@@ -2055,6 +2061,7 @@ async function saveAndReloadSettings(statusId) {
                 lofi_enabled: $("lofi_enabled") ? $("lofi_enabled").checked : false,
                 lofi_volume: $("lofi_volume") ? Number($("lofi_volume").value) : 25,
                 lofi_controls_enabled: $("lofi_controls_enabled") ? $("lofi_controls_enabled").checked : false,
+                lofi_title_scroll: $("lofi_title_scroll") ? $("lofi_title_scroll").checked : true,
             }),
         });
         const loc = ($("radar_center").value || "").trim();

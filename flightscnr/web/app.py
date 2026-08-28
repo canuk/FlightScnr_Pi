@@ -891,6 +891,7 @@ def display_json():
             "lofi_enabled": settings.lofi_enabled(),
             "lofi_volume": settings.lofi_volume(),
             "lofi_controls_enabled": settings.lofi_controls_enabled(),
+            "lofi_title_scroll": settings.lofi_title_scroll(),
         }
     )
 
@@ -983,6 +984,8 @@ def display_save():
             return jsonify({"message": "lofi_volume must be a number"}), 400
     if "lofi_controls_enabled" in data:
         settings.set_lofi_controls_enabled(bool(data.get("lofi_controls_enabled")))
+    if "lofi_title_scroll" in data:
+        settings.set_lofi_title_scroll(bool(data.get("lofi_title_scroll")))
     return jsonify(
         {
             "ok": True,
@@ -1013,6 +1016,7 @@ def display_save():
             "lofi_enabled": settings.lofi_enabled(),
             "lofi_volume": settings.lofi_volume(),
             "lofi_controls_enabled": settings.lofi_controls_enabled(),
+            "lofi_title_scroll": settings.lofi_title_scroll(),
             "message": "Display settings saved.",
         }
     )
@@ -1216,6 +1220,8 @@ def display_earthquake_voice_preview():
             return jsonify({"message": "lofi_volume must be a number"}), 400
     if "lofi_controls_enabled" in data:
         settings.set_lofi_controls_enabled(bool(data.get("lofi_controls_enabled")))
+    if "lofi_title_scroll" in data:
+        settings.set_lofi_title_scroll(bool(data.get("lofi_title_scroll")))
     earthquake_overlay.play_voice_preview()
     return jsonify(
         {
@@ -1224,6 +1230,7 @@ def display_earthquake_voice_preview():
             "lofi_enabled": settings.lofi_enabled(),
             "lofi_volume": settings.lofi_volume(),
             "lofi_controls_enabled": settings.lofi_controls_enabled(),
+            "lofi_title_scroll": settings.lofi_title_scroll(),
             "message": "Playing earthquake alert preview.",
         }
     )

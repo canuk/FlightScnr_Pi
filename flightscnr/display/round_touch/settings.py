@@ -374,6 +374,8 @@ _defaults = {
     "lofi_volume": 25,
     # Prev/next track pill on the radar rim (needs lofi_enabled too).
     "lofi_controls_enabled": False,
+    # Marquee-scroll the track name in the pill; off = truncate at 20 chars.
+    "lofi_title_scroll": True,
     # Topo contour texture behind settings/detail screens.
     "background_texture": True,
     # Faint − / + range-step buttons on the radar rim.
@@ -1171,6 +1173,7 @@ def _settings_snapshot(state: dict) -> tuple:
         bool(state.get("lofi_enabled", False)),
         int(state.get("lofi_volume", 25) or 0),
         bool(state.get("lofi_controls_enabled", False)),
+        bool(state.get("lofi_title_scroll", True)),
         tuple(sorted(str(n) for n in (state.get("lofi_disabled_tracks") or []))),
         bool(state.get("background_texture", True)),
         bool(state.get("radar_zoom_buttons", True)),
@@ -2675,6 +2678,21 @@ def set_lofi_controls_enabled(enabled: bool) -> None:
 def toggle_lofi_controls_enabled() -> bool:
     set_lofi_controls_enabled(not lofi_controls_enabled())
     return lofi_controls_enabled()
+
+
+def lofi_title_scroll() -> bool:
+    """Marquee-scroll the track name in the radar pill; off = truncate."""
+    return bool(_state.get("lofi_title_scroll", True))
+
+
+def set_lofi_title_scroll(enabled: bool) -> None:
+    _state["lofi_title_scroll"] = bool(enabled)
+    _save(_state)
+
+
+def toggle_lofi_title_scroll() -> bool:
+    set_lofi_title_scroll(not lofi_title_scroll())
+    return lofi_title_scroll()
 
 
 def lofi_volume() -> int:
