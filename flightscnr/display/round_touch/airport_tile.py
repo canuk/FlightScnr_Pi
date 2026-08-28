@@ -24,7 +24,8 @@ import time
 
 import pygame
 
-from display.round_touch import draw, theme
+from display.round_touch import draw as draw_mod
+from display.round_touch import theme
 
 logger = logging.getLogger("flightscnr.display")
 
@@ -230,4 +231,4 @@ def draw(surface: pygame.Surface) -> pygame.Rect | None:
 
 
 def _load(size: int, bold: bool = False):
-    return draw.load_font(size, bold=bold)
+    return draw_mod.load_font(size, bold=bold)
