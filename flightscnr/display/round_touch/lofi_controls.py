@@ -20,6 +20,7 @@ import math
 
 import pygame
 
+from display.round_touch import arc_ui
 from display.round_touch import draw as draw_mod
 from display.round_touch import settings, theme
 
@@ -27,14 +28,16 @@ _prev_rect = pygame.Rect(0, 0, 0, 0)
 _next_rect = pygame.Rect(0, 0, 0, 0)
 _prev_c: tuple[int, int] = (0, 0)
 _next_c: tuple[int, int] = (0, 0)
+_title_char_centers: list[tuple[int, int]] = []
 
 
 def _reset_for_tests() -> None:
-    global _prev_rect, _next_rect, _prev_c, _next_c
+    global _prev_rect, _next_rect, _prev_c, _next_c, _title_char_centers
     _prev_rect = pygame.Rect(0, 0, 0, 0)
     _next_rect = pygame.Rect(0, 0, 0, 0)
     _prev_c = (0, 0)
     _next_c = (0, 0)
+    _title_char_centers = []
 
 
 def visible() -> bool:
@@ -86,10 +89,11 @@ def _skip_glyph(size: int, *, forward: bool, color) -> pygame.Surface:
 
 def draw(surface: pygame.Surface) -> pygame.Rect | None:
     """Draw the pill; refresh hit rects. Returns bounds or None when hidden."""
-    global _prev_rect, _next_rect, _prev_c, _next_c
+    global _prev_rect, _next_rect, _prev_c, _next_c, _title_char_centers
     if not visible():
         _prev_rect = pygame.Rect(0, 0, 0, 0)
         _next_rect = pygame.Rect(0, 0, 0, 0)
+        _title_char_centers = []
         return None
 
     from display.round_touch import radar_hud
@@ -100,46 +104,55 @@ def draw(surface: pygame.Surface) -> pygame.Rect | None:
     r_mid = int(theme.VISIBLE_RADIUS * 0.84)
     band = theme.s(30)
     mid = _mid_angle()
-
-    def ang(px: float) -> float:
-        return float(px) / float(max(1, r_mid))
+    bottom = mid > 0
 
     name = lofi_audio.now_playing_name() or "lofi beats"
     if len(name) > 22:
         name = name[:21] + "…"
-    title = None
+    chars: list[pygame.Surface] = []
     try:
         font = draw_mod.load_font(max(8, theme.s(10)), bold=True)
-        title = font.render(name, True, glyph_rgb)
+        chars = [font.render(ch, True, glyph_rgb) for ch in name]
     except Exception:
-        title = None
+        chars = []
 
     icon_px = theme.s(14)
-    gap = theme.s(10)
-    title_w = title.get_width() if title is not None else theme.s(40)
-    total = icon_px + gap + title_w + gap + icon_px
-    half = ang(total / 2 + theme.s(14))
+    prev_icon = _skip_glyph(icon_px, forward=False, color=glyph_rgb)
+    next_icon = _skip_glyph(icon_px, forward=True, color=glyph_rgb)
+    spacer = pygame.Surface((theme.s(10), 1), pygame.SRCALPHA)
+    items = [prev_icon, spacer, *chars, spacer, next_icon]
+    widths = [s.get_width() for s in items]
+
+    half = arc_ui.arc_span(widths, r_mid) / 2 + theme.s(14) / float(r_mid)
     radar_hud._draw_curved_white_pill(
         surface, cx, cy, r_mid, mid, band, fill_rgba,
         arc_a0=mid - half, arc_a1=mid + half,
     )
 
-    y = cy + int(round(r_mid * math.sin(mid)))
-    x0 = cx - total // 2
-    _prev_c = (x0 + icon_px // 2, y)
-    _next_c = (cx + total // 2 - icon_px // 2, y)
-    prev_icon = _skip_glyph(icon_px, forward=False, color=glyph_rgb)
-    next_icon = _skip_glyph(icon_px, forward=True, color=glyph_rgb)
-    surface.blit(prev_icon, prev_icon.get_rect(center=_prev_c))
-    if title is not None:
-        surface.blit(title, title.get_rect(center=(cx, y)))
-    surface.blit(next_icon, next_icon.get_rect(center=_next_c))
+    placed = arc_ui.arc_layout(widths, r=r_mid, mid=mid, bottom=bottom)
+    centers: list[tuple[int, int]] = []
+    for surf, (x, y, rot) in zip(items, placed):
+        c = (cx + int(round(x)), cy + int(round(y)))
+        centers.append(c)
+        if surf is spacer:
+            continue
+        rotated = pygame.transform.rotate(surf, rot)
+        rotated.set_alpha(165)  # keep the pill quiet next to the radar
+        surface.blit(rotated, rotated.get_rect(center=c))
+
+    _prev_c = centers[0]
+    _next_c = centers[-1]
+    _title_char_centers = centers[2:-2]
 
     hit = band + theme.s(14)
     _prev_rect = pygame.Rect(0, 0, hit, hit)
     _prev_rect.center = _prev_c
     _next_rect = pygame.Rect(0, 0, hit, hit)
     _next_rect.center = _next_c
-    bounds = pygame.Rect(0, 0, total + theme.s(28), band + theme.s(12))
-    bounds.center = (cx, y)
+    xs = [c[0] for c in centers]
+    ys = [c[1] for c in centers]
+    bounds = pygame.Rect(
+        min(xs) - band, min(ys) - band,
+        (max(xs) - min(xs)) + 2 * band, (max(ys) - min(ys)) + 2 * band,
+    )
     return bounds
