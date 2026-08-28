@@ -1194,7 +1194,7 @@ def _display_layout(page: int, scroll_offset: int = 0) -> tuple[int, int, int]:
 
 def _in_settings_body(y: int) -> bool:
     """True when y sits inside the scrolling body band rows are clipped to."""
-    return nav.content_top_y(has_dots=True) <= y <= nav.content_bottom_y()
+    return nav.content_top_y(has_dots=True) <= y <= nav.curved_content_bottom_y()
 
 
 def slider_drag_band_contains(
@@ -1217,7 +1217,7 @@ def display_row_at(x: int, y: int, page: int, scroll_offset: int = 0) -> int | N
     row_y, row_h, count = _display_layout(page, scroll_offset)
     body_font = _display_font()
     top = nav.content_top_y(has_dots=True)
-    bottom = nav.content_bottom_y()
+    bottom = nav.curved_content_bottom_y()
     actions = _row_actions(page)
     for i in range(count):
         if actions[i] in (
@@ -2344,7 +2344,7 @@ def draw_info(
 
     body_font = _display_font()
     top = nav.content_top_y(has_dots=True)
-    bottom = nav.content_bottom_y()
+    bottom = nav.curved_content_bottom_y()
     max_scroll = 0
 
     if page == PAGE_MAIN:
