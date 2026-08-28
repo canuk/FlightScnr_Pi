@@ -391,7 +391,7 @@ def _basemap_render_scale(
         return 1.0
     if scale_index < 0 or scale_index >= len(scale.SCALE_BANDS):
         return 1.0
-    outer_km = scale.SCALE_BANDS[scale_index]["label_km"]
+    outer_km = scale.bands()[scale_index]["label_km"]
     target_m_per_px = outer_km * 1000.0 / theme.GRID_OUTER_RADIUS
     if target_m_per_px <= 0:
         return 1.0
@@ -841,7 +841,7 @@ def _build_background(scale_index: int, style: str | None = None) -> pygame.Surf
     if provider == "black":
         return _build_flat_black_background()
     home_lat, home_lon = LOCATION_HOME[0], LOCATION_HOME[1]
-    outer_km = scale.SCALE_BANDS[scale_index]["label_km"]
+    outer_km = scale.bands()[scale_index]["label_km"]
     px_per_km = theme.GRID_OUTER_RADIUS / outer_km
     zoom = _zoom_for_scale(home_lat, px_per_km, provider)
     render_scale = _basemap_render_scale(home_lat, scale_index, zoom, provider)
@@ -1168,7 +1168,7 @@ def _basemap_zoom_for_home(home_lat: float) -> int | None:
     idx = scale.active_index()
     if idx < 0 or idx >= len(scale.SCALE_BANDS):
         return None
-    outer_km = scale.SCALE_BANDS[idx]["label_km"]
+    outer_km = scale.bands()[idx]["label_km"]
     px_per_km = theme.GRID_OUTER_RADIUS / outer_km
     return _zoom_for_scale(home_lat, px_per_km, _resolved_style())
 
