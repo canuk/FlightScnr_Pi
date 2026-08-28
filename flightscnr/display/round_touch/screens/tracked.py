@@ -1210,7 +1210,7 @@ def draw_tracked(
     trail = ["Radar", "Track"]
     if display_id and display_id != "—":
         trail.append(display_id)
-    nav.draw_breadcrumb(surface, trail)
+    nav.draw_curved_breadcrumb(surface, trail)
 
     top = nav.content_top_y()
     # Compact title — two-column header should not dominate the round face.

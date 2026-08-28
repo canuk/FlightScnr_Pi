@@ -61,7 +61,7 @@ def draw_update_notes(surface, scroll_offset: int = 0) -> int:
     line_gap = theme.s(2)
     para_gap = theme.s(8)
 
-    nav.draw_breadcrumb(surface, ["Radar", "Update"])
+    nav.draw_curved_breadcrumb(surface, ["Radar", "Update"])
     nav.draw_footer_buttons(surface, list(FOOTER_BUTTONS))
 
     title = _title()
