@@ -31,6 +31,10 @@ os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
 
 pygame.init()
 try:
+    pygame.display.set_mode((1, 1))
+except pygame.error:
+    pass
+try:
     pygame.font.init()
     _FONT_OK = bool(pygame.font.get_init())
 except Exception:
