@@ -1358,6 +1358,20 @@ class Overhead:
                         dump_entries = []
                         logger.warning("dump1090 fetch raised: %s", exc)
                     stats["dump1090_raw"] = len(dump_entries)
+                    # Antenna coverage rose: bin this cycle's local positions.
+                    if dump_entries:
+                        try:
+                            from utilities import coverage_histogram
+
+                            coverage_histogram.record(
+                                dump_entries,
+                                LOCATION_DEFAULT[0],
+                                LOCATION_DEFAULT[1],
+                            )
+                        except Exception:
+                            logger.debug(
+                                "coverage histogram update failed", exc_info=True
+                            )
                 else:
                     stats["dump1090_raw"] = 0
 
