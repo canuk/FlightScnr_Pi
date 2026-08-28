@@ -141,16 +141,22 @@ def finish_detail_scroll(
     content_end: int,
     scroll_offset: int,
     clip_prev,
+    curved: bool = False,
 ) -> int:
-    """Restore clip, draw the overflow scrollbar, and return max_scroll."""
+    """Restore clip, draw the overflow scroll cue, and return max_scroll."""
     surface.set_clip(clip_prev)
     content_h = (content_end + scroll_offset) - chrome_top + theme.s(8)
     viewport = max(0, bottom - chrome_top)
     max_scroll = max(0, int(content_h) - viewport)
     if max_scroll > 0:
-        nav.draw_scroll_overflow_cues(
-            surface, chrome_top, bottom, scroll_offset, max_scroll
-        )
+        if curved:
+            nav.draw_curved_scroll_arc(
+                surface, scroll_offset, max_scroll, viewport_h=max(1, viewport)
+            )
+        else:
+            nav.draw_scroll_overflow_cues(
+                surface, chrome_top, bottom, scroll_offset, max_scroll
+            )
     return max_scroll
 
 

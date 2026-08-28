@@ -877,6 +877,7 @@ def display_json():
             "radar_hud_position": settings.radar_hud_position(),
             "radar_hud_opacity": settings.radar_hud_opacity(),
             "radar_hud_dark": settings.radar_hud_dark(),
+            "background_texture": settings.background_texture(),
             "radar_zoom_buttons": settings.radar_zoom_buttons(),
             "radar_zoom_position": settings.radar_zoom_position(),
             "hourly_chime_enabled": settings.hourly_chime_enabled(),
@@ -932,6 +933,8 @@ def display_save():
             return jsonify({"message": "radar_hud_opacity must be a number"}), 400
     if "radar_hud_dark" in data:
         settings.set_radar_hud_dark(bool(data.get("radar_hud_dark")))
+    if "background_texture" in data:
+        settings.set_background_texture(bool(data.get("background_texture")))
     if "radar_zoom_buttons" in data:
         settings.set_radar_zoom_buttons(bool(data.get("radar_zoom_buttons")))
     if "radar_zoom_position" in data:
@@ -984,6 +987,7 @@ def display_save():
             "radar_hud_position": settings.radar_hud_position(),
             "radar_hud_opacity": settings.radar_hud_opacity(),
             "radar_hud_dark": settings.radar_hud_dark(),
+            "background_texture": settings.background_texture(),
             "radar_zoom_buttons": settings.radar_zoom_buttons(),
             "radar_zoom_position": settings.radar_zoom_position(),
             "hourly_chime_enabled": settings.hourly_chime_enabled(),

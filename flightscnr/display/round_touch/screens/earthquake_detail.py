@@ -33,13 +33,7 @@ def footer_labels(quakes) -> tuple[str, ...]:
 
 
 def tap_footer_action(x: int, y: int, quakes) -> str | None:
-    labels = footer_labels(quakes)
-    idx = nav.tap_footer_button(x, y, len(labels))
-    if idx is None:
-        return None
-    if not quakes:
-        return "radar"
-    return ("prev", "next", "radar")[idx]
+    return nav.curved_footer_hit(x, y, list(footer_labels(quakes)))
 
 
 def _fmt_mag(quake: dict) -> str:
@@ -145,7 +139,7 @@ def _quake_rows(
 def draw_earthquake_detail(
     surface, quakes, selected_index, scroll_offset: int = 0
 ) -> int:
-    draw.fill_background(surface)
+    draw.fill_background_textured(surface)
     title_font = draw.load_font(theme.s(18), bold=True)
     body_font = draw.load_font(theme.s(14))
     detail_font = draw.load_font(theme.s(13))
@@ -154,8 +148,8 @@ def draw_earthquake_detail(
     bottom = nav.content_bottom_y()
 
     if not quakes:
-        nav.draw_breadcrumb(surface, ["Radar", "Quake"])
-        nav.draw_footer_buttons(surface, list(FOOTER_EMPTY))
+        nav.draw_curved_breadcrumb(surface, ["Radar", "Quake"])
+        nav.draw_curved_footer(surface, list(FOOTER_EMPTY))
         common.draw_center_row(
             surface, "No earthquakes", chrome_top, body_font, theme.MUTED
         )
@@ -164,8 +158,8 @@ def draw_earthquake_detail(
     idx = max(0, min(selected_index, len(quakes) - 1))
     quake = quakes[idx]
     crumb = _fmt_mag(quake)
-    nav.draw_breadcrumb(surface, ["Radar", "Quake", crumb])
-    nav.draw_page_dots(surface, idx, len(quakes), active_color=theme.LABEL)
+    nav.draw_curved_breadcrumb(surface, ["Radar", "Quake", crumb])
+    nav.draw_curved_page_dots(surface, idx, len(quakes), active_color=theme.LABEL)
 
     rows = _quake_rows(quake, title_font, body_font, detail_font)
     map_path = (quake.get("map_path") or "").strip()
@@ -206,9 +200,10 @@ def draw_earthquake_detail(
             content_end=y,
             scroll_offset=scroll_offset,
             clip_prev=clip_prev,
+            curved=True,
         )
 
-    nav.draw_footer_buttons(surface, list(FOOTER_BUTTONS))
+    nav.draw_curved_footer(surface, list(FOOTER_BUTTONS))
     return max_scroll
 
 

@@ -29,13 +29,7 @@ def footer_labels(flights) -> tuple[str, ...]:
 
 
 def tap_footer_action(x: int, y: int, flights) -> str | None:
-    labels = footer_labels(flights)
-    idx = nav.tap_footer_button(x, y, len(labels))
-    if idx is None:
-        return None
-    if not flights:
-        return "radar"
-    return ("prev", "next", "radar")[idx]
+    return nav.curved_footer_hit(x, y, list(footer_labels(flights)))
 
 
 def _vessel_rows(f: dict, title_font, body_font, detail_font) -> list[tuple[str, object, tuple]]:
@@ -157,7 +151,7 @@ def _flight_rows(
 
 
 def draw_flight_detail(surface, flights, selected_index, scroll_offset: int = 0) -> int:
-    draw.fill_background(surface)
+    draw.fill_background_textured(surface)
     # Slightly smaller type so photo + details fit the round viewport.
     title_font = draw.load_font(theme.s(18), bold=True)
     body_font = draw.load_font(theme.s(14))
@@ -167,8 +161,8 @@ def draw_flight_detail(surface, flights, selected_index, scroll_offset: int = 0)
     bottom = nav.content_bottom_y()
 
     if not flights:
-        nav.draw_breadcrumb(surface, ["Radar", "Detail"])
-        nav.draw_footer_buttons(surface, list(FOOTER_EMPTY))
+        nav.draw_curved_breadcrumb(surface, ["Radar", "Detail"])
+        nav.draw_curved_footer(surface, list(FOOTER_EMPTY))
         common.draw_center_row(surface, "No traffic", chrome_top, body_font, theme.MUTED)
         return 0
 
@@ -180,10 +174,10 @@ def draw_flight_detail(surface, flights, selected_index, scroll_offset: int = 0)
         if is_vessel
         else display_flight_id_for_flight(f)
     )
-    nav.draw_breadcrumb(
+    nav.draw_curved_breadcrumb(
         surface, ["Radar", "Vessel" if is_vessel else "Flight", crumb]
     )
-    nav.draw_page_dots(surface, idx, len(flights), active_color=theme.LABEL)
+    nav.draw_curved_page_dots(surface, idx, len(flights), active_color=theme.LABEL)
 
     rows = (
         _vessel_rows(f, title_font, body_font, detail_font)
@@ -215,7 +209,8 @@ def draw_flight_detail(surface, flights, selected_index, scroll_offset: int = 0)
             content_end=y,
             scroll_offset=scroll_offset,
             clip_prev=clip_prev,
+            curved=True,
         )
 
-    nav.draw_footer_buttons(surface, list(FOOTER_BUTTONS))
+    nav.draw_curved_footer(surface, list(FOOTER_BUTTONS))
     return max_scroll

@@ -21,7 +21,6 @@ from version import APP_VERSION
 
 FOOTER_BUTTONS = ("next", "radar")
 # Nudge below the live version line; use default footer slot size (same as Settings).
-_FOOTER_Y_OFFSET = theme.s(16)
 
 _BOOT_DIR = os.path.normpath(
     os.path.join(
@@ -44,15 +43,7 @@ _layout: dict | None = None
 
 
 def tap_footer_action(x: int, y: int) -> str | None:
-    idx = nav.tap_footer_button(
-        x,
-        y,
-        len(FOOTER_BUTTONS),
-        y_offset=_FOOTER_Y_OFFSET,
-    )
-    if idx is None:
-        return None
-    return FOOTER_BUTTONS[idx]
+    return nav.curved_footer_hit(x, y, list(FOOTER_BUTTONS))
 
 
 def _load_layout() -> dict:
@@ -168,7 +159,7 @@ def _draw_version_with_update(
 
 def draw_details(surface, boot_splash=False, scroll_offset: int = 0) -> int:
     del scroll_offset
-    surface.fill((0, 0, 0))
+    draw.fill_background_textured(surface)
 
     brand = _brand_surface()
     if brand is None:
@@ -184,10 +175,6 @@ def draw_details(surface, boot_splash=False, scroll_offset: int = 0) -> int:
     if boot_splash:
         return 0
 
-    nav.draw_breadcrumb(surface, ["Radar", "About"])
-    nav.draw_footer_buttons(
-        surface,
-        list(FOOTER_BUTTONS),
-        y_offset=_FOOTER_Y_OFFSET,
-    )
+    nav.draw_curved_breadcrumb(surface, ["Radar", "About"])
+    nav.draw_curved_footer(surface, list(FOOTER_BUTTONS))
     return 0

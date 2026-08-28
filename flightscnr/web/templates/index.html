@@ -536,6 +536,10 @@
                 <label for="radar_hud_dark">HUD dark mode</label>
                 <span class="switch"><input id="radar_hud_dark" type="checkbox"><span class="track"></span></span>
             </div>
+            <div class="chk">
+                <label for="background_texture">Background texture</label>
+                <span class="switch"><input id="background_texture" type="checkbox" checked><span class="track"></span></span>
+            </div>
             <label for="radar_hud_position">Radar HUD position</label>
             <select id="radar_hud_position">
                 <option value="top">Top</option>
@@ -1324,6 +1328,7 @@ async function loadAll() {
         }
         if ($("radar_hud")) $("radar_hud").checked = d.radar_hud_enabled !== false;
         if ($("radar_hud_dark")) $("radar_hud_dark").checked = !!d.radar_hud_dark;
+        if ($("background_texture")) $("background_texture").checked = d.background_texture !== false;
         if ($("radar_zoom_buttons")) $("radar_zoom_buttons").checked = d.radar_zoom_buttons !== false;
         if ($("radar_zoom_position")) $("radar_zoom_position").value = d.radar_zoom_position || "right";
         if ($("radar_hud_position")) $("radar_hud_position").value = d.radar_hud_position === "bottom" ? "bottom" : "top";
@@ -1950,6 +1955,7 @@ async function saveAndReloadSettings() {
                     : "digital",
                 radar_hud_enabled: $("radar_hud") ? $("radar_hud").checked : true,
                 radar_hud_dark: $("radar_hud_dark") ? $("radar_hud_dark").checked : false,
+                background_texture: $("background_texture") ? $("background_texture").checked : true,
                 radar_zoom_buttons: $("radar_zoom_buttons") ? $("radar_zoom_buttons").checked : true,
                 radar_zoom_position: $("radar_zoom_position") ? $("radar_zoom_position").value : "right",
                 radar_hud_position: $("radar_hud_position") ? $("radar_hud_position").value : "top",

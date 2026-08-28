@@ -10,6 +10,7 @@
 """Drawing helpers for round FlightScnr-style screens."""
 
 import math
+import os
 import pygame
 
 from display.round_touch import theme
@@ -372,6 +373,73 @@ def fill_background(surface: pygame.Surface):
     surface.fill(theme.BG)
 
 
+# Settings / detail screens get a barely-there contour texture (see
+# assets/patterns/ATTRIBUTION.md). Composed once per dial size; the radar,
+# clocks, and other full-art screens keep the plain fill.
+_TEXTURE_ALPHA = 18  # white tile over the near-black BG → lines land ≈ RGB 13-26
+_texture_bg: pygame.Surface | None = None
+_texture_bg_size = 0
+
+
+def _textured_bg_surface() -> pygame.Surface | None:
+    global _texture_bg, _texture_bg_size
+    if _texture_bg is not None and _texture_bg_size == theme.SIZE:
+        return _texture_bg
+    path = os.path.join(
+        os.path.dirname(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        ),
+        "assets", "patterns", "topography.png",
+    )
+    try:
+        # PIL load (same route as buttons.py): pygame's own loader lacks
+        # extended-format support in some builds.
+        from PIL import Image
+
+        img = Image.open(path).convert("RGBA")
+        tile = pygame.image.frombuffer(img.tobytes(), img.size, "RGBA")
+        try:
+            tile = tile.convert_alpha()
+        except pygame.error:
+            pass
+    except Exception:
+        return None
+    tile.set_alpha(_TEXTURE_ALPHA)
+    bg = pygame.Surface((theme.SIZE, theme.SIZE))
+    bg.fill(theme.BG)
+    tw, th = tile.get_size()
+    if tw <= 0 or th <= 0:
+        return None
+    for x in range(0, theme.SIZE, tw):
+        for y in range(0, theme.SIZE, th):
+            bg.blit(tile, (x, y))
+    _texture_bg = bg
+    _texture_bg_size = theme.SIZE
+    return bg
+
+
+def invalidate_background_texture() -> None:
+    """Drop the composed texture cache (setting change / theme size change)."""
+    global _texture_bg, _texture_bg_size
+    _texture_bg = None
+    _texture_bg_size = 0
+
+
+def fill_background_textured(surface: pygame.Surface):
+    """Plain background plus the subtle topo texture; silent plain fallback."""
+    surface.fill(theme.BG)
+    try:
+        from display.round_touch import settings
+
+        if not settings.background_texture():
+            return
+    except Exception:
+        pass
+    bg = _textured_bg_surface()
+    if bg is not None and surface.get_size() == bg.get_size():
+        surface.blit(bg, (0, 0))
+
+
 def _timeout_ring_geom(
     surface: pygame.Surface,
     *,
@@ -458,24 +526,61 @@ def draw_timeout_ring(
     geom = _timeout_ring_geom(surface, rotation_deg=rotation_deg, origin=origin)
     if geom is None:
         return
-    cx, cy, r, width, start = geom
+    cx, cy, r, width, _start = geom
+
+    # Rasterize in LOGICAL orientation on an overlay, then rotate the overlay
+    # by the (90°-multiple) display rotation. pygame's thick-line rasterizer is
+    # not rotation-equivariant, so drawing at rotation-shifted angles produced
+    # slightly different pixels than the rotate-the-whole-frame path — the ring
+    # visibly "flexed" whenever full draws and ring-only ticks alternated
+    # (e.g. while scrolling settings). Rotating the finished overlay is an
+    # exact pixel remap, so both paths now emit identical rings.
+    side = min(surface.get_width(), surface.get_height())
+    if origin is not None:
+        side = theme.SIZE
+    overlay = _timeout_ring_overlay(side)
+    overlay.fill((0, 0, 0, 0))
+    start = -math.pi / 2
+    ocx = ocy = side * 0.5
 
     if remaining_fraction >= 0.999:
-        pygame.draw.circle(surface, theme.SWEEP, (int(cx), int(cy)), int(round(r)), width)
-        return
-
-    sweep = 2 * math.pi * remaining_fraction
-    # ~3 px along the arc — dense enough to look smooth, cheap on the Pi.
-    steps = max(32, int(math.ceil(r * sweep / 3.0)))
-    points = [
-        (
-            cx + r * math.cos(start + sweep * i / steps),
-            cy + r * math.sin(start + sweep * i / steps),
+        pygame.draw.circle(
+            overlay, theme.SWEEP, (int(ocx), int(ocy)), int(round(r)), width
         )
-        for i in range(steps + 1)
-    ]
-    if len(points) >= 2:
-        pygame.draw.lines(surface, theme.SWEEP, False, points, width)
+    else:
+        sweep = 2 * math.pi * remaining_fraction
+        # ~3 px along the arc — dense enough to look smooth, cheap on the Pi.
+        steps = max(32, int(math.ceil(r * sweep / 3.0)))
+        points = [
+            (
+                ocx + r * math.cos(start + sweep * i / steps),
+                ocy + r * math.sin(start + sweep * i / steps),
+            )
+            for i in range(steps + 1)
+        ]
+        if len(points) >= 2:
+            pygame.draw.lines(overlay, theme.SWEEP, False, points, width)
+
+    rot = int(rotation_deg) % 360
+    if rot:
+        overlay = pygame.transform.rotate(overlay, -rot)
+    surface.blit(
+        overlay,
+        (int(round(cx - overlay.get_width() * 0.5)),
+         int(round(cy - overlay.get_height() * 0.5))),
+    )
+
+
+_ring_overlay_cache: dict[int, pygame.Surface] = {}
+
+
+def _timeout_ring_overlay(side: int) -> pygame.Surface:
+    cached = _ring_overlay_cache.get(side)
+    if cached is None:
+        cached = pygame.Surface((side, side), pygame.SRCALPHA)
+        _ring_overlay_cache.clear()
+        _ring_overlay_cache[side] = cached
+    return cached
 
 _bezel_overlay = None
 _bezel_key = None

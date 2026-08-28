@@ -369,6 +369,8 @@ _defaults = {
     "radar_hud_position": "top",
     "radar_hud_opacity": 72,
     "radar_hud_dark": True,
+    # Topo contour texture behind settings/detail screens.
+    "background_texture": True,
     # Faint − / + range-step buttons on the radar rim.
     "radar_zoom_buttons": True,
     # right | left — which rim edge holds the zoom pill.
@@ -1161,6 +1163,7 @@ def _settings_snapshot(state: dict) -> tuple:
         str(state.get("radar_hud_position") or "top"),
         clamp_radar_hud_opacity(state.get("radar_hud_opacity", 72)),
         bool(state.get("radar_hud_dark", True)),
+        bool(state.get("background_texture", True)),
         bool(state.get("radar_zoom_buttons", True)),
         str(state.get("radar_zoom_position") or "right"),
         bool(radar_hud_arrange_debug_enabled()),
@@ -2594,6 +2597,21 @@ def set_radar_hud_opacity(value: int, *, persist: bool = True) -> int:
     else:
         _disk_synced = False
     return pct
+
+
+def background_texture() -> bool:
+    """Subtle topo contour texture behind settings/detail screens."""
+    return bool(_state.get("background_texture", True))
+
+
+def set_background_texture(enabled: bool) -> None:
+    _state["background_texture"] = bool(enabled)
+    _save(_state)
+
+
+def toggle_background_texture() -> bool:
+    set_background_texture(not background_texture())
+    return background_texture()
 
 
 def radar_hud_dark() -> bool:

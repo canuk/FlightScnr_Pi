@@ -1730,6 +1730,9 @@ class RoundTouchDisplay:
         elif action == "radar_hud":
             settings.toggle_radar_hud_enabled()
             radar.invalidate_frame_layer()
+        elif action == "background_texture":
+            settings.toggle_background_texture()
+            draw.invalidate_background_texture()
         elif action == "airport_icon_style":
             self._open_atc_picker("airport_icon_style")
         elif action == "airport_size":
@@ -3368,6 +3371,15 @@ class RoundTouchDisplay:
         self.input.consume_scroll_drag()
         return changed
 
+    def _breadcrumb_tapped(self, x: int, y: int) -> bool:
+        """Screen-aware breadcrumb hit: curved band on curved-chrome screens."""
+        if self.screen in (
+            SCREEN_SETTINGS, SCREEN_DETAILS, SCREEN_FLIGHT, SCREEN_FIRE, SCREEN_QUAKE,
+            SCREEN_CLOCK,
+        ):
+            return nav.tap_breadcrumb_curved(x, y)
+        return nav.tap_breadcrumb(x, y)
+
     def _handle_settings_tap(self, x: int | None = None, y: int | None = None):
         if (
             self.settings_page
@@ -3686,7 +3698,7 @@ class RoundTouchDisplay:
                 self._apply_scroll_delta(delta)
         if tap and not theme.in_visible_circle(tap[0], tap[1]):
             tap = None
-        if tap and nav.tap_breadcrumb(tap[0], tap[1]) and self.screen != SCREEN_RADAR:
+        if tap and self._breadcrumb_tapped(tap[0], tap[1]) and self.screen != SCREEN_RADAR:
             if self.screen in (SCREEN_TRACKED, SCREEN_LIVE):
                 self._return_to_radar()
             elif self.screen == SCREEN_FORECAST:
