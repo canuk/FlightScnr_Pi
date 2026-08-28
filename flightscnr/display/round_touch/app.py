@@ -3697,12 +3697,6 @@ class RoundTouchDisplay:
         elif swipe == input_handler.SWIPE_LEFT and self.screen == SCREEN_FLIEGER_CLOCK:
             self._open_screen(SCREEN_MOON)
             self._safe_draw()
-        elif swipe == input_handler.SWIPE_LEFT and self.screen == SCREEN_MOON:
-            self._open_screen(SCREEN_COVERAGE)
-            self._safe_draw()
-        elif swipe == input_handler.SWIPE_RIGHT and self.screen == SCREEN_COVERAGE:
-            self._open_screen(SCREEN_MOON)
-            self._safe_draw()
         elif swipe == input_handler.SWIPE_RIGHT and self.screen == SCREEN_MOON:
             self._open_screen(SCREEN_FLIEGER_CLOCK)
             self._safe_draw()
@@ -3720,7 +3714,6 @@ class RoundTouchDisplay:
             SCREEN_ANALOG_NIGHT,
             SCREEN_FLIEGER_CLOCK,
             SCREEN_MOON,
-            SCREEN_COVERAGE,
         ):
             self._return_to_radar()
             self._safe_draw()
