@@ -90,6 +90,18 @@ class TestPlacement:
         assert prev_c[1] > theme.CENTER_Y
 
 
+class TestCurvature:
+    @pytest.mark.skipif(not _FONT_OK, reason="pygame.font unavailable")
+    def test_title_follows_the_arc(self):
+        lofi_controls.draw(_surface())
+        centers = lofi_controls._title_char_centers
+        assert len(centers) >= 3
+        ys = [c[1] for c in centers]
+        # On the bottom bowl the end characters ride higher than the middle.
+        assert max(ys) - min(ys) >= 2
+        assert ys[0] < max(ys) and ys[-1] < max(ys)
+
+
 class TestHits:
     def test_buttons_hit_prev_and_next(self):
         lofi_controls.draw(_surface())
