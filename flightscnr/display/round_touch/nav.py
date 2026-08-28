@@ -708,7 +708,7 @@ def draw_lines_scrolled(
 
 from display.round_touch import arc_ui  # noqa: E402  (kept near its users)
 
-_CURVED_FOOTER_ORDER = ("prev", "radar", "next")  # screen left → right
+_CURVED_FOOTER_ORDER = ("prev", "radar", "back", "next")  # screen left → right
 
 
 def __getattr__(name: str):
@@ -757,6 +757,9 @@ def curved_footer_segments(kinds: list[str]) -> list[tuple[str, float, float]]:
             out.append((kind, bottom + offset, side_half))
         elif kind == "next":
             out.append((kind, bottom - offset, side_half))
+        elif kind == "back":
+            # Standalone back pill sits at the exact bottom of the rim.
+            out.append((kind, bottom, side_half))
     return out
 
 
@@ -794,7 +797,7 @@ def _fallback_radar_glyph(size: int, glyph_color) -> pygame.Surface:
     return icon
 
 
-_FOOTER_LABELS = {"prev": "Prev", "next": "Next"}
+_FOOTER_LABELS = {"prev": "Prev", "next": "Next", "back": "Back"}
 
 
 def draw_curved_footer(surface: pygame.Surface, kinds: list[str]) -> None:

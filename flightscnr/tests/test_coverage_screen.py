@@ -480,23 +480,22 @@ class TestCoverageScreen:
         from display.round_touch.screens import coverage
 
         coverage._reset_for_tests()
-        # Default on entry: Local · Last 24 h.
+        # Default on entry: Local · Last 24 h. All-time was dropped — the
+        # 24 h picture is the interesting one for a diagnostic screen.
         assert coverage.active_view() == coverage.VIEW_LOCAL_24H
         assert coverage.stats_view_active() is False
         assert coverage.handle_tap() is True
-        assert coverage.active_view() == coverage.VIEW_LOCAL_ALL
-        assert coverage.stats_view_active() is False
-        coverage.handle_tap()
         assert coverage.active_view() == coverage.VIEW_STATS
         assert coverage.stats_view_active() is True
         coverage.handle_tap()
         assert coverage.active_view() == coverage.VIEW_LOCAL_24H
+        assert not hasattr(coverage, "VIEW_LOCAL_ALL")
 
     def test_view_labels_include_local(self):
         from display.round_touch.screens import coverage
 
         assert coverage.view_label(coverage.VIEW_LOCAL_24H) == "Local · Last 24 h"
-        assert coverage.view_label(coverage.VIEW_LOCAL_ALL) == "Local · All-time"
+        assert coverage.view_label(coverage.VIEW_STATS) == "Stats"
 
     @pytest.mark.skipif(not _FONTS_OK, reason="pygame.font unavailable in this env")
     def test_stats_view_draws(self):
@@ -517,3 +516,65 @@ class TestBreadcrumbLabelClearance:
         assert coverage._under_breadcrumb(-math.pi / 8 % (2 * math.pi))  # NNW
         assert not coverage._under_breadcrumb(math.pi / 4)   # NE stays
         assert not coverage._under_breadcrumb(math.pi)       # S stays
+
+
+class TestSettingsEntry:
+    """Coverage moved off the clock swipe chain into Settings › Main."""
+
+    def test_swipe_chain_no_longer_reaches_coverage(self):
+        import inspect
+
+        from display.round_touch import app as app_mod
+
+        src = inspect.getsource(app_mod)
+        assert "SCREEN_MOON:\n            self._open_screen(SCREEN_COVERAGE)" not in src
+
+    def test_breadcrumb_returns_to_settings(self):
+        import inspect
+
+        from display.round_touch import app as app_mod
+
+        src = inspect.getsource(app_mod)
+        assert "self.screen == SCREEN_COVERAGE" in src
+        assert "adsb_coverage_hit" in src
+
+    def test_nav_back_footer_kind(self):
+        from display.round_touch import nav
+
+        segs = nav.curved_footer_segments(["back"])
+        assert [k for k, _m, _h in segs] == ["back"]
+        import math as _m
+
+        kind = nav.curved_footer_hit(
+            nav.theme.CENTER_X,
+            nav.theme.CENTER_Y + int(nav.theme.VISIBLE_RADIUS * 0.84),
+            ["back"],
+        )
+        assert kind == "back"
+
+    @pytest.mark.skipif(not _FONTS_OK, reason="pygame.font unavailable in this env")
+    def test_settings_main_shows_adsb_button_when_receiver_on(self, monkeypatch):
+        import pygame
+
+        from display.round_touch import theme
+        from display.round_touch.screens import coverage, info
+
+        monkeypatch.setattr(coverage, "receiver_enabled", lambda: True)
+        surface = pygame.Surface((theme.SIZE, theme.SIZE))
+        info.draw_info(surface, info.PAGE_MAIN)
+        rect = info._adsb_button_rect
+        assert rect is not None
+        assert info.adsb_coverage_hit(rect.centerx, rect.centery) is True
+
+    @pytest.mark.skipif(not _FONTS_OK, reason="pygame.font unavailable in this env")
+    def test_settings_main_hides_adsb_button_without_receiver(self, monkeypatch):
+        import pygame
+
+        from display.round_touch import theme
+        from display.round_touch.screens import coverage, info
+
+        monkeypatch.setattr(coverage, "receiver_enabled", lambda: False)
+        surface = pygame.Surface((theme.SIZE, theme.SIZE))
+        info.draw_info(surface, info.PAGE_MAIN)
+        assert info._adsb_button_rect is None
+        assert info.adsb_coverage_hit(theme.CENTER_X, theme.CENTER_Y) is False
