@@ -58,3 +58,39 @@ class TestLofiTracksEndpoint:
     def test_toggle_rejects_bad_name(self, client):
         r = client.post("/lofi/toggle_disabled", json={"name": "../evil.mp3"})
         assert r.status_code == 400
+
+
+class TestLofiCoverEndpoint:
+    @staticmethod
+    def _make_track(name, *, art=None):
+        from utilities import lofi_audio
+
+        os.makedirs(lofi_audio.PLAYLIST_DIR, exist_ok=True)
+        path = os.path.join(lofi_audio.PLAYLIST_DIR, name)
+        with open(path, "wb") as fh:
+            fh.write(b"\xff\xfb\x90\x00" + b"\x00" * 64)
+        if art is not None:
+            from mutagen.id3 import APIC, ID3
+
+            tags = ID3()
+            tags.add(APIC(encoding=3, mime="image/png", type=3,
+                          desc="Cover", data=art))
+            tags.save(path)
+        return path
+
+    def test_cover_returns_embedded_art(self, client):
+        png = (b"\x89PNG\r\n\x1a\n" + b"\x00" * 20)
+        self._make_track("cover-test.mp3", art=png)
+        r = client.get("/lofi/cover/cover-test.mp3")
+        assert r.status_code == 200
+        assert r.data == png
+        assert r.mimetype == "image/png"
+
+    def test_cover_404_when_no_art(self, client):
+        self._make_track("bare-test.mp3")
+        r = client.get("/lofi/cover/bare-test.mp3")
+        assert r.status_code == 404
+
+    def test_cover_404_for_unknown_track(self, client):
+        r = client.get("/lofi/cover/nope.mp3")
+        assert r.status_code == 404
