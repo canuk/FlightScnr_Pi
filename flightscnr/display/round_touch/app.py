@@ -4600,6 +4600,14 @@ class RoundTouchDisplay:
         and never beat a fire that already wins the fire-vs-flight bias.
         Earthquakes use the same bias as fires; a fire still wins when both hit.
         """
+        from display.round_touch import airport_tile
+
+        if airport_tile.hit(x, y):
+            # Tap on the METAR tile itself dismisses it.
+            airport_tile.dismiss()
+            radar.invalidate_frame_layer()
+            self._note_activity()
+            return True
         flight, flight_d2 = radar.pick_flight_at(self._radar_flights(), x, y, alt_x, alt_y)
         fire, fire_d2 = wildfire_overlay.pick_fire_at(x, y, alt_x, alt_y)
         quake, quake_d2 = earthquake_overlay.pick_quake_at(x, y, alt_x, alt_y)
@@ -4630,11 +4638,20 @@ class RoundTouchDisplay:
             airport_overlay.clear_callout()
             return self._open_picked_flight(flight)
         if airport is not None:
-            airport_overlay.show_callout(airport)
+            from display.round_touch import airport_tile
+
+            airport_tile.open_tile(airport)
             radar.invalidate_frame_layer()
             self._note_activity()
             return True
         airport_overlay.clear_callout()
+        from display.round_touch import airport_tile
+
+        if airport_tile.is_open():
+            airport_tile.dismiss()
+            radar.invalidate_frame_layer()
+            self._note_activity()
+            return True
         return False
 
     def _tick_ais(self):
@@ -5175,6 +5192,11 @@ class RoundTouchDisplay:
                         radar.invalidate_frame_layer()
                         self._safe_draw()
                     if zoom_buttons.tick():
+                        radar.invalidate_frame_layer()
+                        self._safe_draw()
+                    from display.round_touch import airport_tile
+
+                    if airport_tile.tick():
                         radar.invalidate_frame_layer()
                         self._safe_draw()
                     try:
