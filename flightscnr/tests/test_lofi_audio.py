@@ -114,6 +114,73 @@ class TestCrossfadeScheduler:
         # After two full swaps the playlist wrapped to the start.
         assert s.current_track() == "a.mp3"
 
+    def test_shuffle_plays_every_track_once_per_pass(self):
+        import random
+
+        clock = FakeClock()
+        pa, pb = FakePlayer(), FakePlayer()
+        tracks = ["a.mp3", "b.mp3", "c.mp3", "d.mp3"]
+        s = lofi_audio.CrossfadeScheduler(
+            pa, pb, lambda: list(tracks), crossfade_s=5.0, clock=clock,
+            shuffle=True, rng=random.Random(7),
+        )
+        first_pass = [s._track_at(i) for i in range(4)]
+        second_pass = [s._track_at(i) for i in range(4, 8)]
+        assert sorted(first_pass) == sorted(tracks)
+        assert sorted(second_pass) == sorted(tracks)
+        # Some seed produces differing pass orders; seed 7 must too.
+        assert first_pass != tracks or second_pass != tracks
+        # Stable within a pass — repeated queries agree.
+        assert [s._track_at(i) for i in range(4)] == first_pass
+
+    def test_shuffle_consistent_across_wrap_boundary(self):
+        import random
+
+        clock = FakeClock()
+        pa, pb = FakePlayer(), FakePlayer()
+        s = lofi_audio.CrossfadeScheduler(
+            pa, pb, lambda: ["a.mp3", "b.mp3", "c.mp3"], crossfade_s=5.0,
+            clock=clock, shuffle=True, rng=random.Random(3),
+        )
+        # The "next" track computed at the end of a pass must equal the first
+        # track of the next pass — the crossfade hand-off stays truthful.
+        assert s._track_at(3) == [s._track_at(i) for i in range(3, 6)][0]
+        s._index = 2
+        nxt = s._next_track()
+        assert nxt == s._track_at(3)
+
+    def test_shuffle_resyncs_when_tracks_change(self):
+        import random
+
+        clock = FakeClock()
+        pa, pb = FakePlayer(), FakePlayer()
+        tracks = ["a.mp3", "b.mp3"]
+        s = lofi_audio.CrossfadeScheduler(
+            pa, pb, lambda: list(tracks), crossfade_s=5.0, clock=clock,
+            shuffle=True, rng=random.Random(1),
+        )
+        assert sorted(s._track_at(i) for i in range(2)) == ["a.mp3", "b.mp3"]
+        tracks.append("c.mp3")
+        assert sorted(s._track_at(i) for i in range(3)) == ["a.mp3", "b.mp3", "c.mp3"]
+
+    def test_module_scheduler_uses_shuffle(self, monkeypatch):
+        created = {}
+        real = lofi_audio.CrossfadeScheduler
+
+        def spy(*args, **kwargs):
+            created.update(kwargs)
+            return real(*args, **kwargs)
+
+        monkeypatch.setattr(lofi_audio, "CrossfadeScheduler", spy)
+        monkeypatch.setattr(lofi_audio, "MpvPlayer", lambda name: FakePlayer())
+        monkeypatch.setattr(lofi_audio, "_reap_orphans", lambda: None)
+        lofi_audio._stop_scheduler()
+        try:
+            assert lofi_audio._ensure_scheduler() is not None
+            assert created.get("shuffle") is True
+        finally:
+            lofi_audio._stop_scheduler()
+
     def test_stop_stops_both_players(self):
         s, pa, pb, clock = _sched()
         s.tick(25.0)
