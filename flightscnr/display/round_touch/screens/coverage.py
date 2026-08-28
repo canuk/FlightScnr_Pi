@@ -253,4 +253,8 @@ def draw_coverage(surface: pygame.Surface) -> None:
                 surface, hint, theme.CENTER_Y + theme.s(60), hint_font, theme.HINT
             )
 
-    nav.draw_breadcrumb(surface, ["Radar", "Coverage"])
+    # Curved breadcrumb when the curved-chrome branch is present (falls back
+    # to the straight trail when this feature merges standalone).
+    getattr(nav, "draw_curved_breadcrumb", nav.draw_breadcrumb)(
+        surface, ["Radar", "Coverage"]
+    )
