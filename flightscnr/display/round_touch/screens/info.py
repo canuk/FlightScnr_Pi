@@ -144,6 +144,18 @@ ATC_ACTIONS = (
     "output",
     "status",
 )
+def atc_actions() -> tuple[str, ...]:
+    """ATC page rows; the lofi rows hide until any tracks exist on disk."""
+    try:
+        from utilities import lofi_audio
+
+        if lofi_audio.has_tracks():
+            return ATC_ACTIONS
+    except Exception:
+        return ATC_ACTIONS
+    return tuple(a for a in ATC_ACTIONS if not a.startswith("lofi"))
+
+
 # LiveATC quiet hours — page 2 (no scroll).
 ATC_QUIET_ACTIONS = (
     "quiet",
@@ -1180,7 +1192,7 @@ def _row_actions(page: int) -> tuple[str, ...]:
     if page == PAGE_LAYERS:
         return LAYERS_ACTIONS
     if page == PAGE_ATC:
-        return ATC_ACTIONS
+        return atc_actions()
     if page == PAGE_ATC_QUIET:
         return ATC_QUIET_ACTIONS
     return ()
@@ -1653,13 +1665,13 @@ def _atc_volume_slider_metrics() -> tuple[int, int, int, int]:
 
 def atc_volume_row_index() -> int:
     try:
-        return ATC_ACTIONS.index("volume")
+        return atc_actions().index("volume")
     except ValueError:
         return -1
 
 
 def _atc_volume_slider_geometry(scroll_offset: int = 0) -> tuple[pygame.Rect, int, int] | None:
-    if "volume" not in ATC_ACTIONS:
+    if "volume" not in atc_actions():
         return None
     row_y, row_h, _ = _display_layout(PAGE_ATC, scroll_offset)
     track_w, slider_h, label_w, value_w = _atc_volume_slider_metrics()
@@ -1708,13 +1720,13 @@ def atc_volume_slider_value_at(x: int, scroll_offset: int = 0) -> int | None:
 
 def lofi_volume_row_index() -> int:
     try:
-        return ATC_ACTIONS.index("lofi_volume")
+        return atc_actions().index("lofi_volume")
     except ValueError:
         return -1
 
 
 def _lofi_volume_slider_geometry(scroll_offset: int = 0) -> tuple[pygame.Rect, int, int] | None:
-    if "lofi_volume" not in ATC_ACTIONS:
+    if "lofi_volume" not in atc_actions():
         return None
     row_y, row_h, _ = _display_layout(PAGE_ATC, scroll_offset)
     track_w, slider_h, label_w, value_w = _atc_volume_slider_metrics()
@@ -1842,7 +1854,7 @@ def _atc_row_labels() -> list[str]:
         st = atc_audio.status()
     except Exception:
         st = None
-    rows = (
+    all_rows = (
         "ATC Audio",
         "",  # volume slider
         "Background Lofi Beats",
@@ -1853,6 +1865,11 @@ def _atc_row_labels() -> list[str]:
         f"Channel › {_atc_channel_label_from_status(st)}",
         f"Output › {_atc_output_label()}",
         _atc_status_label_from_status(st),
+    )
+    # Keep rows parallel to the gated action list (lofi hides w/o tracks).
+    live = set(atc_actions())
+    rows = tuple(
+        row for action, row in zip(ATC_ACTIONS, all_rows) if action in live
     )
     _atc_rows_cache = (now, rows)
     return list(rows)
@@ -1952,7 +1969,7 @@ def _draw_atc_page(surface, scroll_offset: int, display_focus: int, top: int, bo
         display_focus,
         top,
         bottom,
-        actions=ATC_ACTIONS,
+        actions=atc_actions(),
         draw_atc_volume_slider=True,
     )
 
