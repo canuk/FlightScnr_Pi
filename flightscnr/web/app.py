@@ -1067,8 +1067,22 @@ def lofi_cover(name):
     if not pics:
         return jsonify({"message": "No cover art."}), 404
     pic = pics[0]
-    resp = app.response_class(pic.data, mimetype=pic.mime or "image/jpeg")
+    # The ID3 mime field is attacker-controlled (uploads); never echo it.
+    allowed = {
+        "image/png": "image/png",
+        "image/jpeg": "image/jpeg",
+        "image/jpg": "image/jpeg",
+        "image/gif": "image/gif",
+        "image/webp": "image/webp",
+    }
+    mime = allowed.get((pic.mime or "").lower())
+    if mime is None:
+        return jsonify({"message": "Unsupported cover type."}), 415
+    resp = app.response_class(pic.data, mimetype=mime)
     resp.headers["Cache-Control"] = "public, max-age=86400"
+    resp.headers["Content-Disposition"] = "inline; filename=cover"
+    resp.headers["X-Content-Type-Options"] = "nosniff"
+    resp.headers["Content-Security-Policy"] = "default-src 'none'; img-src 'self'"
     return resp
 
 

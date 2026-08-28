@@ -94,3 +94,22 @@ class TestLofiCoverEndpoint:
     def test_cover_404_for_unknown_track(self, client):
         r = client.get("/lofi/cover/nope.mp3")
         assert r.status_code == 404
+
+    def test_cover_refuses_non_image_mime(self, client):
+        """A hostile upload must not serve HTML from the portal origin."""
+        from mutagen.id3 import APIC, ID3
+        from utilities import lofi_audio
+
+        path = self._make_track("hostile-test.mp3")
+        tags = ID3()
+        tags.add(APIC(encoding=3, mime="text/html", type=3, desc="x",
+                      data=b"<script>alert(1)</script>"))
+        tags.save(path)
+        r = client.get("/lofi/cover/hostile-test.mp3")
+        assert r.status_code == 415
+
+    def test_cover_sets_nosniff(self, client):
+        png = (b"\x89PNG\r\n\x1a\n" + b"\x00" * 20)
+        self._make_track("sniff-test.mp3", art=png)
+        r = client.get("/lofi/cover/sniff-test.mp3")
+        assert r.headers.get("X-Content-Type-Options") == "nosniff"
