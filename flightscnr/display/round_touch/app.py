@@ -1763,6 +1763,8 @@ class RoundTouchDisplay:
             info.invalidate_atc_labels()
         elif action == "volume":
             return
+        elif action == "lofi":
+            settings.toggle_lofi_enabled()
         elif action == "quiet":
             settings.set_atc_quiet_hours_enabled(not settings.atc_quiet_hours_enabled())
         elif action == "quiet_start":
@@ -5040,6 +5042,12 @@ class RoundTouchDisplay:
                     if zoom_buttons.tick():
                         radar.invalidate_frame_layer()
                         self._safe_draw()
+                    try:
+                        from utilities import lofi_audio
+
+                        lofi_audio.app_tick()
+                    except Exception:
+                        logger.debug("Lofi tick failed", exc_info=True)
                     hourly_chime.tick()
                     self._tick_hourly_weather_refresh()
                     self._tick_manual_weather_refresh()

@@ -135,6 +135,7 @@ LAYERS_ACTIONS = (
 ATC_ACTIONS = (
     "enabled",
     "volume",
+    "lofi",
     "airport",
     "channel",
     "output",
@@ -1788,6 +1789,7 @@ def _atc_row_labels() -> list[str]:
     rows = (
         "ATC Audio",
         "",  # volume slider
+        "Lofi Bed",
         f"Airport › {_atc_airport_label()}",
         f"Channel › {_atc_channel_label_from_status(st)}",
         f"Output › {_atc_output_label()}",
@@ -1965,6 +1967,7 @@ _TOGGLE_ROW_STATE = {
     "alert_emergency": alert_prefs.emergency_enabled,
     "alert_hide_non_alerted": alert_prefs.hide_non_alerted,
     "enabled": settings.atc_enabled,
+    "lofi": settings.lofi_enabled,
     "quiet": settings.atc_quiet_hours_enabled,
 }
 
