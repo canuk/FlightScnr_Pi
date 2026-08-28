@@ -180,8 +180,12 @@ def _draw_rose(surface: pygame.Surface, snap: dict, view: str) -> None:
 
     # Compass labels around the rim.
     label_r = outer_r + label_band / 2 + theme.s(2)
+    curved_crumb = hasattr(nav, "draw_curved_breadcrumb")
     for sec, label in enumerate(cov.SECTOR_LABELS):
         a = sec * sector_w
+        # The curved breadcrumb rides the top rim — skip labels under its arc.
+        if curved_crumb and _under_breadcrumb(a):
+            continue
         x = cx + label_r * math.sin(a)
         y = cy - label_r * math.cos(a)
         color = theme.LABEL if label in ("N", "E", "S", "W") else theme.MUTED
@@ -230,6 +234,16 @@ def _draw_stats(surface: pygame.Surface, snap: dict) -> None:
         rows.append("Since: " + time.strftime("%b %d", time.localtime(snap["since"])))
     for row in rows:
         y = draw.draw_center_line(surface, row, y, body_font, theme.MUTED)
+
+
+# Compass labels within this angle of north collide with the curved
+# breadcrumb arc and are suppressed while it is shown.
+_BREADCRUMB_CLEAR_RAD = 0.55
+
+
+def _under_breadcrumb(angle_from_north: float) -> bool:
+    a = angle_from_north % (2 * math.pi)
+    return min(a, 2 * math.pi - a) < _BREADCRUMB_CLEAR_RAD
 
 
 def draw_coverage(surface: pygame.Surface) -> None:
