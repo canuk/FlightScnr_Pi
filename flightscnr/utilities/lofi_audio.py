@@ -35,6 +35,11 @@ logger = logging.getLogger(__name__)
 
 BASE_DIR = os.path.dirname(os.path.dirname(__file__))
 BUNDLED_DIR = os.path.join(BASE_DIR, "assets", "lofi")
+# Starter-pack tracks downloaded from a GitHub Release via the portal.
+# They behave like bundled tracks (play/disable, no remove).
+PACK_DIR = os.path.join(
+    os.environ.get("FLIGHTSCNR_DATA_DIR", "/var/lib/flightscnr"), "lofi-pack"
+)
 PLAYLIST_DIR = os.path.join(
     os.environ.get("FLIGHTSCNR_DATA_DIR", "/var/lib/flightscnr"), "lofi"
 )
@@ -53,11 +58,11 @@ def _disabled_names() -> set[str]:
 
 
 def playlist() -> list[str]:
-    """Bundled + user MP3s, alphabetical, minus tracks the user disabled."""
+    """Bundled + pack + user MP3s, alphabetical, minus disabled tracks."""
     disabled = _disabled_names()
     out: list[str] = []
     seen: set[str] = set()
-    for folder in (BUNDLED_DIR, PLAYLIST_DIR):
+    for folder in (BUNDLED_DIR, PACK_DIR, PLAYLIST_DIR):
         try:
             names = sorted(os.listdir(folder))
         except OSError:
@@ -77,7 +82,7 @@ def track_path(name: str) -> str | None:
     safe = safe_track_name(name)
     if safe is None:
         return None
-    for folder in (BUNDLED_DIR, PLAYLIST_DIR):
+    for folder in (BUNDLED_DIR, PACK_DIR, PLAYLIST_DIR):
         path = os.path.join(folder, safe)
         if os.path.isfile(path):
             return path
@@ -102,6 +107,61 @@ def safe_track_name(name: str) -> str | None:
     if not _re.fullmatch(r"[A-Za-z0-9 ._()\-]{1,120}\.mp3", name, _re.IGNORECASE):
         return None
     return name
+
+
+_has_tracks_cache: tuple[float, bool] | None = None
+
+
+def has_tracks(ttl: float = 5.0) -> bool:
+    """Any MP3s available at all (bundled, pack, or user)? Cached briefly —
+    the radar pill's visibility gate asks every frame."""
+    global _has_tracks_cache
+    now = time.monotonic()
+    if _has_tracks_cache is not None and ttl > 0:
+        stamp, val = _has_tracks_cache
+        if now - stamp < ttl:
+            return val
+    found = False
+    for folder in (BUNDLED_DIR, PACK_DIR, PLAYLIST_DIR):
+        try:
+            if any(n.lower().endswith(".mp3") for n in os.listdir(folder)):
+                found = True
+                break
+        except OSError:
+            continue
+    _has_tracks_cache = (now, found)
+    return found
+
+
+def install_pack_zip(zip_path: str) -> int:
+    """Extract safe MP3 entries from a starter-pack zip into PACK_DIR.
+
+    Entry paths are flattened to their basename and must pass
+    ``safe_track_name`` — hostile names are silently dropped. Returns the
+    number of tracks installed.
+    """
+    global _has_tracks_cache
+    import zipfile
+
+    count = 0
+    try:
+        with zipfile.ZipFile(zip_path) as z:
+            os.makedirs(PACK_DIR, exist_ok=True)
+            for entry in z.infolist():
+                if entry.is_dir():
+                    continue
+                safe = safe_track_name(os.path.basename(entry.filename))
+                if safe is None:
+                    continue
+                with z.open(entry) as src:
+                    data = src.read()
+                with open(os.path.join(PACK_DIR, safe), "wb") as dst:
+                    dst.write(data)
+                count += 1
+    except (OSError, zipfile.BadZipFile) as exc:
+        logger.warning("[Lofi] pack install failed: %s", exc)
+    _has_tracks_cache = None
+    return count
 
 
 def user_tracks() -> list[str]:
