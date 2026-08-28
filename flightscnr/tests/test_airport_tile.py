@@ -144,12 +144,59 @@ class TestTileState:
         assert airport_tile.tick() is True  # closed → caller invalidates
         assert not airport_tile.is_open()
 
+    def test_countdown_starts_after_fetch_completes(self, monkeypatch):
+        monkeypatch.setattr(airport_tile, "_start_fetch", lambda ident: None)
+        airport_tile.open_tile({"ident": "KSAN", "name": "San Diego", "type": "large_airport"})
+        real = time.monotonic()
+        now = {"t": real}
+        monkeypatch.setattr(airport_tile.time, "monotonic", lambda: now["t"])
+        # 15 s in, METAR still loading — the 10 s display countdown hasn't begun.
+        now["t"] = real + 15.0
+        assert airport_tile.tick() is False
+        assert airport_tile.is_open()
+        # Fetch lands; 9 s later the tile is still up, 11 s later it closes.
+        airport_tile._set_metar_for_tests({"raw": "x"}, done=True)
+        now["t"] = real + 15.0 + 9.0
+        assert airport_tile.tick() is False
+        now["t"] = real + 15.0 + 11.0
+        assert airport_tile.tick() is True
+        assert not airport_tile.is_open()
+
+    def test_hung_fetch_still_times_out(self, monkeypatch):
+        monkeypatch.setattr(airport_tile, "_start_fetch", lambda ident: None)
+        airport_tile.open_tile({"ident": "KSAN", "name": "San Diego", "type": "large_airport"})
+        real = time.monotonic()
+        monkeypatch.setattr(
+            airport_tile.time, "monotonic",
+            lambda: real + airport_tile.FETCH_CAP_S + 1.0)
+        assert airport_tile.tick() is True
+        assert not airport_tile.is_open()
+
     def test_reopen_same_airport_toggles_off(self, monkeypatch):
         monkeypatch.setattr(airport_tile, "_start_fetch", lambda ident: None)
         ap = {"ident": "KSAN", "name": "San Diego", "type": "large_airport"}
         airport_tile.open_tile(ap)
         airport_tile.open_tile(ap)
         assert not airport_tile.is_open()
+
+
+class TestTapToDismiss:
+    def test_hit_false_when_closed(self):
+        assert airport_tile.hit(360, 360) is False
+
+    @pytest.mark.skipif(not _FONT_OK, reason="pygame.font unavailable on this host")
+    def test_tap_inside_drawn_tile_hits(self, monkeypatch):
+        monkeypatch.setattr(airport_tile, "_start_fetch", lambda ident: None)
+        airport_tile.open_tile({
+            "ident": "KSAN", "name": "San Diego Intl",
+            "type": "large_airport", "x": 360, "y": 420,
+        })
+        airport_tile._set_metar_for_tests(metar.parse_api_row(_API_ROW))
+        surface = pygame.Surface((theme.SIZE, theme.SIZE), pygame.SRCALPHA)
+        rect = airport_tile.draw(surface)
+        assert rect is not None
+        assert airport_tile.hit(rect.centerx, rect.centery) is True
+        assert airport_tile.hit(rect.right + 30, rect.bottom + 30) is False
 
 
 class TestTileDraw:

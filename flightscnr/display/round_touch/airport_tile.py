@@ -29,33 +29,43 @@ from display.round_touch import theme
 
 logger = logging.getLogger("flightscnr.display")
 
-TIMEOUT_S = 14.0
+# The tile stays up 10 s after the METAR loads (or fetch settles empty);
+# FETCH_CAP_S bounds a hung fetch so the tile can never linger forever.
+TIMEOUT_S = 10.0
+FETCH_CAP_S = 20.0
 
 _airport: dict | None = None
 _metar: dict | None = None
 _fetch_done = False
+_fetch_done_at = 0.0
 _opened_at = 0.0
 _closed_reported = True
+_last_rect: "pygame.Rect | None" = None
 
 
 def _reset_for_tests() -> None:
-    global _airport, _metar, _fetch_done, _opened_at, _closed_reported
+    global _airport, _metar, _fetch_done, _fetch_done_at, _opened_at
+    global _closed_reported, _last_rect
     _airport = None
     _metar = None
     _fetch_done = False
+    _fetch_done_at = 0.0
     _opened_at = 0.0
     _closed_reported = True
+    _last_rect = None
 
 
 def _set_metar_for_tests(m: dict | None, *, done: bool = True) -> None:
-    global _metar, _fetch_done
+    global _metar, _fetch_done, _fetch_done_at
     _metar = m
     _fetch_done = done
+    if done:
+        _fetch_done_at = time.monotonic()
 
 
 def _start_fetch(ident: str) -> None:
     def worker() -> None:
-        global _metar, _fetch_done
+        global _metar, _fetch_done, _fetch_done_at
         from utilities import metar as metar_mod
 
         result = metar_mod.get_metar(ident)
@@ -63,6 +73,7 @@ def _start_fetch(ident: str) -> None:
         if _airport and str(_airport.get("ident") or "").upper() == ident:
             _metar = result
             _fetch_done = True
+            _fetch_done_at = time.monotonic()
             try:
                 from display.round_touch.screens import radar
 
@@ -94,18 +105,34 @@ def is_open() -> bool:
 
 
 def dismiss() -> None:
-    global _airport, _metar, _fetch_done
+    global _airport, _metar, _fetch_done, _last_rect
     _airport = None
     _metar = None
     _fetch_done = False
+    _last_rect = None
+
+
+def hit(x: int, y: int) -> bool:
+    """Tap landed on the visible tile (tap-to-dismiss)."""
+    if _airport is None or _last_rect is None:
+        return False
+    return _last_rect.collidepoint(int(x), int(y))
 
 
 def tick() -> bool:
-    """True once when the tile times out — caller invalidates the frame."""
+    """True once when the tile times out — caller invalidates the frame.
+
+    The 10 s countdown starts when the METAR fetch settles (data or not);
+    a fetch that never settles is capped at FETCH_CAP_S from open.
+    """
     global _closed_reported
     if _airport is None:
         return False
-    if (time.monotonic() - _opened_at) < TIMEOUT_S:
+    now = time.monotonic()
+    if _fetch_done:
+        if (now - _fetch_done_at) < TIMEOUT_S:
+            return False
+    elif (now - _opened_at) < FETCH_CAP_S:
         return False
     dismiss()
     if _closed_reported:
@@ -186,6 +213,7 @@ def draw_tile(surface: pygame.Surface) -> pygame.Rect | None:
 
 def draw(surface: pygame.Surface) -> pygame.Rect | None:
     """Draw the tile; returns its rect or None when closed."""
+    global _last_rect
     if _airport is None:
         return None
     from display.round_touch import radar_hud
@@ -285,6 +313,7 @@ def draw(surface: pygame.Surface) -> pygame.Rect | None:
         anchor_xy = (theme.CENTER_X, int(theme.CENTER_Y + theme.VISIBLE_RADIUS * 0.45))
     rect = place_rect((width, height), (int(anchor_xy[0]), int(anchor_xy[1])))
     surface.blit(panel, rect)
+    _last_rect = pygame.Rect(rect)
     return rect
 
 
