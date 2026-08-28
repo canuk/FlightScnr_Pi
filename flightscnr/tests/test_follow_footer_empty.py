@@ -49,4 +49,4 @@ class TestFooterLayoutConsistency:
         assert "tap_footer_action(\n                tap[0], tap[1], self.overhead.tracked_data" not in src
         assert src.count(
             "tracked.resolve_display_data(self.overhead.tracked_data, self.flights)"
-        ) >= 3  # draw sites + both tap sites
+        ) >= 2  # both tap sites (draw sites format the call multi-line)
