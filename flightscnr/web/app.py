@@ -1020,6 +1020,7 @@ def display_save():
 
 @app.get("/lofi/tracks")
 def lofi_tracks():
+    from display.round_touch import settings
     from utilities import lofi_audio
 
     bundled = []
@@ -1051,6 +1052,7 @@ def lofi_stream(name):
 
 @app.post("/lofi/toggle_disabled")
 def lofi_toggle_disabled():
+    from display.round_touch import settings
     from utilities import lofi_audio
 
     data = request.get_json(silent=True) or {}
