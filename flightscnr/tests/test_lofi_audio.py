@@ -285,3 +285,63 @@ class TestAtcPageVolume:
         assert settings.set_lofi_volume(40, persist=False) == 40
         assert settings.lofi_volume() == 40
         settings.set_lofi_volume(25)
+
+
+class TestTrackSkipping:
+    def test_next_track_hard_cuts_to_the_following_song(self):
+        s, pa, pb, clock = _sched()
+        s.tick(25.0)
+        assert s.current_track() == "a.mp3"
+        s.skip_next(25.0)
+        active = pa if pa.alive() else pb
+        assert s.current_track() == "b.mp3"
+        assert active.path == "b.mp3"
+        assert active.volume == pytest.approx(25.0)
+
+    def test_prev_track_wraps_backwards(self):
+        s, pa, pb, clock = _sched(tracks=("a.mp3", "b.mp3", "c.mp3"))
+        s.tick(25.0)
+        s.skip_prev(25.0)
+        assert s.current_track() == "c.mp3"
+
+    def test_skip_cancels_any_fade_in_flight(self):
+        s, pa, pb, clock = _sched(duration=120.0, fade=8.0)
+        s.tick(25.0)
+        clock.t += 113.0
+        s.tick(25.0)  # incoming started
+        s.skip_next(25.0)
+        # Exactly one player after a skip.
+        assert pa.alive() != pb.alive()
+
+    def test_module_next_prev_apply_to_running_scheduler(self, monkeypatch):
+        s, pa, pb, clock = _sched()
+        s.tick(25.0)
+        monkeypatch.setattr(lofi_audio, "_scheduler", s)
+        monkeypatch.setattr(lofi_audio, "_master_volume", lambda: 25.0)
+        lofi_audio.next_track()
+        assert s.current_track() == "b.mp3"
+        lofi_audio.prev_track()
+        assert s.current_track() == "a.mp3"
+        assert lofi_audio.now_playing_name() == "a"
+        monkeypatch.setattr(lofi_audio, "_scheduler", None)
+
+    def test_now_playing_none_when_stopped(self):
+        lofi_audio._scheduler = None
+        assert lofi_audio.now_playing_name() is None
+
+
+class TestDisabledTracks:
+    def test_disabled_tracks_leave_the_playlist(self, monkeypatch):
+        from display.round_touch import settings as dsettings
+
+        names = [os.path.basename(p) for p in lofi_audio.playlist()]
+        assert "rain-on-vinyl.mp3" in names
+        dsettings.set_lofi_disabled_tracks(["rain-on-vinyl.mp3"])
+        names = [os.path.basename(p) for p in lofi_audio.playlist()]
+        assert "rain-on-vinyl.mp3" not in names
+        dsettings.set_lofi_disabled_tracks([])
+
+    def test_track_path_resolves_known_and_rejects_hostile(self):
+        assert lofi_audio.track_path("rain-on-vinyl.mp3") is not None
+        assert lofi_audio.track_path("../etc/passwd") is None
+        assert lofi_audio.track_path("nope.mp3") is None

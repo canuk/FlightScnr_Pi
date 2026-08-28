@@ -42,8 +42,18 @@ CROSSFADE_S = 8.0
 _TICK_MIN_INTERVAL_S = 0.5
 
 
+def _disabled_names() -> set[str]:
+    try:
+        from display.round_touch import settings
+
+        return {n.lower() for n in settings.lofi_disabled_tracks()}
+    except Exception:
+        return set()
+
+
 def playlist() -> list[str]:
-    """Bundled starter tracks + user MP3s from the data dir, alphabetical."""
+    """Bundled + user MP3s, alphabetical, minus tracks the user disabled."""
+    disabled = _disabled_names()
     out: list[str] = []
     seen: set[str] = set()
     for folder in (BUNDLED_DIR, PLAYLIST_DIR):
@@ -54,11 +64,23 @@ def playlist() -> list[str]:
         for name in names:
             if not name.lower().endswith(".mp3"):
                 continue
-            if name.lower() in seen:
+            if name.lower() in seen or name.lower() in disabled:
                 continue
             seen.add(name.lower())
             out.append(os.path.join(folder, name))
     return out
+
+
+def track_path(name: str) -> str | None:
+    """Absolute path for a known playlist filename (bundled or user), else None."""
+    safe = safe_track_name(name)
+    if safe is None:
+        return None
+    for folder in (BUNDLED_DIR, PLAYLIST_DIR):
+        path = os.path.join(folder, safe)
+        if os.path.isfile(path):
+            return path
+    return None
 
 
 def safe_track_name(name: str) -> str | None:
@@ -198,6 +220,29 @@ class MpvPlayer:
     def alive(self) -> bool:
         return self._proc is not None and self._proc.poll() is None
 
+    def _skip_to(self, index: int, vol: float) -> None:
+        """Hard cut to a specific playlist index (cancels any fade)."""
+        tracks = self._get_tracks()
+        if not tracks:
+            return
+        for p in self._players:
+            p.stop()
+        self._index = index % len(tracks)
+        self._incoming = False
+        track = self.current_track()
+        if track is None:
+            return
+        active = self._players[self._active]
+        active.play(track, max(0.0, min(100.0, float(vol))))
+        self._started_at = self._clock()
+        self._last_spawn = self._clock()
+
+    def skip_next(self, vol: float) -> None:
+        self._skip_to(self._index + 1, vol)
+
+    def skip_prev(self, vol: float) -> None:
+        self._skip_to(self._index - 1, vol)
+
     def stop(self) -> None:
         proc, self._proc = self._proc, None
         if proc is None:
@@ -325,6 +370,29 @@ class CrossfadeScheduler:
 
         active.set_volume(vol)
 
+    def _skip_to(self, index: int, vol: float) -> None:
+        """Hard cut to a specific playlist index (cancels any fade)."""
+        tracks = self._get_tracks()
+        if not tracks:
+            return
+        for p in self._players:
+            p.stop()
+        self._index = index % len(tracks)
+        self._incoming = False
+        track = self.current_track()
+        if track is None:
+            return
+        active = self._players[self._active]
+        active.play(track, max(0.0, min(100.0, float(vol))))
+        self._started_at = self._clock()
+        self._last_spawn = self._clock()
+
+    def skip_next(self, vol: float) -> None:
+        self._skip_to(self._index + 1, vol)
+
+    def skip_prev(self, vol: float) -> None:
+        self._skip_to(self._index - 1, vol)
+
     def stop(self) -> None:
         for p in self._players:
             p.stop()
@@ -396,6 +464,38 @@ def tick(*, atc_playing: bool) -> None:
             sched.tick(volume)
         except Exception:
             logger.debug("[Lofi] tick failed", exc_info=True)
+
+
+def _master_volume() -> float:
+    try:
+        from display.round_touch import settings
+
+        return float(settings.lofi_volume())
+    except Exception:
+        return 25.0
+
+
+def next_track() -> None:
+    if _scheduler is not None:
+        _scheduler.skip_next(_master_volume())
+
+
+def prev_track() -> None:
+    if _scheduler is not None:
+        _scheduler.skip_prev(_master_volume())
+
+
+def now_playing_name() -> str | None:
+    """Pretty name of the current track, or None when the bed is stopped."""
+    if _scheduler is None:
+        return None
+    track = _scheduler.current_track()
+    if not track:
+        return None
+    name = os.path.basename(track)
+    if name.lower().endswith(".mp3"):
+        name = name[:-4]
+    return name.replace("-", " ").replace("_", " ")
 
 
 _last_app_tick = 0.0
