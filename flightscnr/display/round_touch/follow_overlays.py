@@ -187,6 +187,28 @@ def _draw_airports(
     cx, cy = width // 2, height // 2
     max_r = min(cx, cy) - theme.s(2)
 
+    chart_style = settings.airport_icon_style() == "chart"
+
+    def _each_visible():
+        for airport in airports:
+            try:
+                pos = _project(float(airport["lat"]), float(airport["lon"]), project)
+            except (KeyError, TypeError, ValueError):
+                continue
+            if pos is None or not _in_panel(pos[0], pos[1], width, height):
+                continue
+            yield airport, pos
+
+    if icons and chart_style:
+        # Sectional symbols sit under the runway centerlines (match radar).
+        for airport, pos in _each_visible():
+            towered, fuel, beacon = airport.get("chart") or (False, False, False)
+            ao.draw_chart_icon(
+                surface, (int(pos[0]), int(pos[1])),
+                ao.chart_icon_radius(airport),
+                towered=towered, fuel=fuel, beacon=beacon,
+            )
+
     if runways_ok:
         width_px = (
             max(2, theme.s(3))
@@ -208,23 +230,9 @@ def _draw_airports(
                 continue
             pygame.draw.line(surface, color, p0, p1, width_px)
 
-    if icons:
-        chart_style = settings.airport_icon_style() == "chart"
-        for airport in airports:
-            try:
-                pos = _project(float(airport["lat"]), float(airport["lon"]), project)
-            except (KeyError, TypeError, ValueError):
-                continue
-            if pos is None or not _in_panel(pos[0], pos[1], width, height):
-                continue
-            if chart_style:
-                towered, fuel, beacon = airport.get("chart") or (False, False, False)
-                ao.draw_chart_icon(
-                    surface, (int(pos[0]), int(pos[1])),
-                    ao.chart_icon_radius(airport),
-                    towered=towered, fuel=fuel, beacon=beacon,
-                )
-                continue
+    if icons and not chart_style:
+        # Classic pins ride above the centerlines, as on the radar.
+        for airport, pos in _each_visible():
             icon = ao.airport_icon(ao._icon_height(airport))
             if icon is not None:
                 ao._blit_airport_icon(surface, icon, pos[0], pos[1])

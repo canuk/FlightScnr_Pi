@@ -121,6 +121,34 @@ class TestDrawHonorsStyle:
         self._draw()
         assert chart_calls and not pin_calls
 
+    def test_chart_symbols_draw_under_runways(self, monkeypatch):
+        from display.round_touch import airport_overlay as ao
+
+        order = []
+        monkeypatch.setattr(
+            ao, "draw_chart_icon", lambda *a, **k: order.append("icon"))
+        monkeypatch.setattr(
+            follow_overlays.pygame.draw, "line",
+            lambda *a, **k: order.append("runway"))
+        settings.set_airport_icon_style("chart")
+        settings.set_show_airport_centerlines(True)
+        surface = pygame.Surface((400, 400), pygame.SRCALPHA)
+        follow_overlays._airports = [
+            {"ident": "KSAN", "lat": 32.73, "lon": -117.19,
+             "type": "large_airport", "chart": (False, False, False)},
+        ]
+        follow_overlays._runways = [
+            {"le_lat": 32.72, "le_lon": -117.2, "he_lat": 32.74, "he_lon": -117.18},
+        ]
+        try:
+            follow_overlays._draw_airports(
+                surface, width=400, height=400,
+                project=lambda lat, lon: (200.0, 200.0))
+        finally:
+            settings.set_show_airport_centerlines(False)
+        assert "icon" in order and "runway" in order
+        assert order.index("icon") < order.index("runway")
+
     def test_classic_style_uses_pins(self, monkeypatch):
         from display.round_touch import airport_overlay as ao
 
