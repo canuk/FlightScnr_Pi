@@ -85,7 +85,7 @@ def _draw_adsb_coverage_button(surface, bottom: int) -> None:
     except Exception:
         return
     radius = theme.s(27)
-    center = (theme.CENTER_X - theme.s(150), theme.CENTER_Y + theme.s(60))
+    center = (theme.CENTER_X - theme.s(118), theme.CENTER_Y + theme.s(60))
     pygame.draw.circle(surface, (26, 29, 33), center, radius)
     pygame.draw.circle(surface, theme.GRID, center, radius, width=1)
     surface.blit(top_lbl, top_lbl.get_rect(
