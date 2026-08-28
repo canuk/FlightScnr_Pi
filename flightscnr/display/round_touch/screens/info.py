@@ -100,7 +100,6 @@ HUD_ACTIONS = (
     "traffic_sfx_volume",
     "military_sfx_volume",
     "earthquake_voice_volume",
-    "lofi_volume",
 )
 # Filter / map controls — kept short so rows fit the round viewport.
 OPTIONS_ACTIONS = (
@@ -137,6 +136,7 @@ ATC_ACTIONS = (
     "enabled",
     "volume",
     "lofi",
+    "lofi_volume",
     "airport",
     "channel",
     "output",
@@ -1194,7 +1194,7 @@ def _display_layout(page: int, scroll_offset: int = 0) -> tuple[int, int, int]:
 
 def _in_settings_body(y: int) -> bool:
     """True when y sits inside the scrolling body band rows are clipped to."""
-    return nav.content_top_y(has_dots=True) <= y <= nav.curved_content_bottom_y()
+    return nav.content_top_y(has_dots=True) <= y <= nav.content_bottom_y()
 
 
 def slider_drag_band_contains(
@@ -1217,7 +1217,7 @@ def display_row_at(x: int, y: int, page: int, scroll_offset: int = 0) -> int | N
     row_y, row_h, count = _display_layout(page, scroll_offset)
     body_font = _display_font()
     top = nav.content_top_y(has_dots=True)
-    bottom = nav.curved_content_bottom_y()
+    bottom = nav.content_bottom_y()
     actions = _row_actions(page)
     for i in range(count):
         if actions[i] in (
@@ -1387,7 +1387,6 @@ _HUD_VOLUME_ACTIONS = (
     "traffic_sfx_volume",
     "military_sfx_volume",
     "earthquake_voice_volume",
-    "lofi_volume",
 )
 # Volume row -> the sound toggle drawn as a switch at the head of that row.
 _HUD_VOLUME_TOGGLES = {
@@ -1395,18 +1394,11 @@ _HUD_VOLUME_TOGGLES = {
     "traffic_sfx_volume": "traffic_sfx",
     "military_sfx_volume": "military_sfx",
     "earthquake_voice_volume": "earthquake_voice",
-    "lofi_volume": "lofi_beats",
 }
 
 
 def _hud_volume_meta(action: str):
     """Return (label, getter, setter) for a HUD volume slider action."""
-    if action == "lofi_volume":
-        return (
-            "Lofi volume",
-            settings.lofi_volume,
-            settings.set_lofi_volume,
-        )
     if action == "chime_volume":
         return (
             "Chime volume",
@@ -1444,8 +1436,6 @@ def hud_sound_enabled(action: str) -> bool:
         return settings.military_sfx_enabled()
     if action == "earthquake_voice_volume":
         return settings.earthquake_voice_enabled()
-    if action == "lofi_volume":
-        return settings.lofi_enabled()
     return True
 
 
@@ -1714,6 +1704,59 @@ def atc_volume_slider_value_at(x: int, scroll_offset: int = 0) -> int | None:
     return max(0, min(hi, int(round(t * hi))))
 
 
+def lofi_volume_row_index() -> int:
+    try:
+        return ATC_ACTIONS.index("lofi_volume")
+    except ValueError:
+        return -1
+
+
+def _lofi_volume_slider_geometry(scroll_offset: int = 0) -> tuple[pygame.Rect, int, int] | None:
+    if "lofi_volume" not in ATC_ACTIONS:
+        return None
+    row_y, row_h, _ = _display_layout(PAGE_ATC, scroll_offset)
+    track_w, slider_h, label_w, value_w = _atc_volume_slider_metrics()
+    gap = theme.s(8)
+    idx = lofi_volume_row_index()
+    if idx < 0:
+        return None
+    ry = row_y + idx * row_h
+    block_w = label_w + gap + track_w + gap + value_w
+    left_x = theme.CENTER_X - block_w // 2
+    track_x = left_x + label_w + gap
+    hit_pad = theme.s(8)
+    hit = pygame.Rect(
+        track_x - hit_pad,
+        int(ry - theme.s(2)),
+        track_w + 2 * hit_pad,
+        max(row_h, slider_h) + theme.s(4),
+    )
+    return hit, track_x, track_w
+
+
+def lofi_volume_slider_at(x: int, y: int, scroll_offset: int = 0) -> bool:
+    geom = _lofi_volume_slider_geometry(scroll_offset)
+    if geom is None or not _in_settings_body(y):
+        return False
+    return geom[0].collidepoint(x, y)
+
+
+def lofi_volume_slider_drag_band(x: int, y: int, scroll_offset: int = 0) -> bool:
+    geom = _lofi_volume_slider_geometry(scroll_offset)
+    if geom is None:
+        return False
+    return slider_drag_band_contains(geom[0], y)
+
+
+def lofi_volume_slider_value_at(x: int, scroll_offset: int = 0) -> int | None:
+    geom = _lofi_volume_slider_geometry(scroll_offset)
+    if geom is None:
+        return None
+    _, track_x, track_w = geom
+    t = (x - track_x) / max(1, track_w)
+    return max(0, min(100, int(round(t * 100))))
+
+
 def display_action_at(page: int, row: int) -> str | None:
     actions = _row_actions(page)
     if 0 <= row < len(actions):
@@ -1801,6 +1844,7 @@ def _atc_row_labels() -> list[str]:
         "ATC Audio",
         "",  # volume slider
         "Background Lofi Beats",
+        "",  # lofi volume slider
         f"Airport › {_atc_airport_label()}",
         f"Channel › {_atc_channel_label_from_status(st)}",
         f"Output › {_atc_output_label()}",
@@ -1816,6 +1860,40 @@ def _atc_quiet_row_labels() -> list[str]:
         f"Quiet start › {settings.atc_quiet_start_label()}",
         f"Quiet end › {settings.atc_quiet_end_label()}",
     ]
+
+
+def _draw_lofi_volume_slider_row(surface, ry: int, focused: bool) -> None:
+    body_font = _display_font()
+    track_w, slider_h, label_w, value_w = _atc_volume_slider_metrics()
+    gap = theme.s(8)
+    pct = settings.lofi_volume()
+    block_w = label_w + gap + track_w + gap + value_w
+    left_x = theme.CENTER_X - block_w // 2
+    track_x = left_x + label_w + gap
+    text_h = body_font.get_height()
+    row_h = max(slider_h, text_h + theme.s(6))
+    if focused:
+        pad = theme.s(4)
+        focus = pygame.Rect(left_x - pad, ry - pad, block_w + pad * 2, row_h + pad)
+        pygame.draw.rect(surface, theme.GRID, focus, max(1, theme.s(1)))
+    label = body_font.render("Lofi vol", True, theme.MUTED)
+    surface.blit(label, (left_x, int(ry + (row_h - text_h) // 2)))
+    track_cy = int(ry + row_h // 2)
+    track_rect = pygame.Rect(track_x, track_cy - max(2, theme.s(2)), track_w, max(4, theme.s(4)))
+    pygame.draw.rect(surface, theme.HINT, track_rect, border_radius=theme.s(2))
+    fill_w = int(round((pct / 100.0) * track_w))
+    if fill_w > 0:
+        pygame.draw.rect(
+            surface, theme.SWEEP,
+            pygame.Rect(track_x, track_rect.y, fill_w, track_rect.height),
+            border_radius=theme.s(2),
+        )
+    knob_x = track_x + fill_w
+    knob_r = max(5, theme.s(6))
+    pygame.draw.circle(surface, theme.SWEEP, (knob_x, track_cy), knob_r)
+    pygame.draw.circle(surface, theme.LABEL, (knob_x, track_cy), knob_r, max(1, theme.s(1)))
+    value = body_font.render(f"{pct}%", True, theme.MUTED)
+    surface.blit(value, (track_x + track_w + gap, int(ry + (row_h - text_h) // 2)))
 
 
 def _draw_atc_volume_slider_row(surface, ry: int, focused: bool) -> None:
@@ -1915,7 +1993,6 @@ def _hud_row_labels() -> list[str]:
         "",  # traffic switch + volume slider
         "",  # military switch + volume slider
         "",  # earthquake voice switch + volume slider
-        "",  # lofi beats switch + volume slider
     ]
 
 
@@ -2050,6 +2127,7 @@ def _draw_settings_rows(
     )
     vfr_idx = vfr_opacity_row_index() if draw_vfr_opacity_slider else -1
     volume_idx = atc_volume_row_index() if draw_atc_volume_slider else -1
+    lofi_vol_row_idx = lofi_volume_row_index() if draw_atc_volume_slider else -1
     # Clip to the body band so scrolled rows never bleed over the footer buttons.
     clip_prev = surface.get_clip()
     surface.set_clip(pygame.Rect(0, int(top), surface.get_width(), max(0, int(bottom - top))))
@@ -2089,6 +2167,9 @@ def _draw_settings_rows(
                 continue
             if draw_atc_volume_slider and i == volume_idx:
                 _draw_atc_volume_slider_row(surface, int(ry), display_focus == i)
+                continue
+            if draw_atc_volume_slider and i == lofi_vol_row_idx:
+                _draw_lofi_volume_slider_row(surface, int(ry), display_focus == i)
                 continue
             state = _TOGGLE_ROW_STATE.get(actions[i]) if i < len(actions) else None
             if state is not None:
@@ -2344,7 +2425,7 @@ def draw_info(
 
     body_font = _display_font()
     top = nav.content_top_y(has_dots=True)
-    bottom = nav.curved_content_bottom_y()
+    bottom = nav.content_bottom_y()
     max_scroll = 0
 
     if page == PAGE_MAIN:
