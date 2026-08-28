@@ -49,6 +49,7 @@ from display.round_touch import (
     settings,
     theme,
     touch_debug,
+    lofi_controls,
     video,
     wildfire_overlay,
     earthquake_overlay,
@@ -1772,6 +1773,9 @@ class RoundTouchDisplay:
             settings.toggle_lofi_enabled()
         elif action == "lofi_volume":
             return
+        elif action == "lofi_controls":
+            settings.toggle_lofi_controls_enabled()
+            radar.invalidate_frame_layer()
         elif action == "quiet":
             settings.set_atc_quiet_hours_enabled(not settings.atc_quiet_hours_enabled())
         elif action == "quiet_start":
@@ -2857,6 +2861,18 @@ class RoundTouchDisplay:
         if off_hours.effective_brightness_percent(settings.brightness_percent()) == 0:
             self._off_hours_wake_until = time.time() + OFF_HOURS_TOUCH_WAKE_S
 
+    def _apply_lofi_skip(self, action: str) -> None:
+        """Prev/next pill on the radar: skip the lofi track."""
+        from utilities import lofi_audio
+
+        if action == "next":
+            lofi_audio.next_track()
+        else:
+            lofi_audio.prev_track()
+        self._note_activity()
+        radar.invalidate_frame_layer()
+        self._safe_draw()
+
     def _apply_zoom_button(self, action: str) -> None:
         """Tap on the radar − / + pill: flash it and step the range like pinch."""
         zoom_buttons.note_tap(action)
@@ -3814,6 +3830,10 @@ class RoundTouchDisplay:
                             zoom_action := zoom_buttons.hit_button(tap[0], tap[1])
                         ) is not None:
                             self._apply_zoom_button(zoom_action)
+                        elif (
+                            lofi_action := lofi_controls.hit_button(tap[0], tap[1])
+                        ) is not None:
+                            self._apply_lofi_skip(lofi_action)
                         elif self._open_flight_or_fire_at(tap[0], tap[1]):
                             self._safe_draw()
         elif tap and self.screen == SCREEN_FLIGHT:
