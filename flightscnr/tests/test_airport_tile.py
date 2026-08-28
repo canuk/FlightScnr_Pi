@@ -161,3 +161,35 @@ class TestTileDraw:
     def test_draw_closed_is_none(self):
         surface = pygame.Surface((theme.SIZE, theme.SIZE))
         assert airport_tile.draw(surface) is None
+
+
+class TestTilePlacement:
+    def _corners_in_circle(self, rect, pad=0):
+        r = theme.VISIBLE_RADIUS - pad
+        for cx, cy in (rect.topleft, rect.topright, rect.bottomleft, rect.bottomright):
+            dx, dy = cx - theme.CENTER_X, cy - theme.CENTER_Y
+            if dx * dx + dy * dy > r * r:
+                return False
+        return True
+
+    def test_prefers_above_the_anchor(self):
+        anchor = (theme.CENTER_X, theme.CENTER_Y)
+        rect = airport_tile.place_rect((200, 150), anchor)
+        assert rect.bottom < anchor[1]
+        assert abs(rect.centerx - anchor[0]) < 4
+
+    def test_flips_below_near_the_top(self):
+        anchor = (theme.CENTER_X, theme.CENTER_Y - int(theme.VISIBLE_RADIUS * 0.8))
+        rect = airport_tile.place_rect((200, 150), anchor)
+        assert rect.top > anchor[1]
+
+    def test_stays_inside_the_circle_at_the_rim(self):
+        r = theme.VISIBLE_RADIUS
+        for ax, ay in (
+            (theme.CENTER_X - int(r * 0.9), theme.CENTER_Y),
+            (theme.CENTER_X + int(r * 0.9), theme.CENTER_Y),
+            (theme.CENTER_X, theme.CENTER_Y + int(r * 0.9)),
+            (theme.CENTER_X - int(r * 0.7), theme.CENTER_Y - int(r * 0.7)),
+        ):
+            rect = airport_tile.place_rect((220, 160), (ax, ay))
+            assert self._corners_in_circle(rect), (ax, ay, rect)
