@@ -88,6 +88,19 @@ class TestMetarParsing:
         )
         assert metar.sky_text(few) == "FEW 3,000"
 
+    def test_temp_text_units(self):
+        m = metar.parse_api_row(_API_ROW)
+        assert metar.temp_text(m, unit="c") == "24°C / 22°C"
+        assert metar.temp_text(m, unit="f") == "76°F / 72°F"
+
+    def test_tile_follows_global_weather_unit(self, monkeypatch):
+        import weather_prefs
+
+        monkeypatch.setattr(weather_prefs, "unit_symbol", lambda: "F")
+        assert airport_tile._temp_unit() == "f"
+        monkeypatch.setattr(weather_prefs, "unit_symbol", lambda: "C")
+        assert airport_tile._temp_unit() == "c"
+
     def test_altimeter_inhg(self):
         m = metar.parse_api_row(_API_ROW)
         assert metar.altimeter_text(m) == "29.85 inHg"
