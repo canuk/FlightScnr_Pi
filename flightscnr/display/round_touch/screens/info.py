@@ -138,6 +138,7 @@ ATC_ACTIONS = (
     "lofi",
     "lofi_volume",
     "lofi_controls",
+    "lofi_title_scroll",
     "airport",
     "channel",
     "output",
@@ -1847,6 +1848,7 @@ def _atc_row_labels() -> list[str]:
         "Background Lofi Beats",
         "",  # lofi volume slider
         "Track Buttons on Radar",
+        "Scroll Track Name",
         f"Airport › {_atc_airport_label()}",
         f"Channel › {_atc_channel_label_from_status(st)}",
         f"Output › {_atc_output_label()}",
@@ -2060,6 +2062,7 @@ _TOGGLE_ROW_STATE = {
     "enabled": settings.atc_enabled,
     "lofi": settings.lofi_enabled,
     "lofi_controls": settings.lofi_controls_enabled,
+    "lofi_title_scroll": settings.lofi_title_scroll,
     "quiet": settings.atc_quiet_hours_enabled,
 }
 
