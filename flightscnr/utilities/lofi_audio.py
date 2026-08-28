@@ -61,6 +61,62 @@ def playlist() -> list[str]:
     return out
 
 
+def safe_track_name(name: str) -> str | None:
+    """Sanitized MP3 filename for user uploads, or None when unacceptable."""
+    raw = str(name or "").strip()
+    if "/" in raw or "\\" in raw:
+        return None
+    name = os.path.basename(raw)
+    if not name or name in (".", ".."):
+        return None
+    if not name.lower().endswith(".mp3"):
+        return None
+    if name != os.path.basename(name) or name.startswith("."):
+        return None
+    return name
+
+
+def user_tracks() -> list[str]:
+    """User-added MP3 names in the data-dir playlist folder, sorted."""
+    try:
+        return sorted(
+            n for n in os.listdir(PLAYLIST_DIR) if n.lower().endswith(".mp3")
+        )
+    except OSError:
+        return []
+
+
+def save_user_track(name: str, data: bytes) -> str | None:
+    """Store an uploaded MP3 into the playlist folder; returns its path."""
+    safe = safe_track_name(name)
+    if safe is None or not data:
+        return None
+    try:
+        os.makedirs(PLAYLIST_DIR, exist_ok=True)
+        path = os.path.join(PLAYLIST_DIR, safe)
+        with open(path, "wb") as fh:
+            fh.write(data)
+        return path
+    except OSError as exc:
+        logger.warning("[Lofi] upload save failed: %s", exc)
+        return None
+
+
+def delete_user_track(name: str) -> bool:
+    """Delete a user-added track (never touches the bundled assets)."""
+    safe = safe_track_name(name)
+    if safe is None:
+        return False
+    path = os.path.join(PLAYLIST_DIR, safe)
+    if not os.path.isfile(path):
+        return False
+    try:
+        os.unlink(path)
+        return True
+    except OSError:
+        return False
+
+
 class MpvPlayer:
     """One mpv subprocess with an IPC socket for volume/duration control."""
 
