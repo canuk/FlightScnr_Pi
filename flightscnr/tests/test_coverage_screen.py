@@ -505,3 +505,15 @@ class TestCoverageScreen:
         coverage._reset_for_tests()
         coverage.handle_tap()
         coverage.draw_coverage(self._surface())
+
+
+class TestBreadcrumbLabelClearance:
+    def test_top_sector_labels_suppressed_under_curved_breadcrumb(self):
+        import math
+        from display.round_touch.screens import coverage
+
+        assert coverage._under_breadcrumb(0.0)           # N
+        assert coverage._under_breadcrumb(math.pi / 8)   # NNE
+        assert coverage._under_breadcrumb(-math.pi / 8 % (2 * math.pi))  # NNW
+        assert not coverage._under_breadcrumb(math.pi / 4)   # NE stays
+        assert not coverage._under_breadcrumb(math.pi)       # S stays
