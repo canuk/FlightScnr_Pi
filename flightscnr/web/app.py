@@ -1014,6 +1014,50 @@ def display_save():
     )
 
 
+@app.get("/lofi/tracks")
+def lofi_tracks():
+    from utilities import lofi_audio
+
+    bundled = []
+    try:
+        bundled = sorted(
+            n for n in os.listdir(lofi_audio.BUNDLED_DIR)
+            if n.lower().endswith(".mp3")
+        )
+    except OSError:
+        pass
+    return jsonify({"bundled": bundled, "user": lofi_audio.user_tracks()})
+
+
+@app.post("/lofi/upload")
+def lofi_upload():
+    from utilities import lofi_audio
+
+    file = request.files.get("track")
+    if file is None or not file.filename:
+        return jsonify({"message": "Choose an MP3 file first."}), 400
+    data = file.read()
+    if len(data) > 30 * 1024 * 1024:
+        return jsonify({"message": "MP3 too large (30 MB max)."}), 400
+    path = lofi_audio.save_user_track(file.filename, data)
+    if path is None:
+        return jsonify({"message": "Only .mp3 files are accepted."}), 400
+    return jsonify({"ok": True, "user": lofi_audio.user_tracks(),
+                    "message": f"Added {os.path.basename(path)} to the playlist."})
+
+
+@app.post("/lofi/delete")
+def lofi_delete():
+    from utilities import lofi_audio
+
+    data = request.get_json(silent=True) or {}
+    name = str(data.get("name") or "")
+    if not lofi_audio.delete_user_track(name):
+        return jsonify({"message": "Track not found."}), 404
+    return jsonify({"ok": True, "user": lofi_audio.user_tracks(),
+                    "message": f"Removed {name}."})
+
+
 @app.post("/display/chime-preview")
 def display_chime_preview():
     """Play the hourly chime once at the current (or requested) volume."""

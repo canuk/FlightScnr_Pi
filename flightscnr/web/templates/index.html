@@ -595,7 +595,13 @@
             </div>
             <label for="lofi_volume">Lofi volume <span id="lofi_volume_label">25%</span></label>
             <input id="lofi_volume" type="range" min="0" max="100" step="1" value="25" oninput="document.getElementById('lofi_volume_label').textContent = this.value + '%'">
-            <p class="hint">Mellow music under the live ATC stream, crossfading through the bundled tracks plus any MP3s in /var/lib/flightscnr/lofi. Plays only while ATC audio is on, so it follows ATC quiet hours.</p>
+            <p class="hint">Mellow music under the live ATC stream, crossfading through the playlist below. Plays only while ATC audio is on, so it follows ATC quiet hours.</p>
+            <div id="lofi_tracks" class="hint" style="margin:4px 0"></div>
+            <div class="chk">
+                <input id="lofi_file" type="file" accept=".mp3,audio/mpeg" style="max-width:60%">
+                <button class="btn btn-sm" id="btn-lofi-upload" type="button">Add track</button>
+            </div>
+            <p class="hint" id="lofi_upload_msg"></p>
             <p class="hint">Off by default. Plays a voice clip once per new USGS event M3.0+ in radar range. Not earthquake early warning — catalog events can be minutes old. Silent during quiet hours and display off-hours. Needs the earthquake layer on, plus a USB or Bluetooth speaker.</p>
             <button class="btn btn-primary" id="btn-save-reload" style="margin-top:.7rem" type="button">Save &amp; reload on display</button>
             <div id="display-status" class="status"></div>
@@ -1361,6 +1367,7 @@ async function loadAll() {
             $("earthquake_voice_volume").value = String(d.earthquake_voice_volume ?? 80);
         }
         if ($("lofi_enabled")) $("lofi_enabled").checked = !!d.lofi_enabled;
+        loadLofiTracks();
         if ($("lofi_volume")) {
             $("lofi_volume").value = String(d.lofi_volume ?? 25);
             const ll = $("lofi_volume_label");
@@ -3211,6 +3218,38 @@ document.addEventListener("DOMContentLoaded", () => {
     checkUpdates();
     startDump1090LivePoll();
 });
+
+    async function loadLofiTracks() {
+        const box = $("lofi_tracks");
+        if (!box) return;
+        try {
+            const r = await fetch("/lofi/tracks");
+            const d = await r.json();
+            const parts = [];
+            (d.bundled || []).forEach(n => parts.push(`<div>&#9835; ${n} <span style="opacity:.6">(built-in)</span></div>`));
+            (d.user || []).forEach(n => parts.push(`<div>&#9835; ${n} <a href="#" data-lofi-del="${n}">remove</a></div>`));
+            box.innerHTML = parts.join("") || "No tracks yet.";
+            box.querySelectorAll("[data-lofi-del]").forEach(a => a.addEventListener("click", async (e) => {
+                e.preventDefault();
+                await fetch("/lofi/delete", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({name: a.dataset.lofiDel})});
+                loadLofiTracks();
+            }));
+        } catch (_) {}
+    }
+    if ($("btn-lofi-upload")) $("btn-lofi-upload").addEventListener("click", async () => {
+        const input = $("lofi_file");
+        const msg = $("lofi_upload_msg");
+        if (!input || !input.files || !input.files.length) { if (msg) msg.textContent = "Choose an MP3 first."; return; }
+        const fd = new FormData();
+        fd.append("track", input.files[0]);
+        if (msg) msg.textContent = "Uploading…";
+        try {
+            const r = await fetch("/lofi/upload", {method: "POST", body: fd});
+            const d = await r.json();
+            if (msg) msg.textContent = d.message || (r.ok ? "Added." : "Upload failed.");
+            if (r.ok) { input.value = ""; loadLofiTracks(); }
+        } catch (_) { if (msg) msg.textContent = "Upload failed."; }
+    });
 </script>
 </body>
 </html>
