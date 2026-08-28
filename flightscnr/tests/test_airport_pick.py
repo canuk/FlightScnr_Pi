@@ -190,14 +190,14 @@ class TestAirportTapPriority(unittest.TestCase):
             "display.round_touch.app.airport_overlay.pick_airport_at",
             return_value=(airport, 4.0),
         ), mock.patch(
-            "display.round_touch.app.airport_overlay.show_callout"
-        ) as show, mock.patch(
+            "display.round_touch.airport_tile.open_tile"
+        ) as open_tile, mock.patch(
             "display.round_touch.app.radar.invalidate_frame_layer"
         ):
             opened = RoundTouchDisplay._open_flight_or_fire_at(fake, 100, 500)
 
         self.assertTrue(opened)
-        show.assert_called_once_with(airport)
+        open_tile.assert_called_once_with(airport)
         fake._open_picked_flight.assert_not_called()
         fake._open_picked_fire.assert_not_called()
 
