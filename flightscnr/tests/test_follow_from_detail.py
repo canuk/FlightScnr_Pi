@@ -104,3 +104,26 @@ class TestAppWiring:
         assert "follow_button_hit" in src
         assert "follow_confirm_hit" in src
         assert "set_tracked_callsign" in src
+
+
+@pytest.mark.skipif(not _FONT_OK, reason="pygame.font unavailable")
+class TestFollowLoadingState:
+    def test_loading_screen_names_the_flight(self):
+        from display.round_touch.screens import tracked
+
+        surface = _surface()
+        surface.fill((0, 0, 0))
+        tracked.draw_follow_loading(surface, "N12345")
+        # Something rendered in the center band (title + hint text).
+        band = pygame.Rect(0, theme.CENTER_Y - theme.s(60),
+                           theme.SIZE, theme.s(120))
+        sub = surface.subsurface(band)
+        assert pygame.transform.average_color(sub)[:3] != (0, 0, 0)
+
+    def test_app_uses_loading_state_when_tracking_pending(self):
+        import inspect
+
+        from display.round_touch import app as app_mod
+
+        src = inspect.getsource(app_mod)
+        assert "draw_follow_loading" in src

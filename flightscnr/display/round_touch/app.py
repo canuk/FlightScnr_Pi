@@ -997,6 +997,11 @@ class RoundTouchDisplay:
                 nav.draw_breadcrumb(
                     self.surface, ["Radar", "Follow"], with_scrim=True
                 )
+                from utilities.overhead import load_tracked_callsign as _ltc
+
+                pending = _ltc()
+                if pending:
+                    tracked.draw_follow_loading(self.surface, pending)
             self._scroll.max_offset = 0
         self._scroll.clamp()
         remaining = self._timeout_remaining_fraction()
