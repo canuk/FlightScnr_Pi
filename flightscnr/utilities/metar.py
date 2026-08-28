@@ -111,19 +111,16 @@ def sky_text(m: dict) -> str:
     return f"{cover} {base:,}"
 
 
-def temp_text(m: dict) -> str:
+def temp_text(m: dict, unit: str = "c") -> str:
+    """Temperature / dewpoint, °C (METAR native) or °F per the app unit."""
     t, d = m.get("temp_c"), m.get("dewp_c")
     if t is None:
         return "—"
+    to_f = str(unit or "c").strip().lower() == "f"
 
     def _fmt(c: float) -> str:
-        try:
-            from weather_prefs import unit_symbol
-
-            if unit_symbol() == "°F":
-                return f"{round(c * 9 / 5 + 32)}°"
-        except Exception:
-            pass
+        if to_f:
+            return f"{round(c * 9 / 5 + 32)}°F"
         return f"{round(c)}°C"
 
     if d is None:
