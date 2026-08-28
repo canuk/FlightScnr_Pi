@@ -3379,7 +3379,7 @@ class RoundTouchDisplay:
         """Screen-aware breadcrumb hit: curved band on curved-chrome screens."""
         if self.screen in (
             SCREEN_SETTINGS, SCREEN_DETAILS, SCREEN_FLIGHT, SCREEN_FIRE, SCREEN_QUAKE,
-            SCREEN_CLOCK,
+            SCREEN_CLOCK, SCREEN_COVERAGE,
         ):
             return nav.tap_breadcrumb_curved(x, y)
         return nav.tap_breadcrumb(x, y)
