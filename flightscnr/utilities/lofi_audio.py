@@ -26,6 +26,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import random
 import socket
 import subprocess
 import time
@@ -220,29 +221,6 @@ class MpvPlayer:
     def alive(self) -> bool:
         return self._proc is not None and self._proc.poll() is None
 
-    def _skip_to(self, index: int, vol: float) -> None:
-        """Hard cut to a specific playlist index (cancels any fade)."""
-        tracks = self._get_tracks()
-        if not tracks:
-            return
-        for p in self._players:
-            p.stop()
-        self._index = index % len(tracks)
-        self._incoming = False
-        track = self.current_track()
-        if track is None:
-            return
-        active = self._players[self._active]
-        active.play(track, max(0.0, min(100.0, float(vol))))
-        self._started_at = self._clock()
-        self._last_spawn = self._clock()
-
-    def skip_next(self, vol: float) -> None:
-        self._skip_to(self._index + 1, vol)
-
-    def skip_prev(self, vol: float) -> None:
-        self._skip_to(self._index - 1, vol)
-
     def stop(self) -> None:
         proc, self._proc = self._proc, None
         if proc is None:
@@ -261,7 +239,8 @@ class CrossfadeScheduler:
     """Alternate two players through a looping playlist with crossfades."""
 
     def __init__(self, player_a, player_b, get_tracks, *,
-                 crossfade_s: float = CROSSFADE_S, clock=time.monotonic):
+                 crossfade_s: float = CROSSFADE_S, clock=time.monotonic,
+                 shuffle: bool = False, rng=None):
         self._players = (player_a, player_b)
         self._get_tracks = get_tracks
         self._fade = float(crossfade_s)
@@ -271,18 +250,36 @@ class CrossfadeScheduler:
         self._started_at: float | None = None
         self._incoming = False
         self._last_spawn = -1e9
+        self._shuffle = bool(shuffle)
+        self._rng = rng if rng is not None else random.Random()
+        # Per-pass shuffled orders: every track plays once before a reshuffle.
+        self._orders: dict[int, list[str]] = {}
+        self._orders_key: tuple[str, ...] | None = None
+
+    def _track_at(self, index: int) -> str | None:
+        """Track for a monotonic play position, honoring shuffle passes."""
+        tracks = self._get_tracks()
+        if not tracks:
+            return None
+        if not self._shuffle:
+            return tracks[index % len(tracks)]
+        key = tuple(sorted(tracks))
+        if key != self._orders_key:
+            self._orders = {}
+            self._orders_key = key
+        p, k = divmod(index, len(tracks))
+        if p not in self._orders:
+            self._orders[p] = self._rng.sample(tracks, len(tracks))
+            # Keep only nearby passes so skips across the boundary stay stable.
+            for old in [q for q in self._orders if abs(q - p) > 1]:
+                del self._orders[old]
+        return self._orders[p][k]
 
     def current_track(self) -> str | None:
-        tracks = self._get_tracks()
-        if not tracks:
-            return None
-        return tracks[self._index % len(tracks)]
+        return self._track_at(self._index)
 
     def _next_track(self) -> str | None:
-        tracks = self._get_tracks()
-        if not tracks:
-            return None
-        return tracks[(self._index + 1) % len(tracks)]
+        return self._track_at(self._index + 1)
 
     def tick(self, master_volume: float) -> None:
         tracks = self._get_tracks()
@@ -377,7 +374,9 @@ class CrossfadeScheduler:
             return
         for p in self._players:
             p.stop()
-        self._index = index % len(tracks)
+        # Raw monotonic index — shuffle passes track it (negatives walk back
+        # into the cached previous pass).
+        self._index = index
         self._incoming = False
         track = self.current_track()
         if track is None:
@@ -428,7 +427,7 @@ def _ensure_scheduler() -> CrossfadeScheduler | None:
     if _scheduler is None:
         _reap_orphans()
         _scheduler = CrossfadeScheduler(
-            MpvPlayer("a"), MpvPlayer("b"), playlist
+            MpvPlayer("a"), MpvPlayer("b"), playlist, shuffle=True
         )
     return _scheduler
 
