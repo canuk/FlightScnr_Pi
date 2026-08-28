@@ -42,7 +42,14 @@ def _reset_for_tests() -> None:
 
 
 def visible() -> bool:
-    return bool(settings.lofi_controls_enabled() and settings.lofi_enabled())
+    if not (settings.lofi_controls_enabled() and settings.lofi_enabled()):
+        return False
+    try:
+        from utilities import lofi_audio
+
+        return lofi_audio.has_tracks()
+    except Exception:
+        return True
 
 
 def _mid_angle() -> float:
