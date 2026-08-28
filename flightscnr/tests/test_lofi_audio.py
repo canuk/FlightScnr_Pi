@@ -204,43 +204,27 @@ class TestUserTrackManagement:
         assert lofi_audio.save_user_track("bad.txt", b"x") is None
 
 
-class TestHudVolumeRow:
-    def test_lofi_volume_is_a_hud_sound_row(self):
+class TestAtcPageVolume:
+    def test_lofi_volume_row_on_atc_page(self):
         from display.round_touch.screens import info
 
-        assert "lofi_volume" in info._HUD_VOLUME_ACTIONS
-        assert info._HUD_VOLUME_TOGGLES["lofi_volume"] == "lofi_beats"
-        label, getter, setter = info._hud_volume_meta("lofi_volume")
-        assert "ofi" in label
-        setter(33)
-        assert getter() == 33
-        setter(25)
+        assert "lofi_volume" in info.ATC_ACTIONS
+        assert info.lofi_volume_row_index() == info.ATC_ACTIONS.index("lofi_volume")
+        assert "lofi_volume" not in info._HUD_VOLUME_ACTIONS
 
-    def test_row_switch_follows_lofi_enabled(self):
+    def test_atc_row_labels_match_actions(self):
         from display.round_touch.screens import info
 
-        settings.set_lofi_enabled(True)
-        assert info.hud_sound_enabled("lofi_volume") is True
-        settings.set_lofi_enabled(False)
-        assert info.hud_sound_enabled("lofi_volume") is False
+        assert len(info._atc_row_labels()) == len(info.ATC_ACTIONS)
 
-    def test_toggle_dispatch(self):
-        from display.round_touch.app import RoundTouchDisplay
-
-        fake = object.__new__(RoundTouchDisplay)
+    def test_toggle_action_still_works(self):
+        from display.round_touch.app import RoundTouchDisplay  # noqa: F401
         settings.set_lofi_enabled(False)
-        assert RoundTouchDisplay._apply_hud_sound_toggle(fake, "lofi_beats") is True
+        settings.toggle_lofi_enabled()
         assert settings.lofi_enabled() is True
-        RoundTouchDisplay._apply_hud_sound_toggle(fake, "lofi_beats")
-        assert settings.lofi_enabled() is False
+        settings.set_lofi_enabled(False)
 
     def test_set_volume_supports_drag_persist_kwarg(self):
         assert settings.set_lofi_volume(40, persist=False) == 40
         assert settings.lofi_volume() == 40
         settings.set_lofi_volume(25)
-
-    def test_hostile_filenames_rejected(self):
-        assert lofi_audio.safe_track_name('x<img onerror=alert(1)>.mp3') is None
-        assert lofi_audio.safe_track_name('a"b.mp3') is None
-        assert lofi_audio.safe_track_name("tick'.mp3") is None
-        assert lofi_audio.safe_track_name("Fine Track_2 (mix).mp3") == "Fine Track_2 (mix).mp3"

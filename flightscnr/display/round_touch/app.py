@@ -267,6 +267,7 @@ class RoundTouchDisplay:
         self._brightness_slider_active = False
         self._vfr_opacity_slider_active = False
         self._atc_volume_slider_active = False
+        self._lofi_volume_slider_active = False
         self._radar_hud_volume_drag = False
         self._radar_hud_layout_drag = False
         self._hud_opacity_slider_active = False
@@ -1773,6 +1774,8 @@ class RoundTouchDisplay:
             return
         elif action == "lofi":
             settings.toggle_lofi_enabled()
+        elif action == "lofi_volume":
+            return
         elif action == "quiet":
             settings.set_atc_quiet_hours_enabled(not settings.atc_quiet_hours_enabled())
         elif action == "quiet_start":
@@ -2247,7 +2250,6 @@ class RoundTouchDisplay:
             "traffic_sfx": "traffic_sfx_volume",
             "military_sfx": "military_sfx_volume",
             "earthquake_voice": "earthquake_voice_volume",
-            "lofi_beats": "lofi_volume",
         }.get(action)
         if volume_action is None:
             return False
@@ -2260,8 +2262,6 @@ class RoundTouchDisplay:
             settings.toggle_earthquake_voice_enabled()
             if settings.earthquake_voice_enabled():
                 earthquake_overlay.prime_voice_seen()
-        elif action == "lofi_beats":
-            settings.toggle_lofi_enabled()
         else:
             settings.toggle_military_sfx_enabled()
         self._display_focus = info.hud_volume_row_index(volume_action)
@@ -2322,6 +2322,45 @@ class RoundTouchDisplay:
         changed = self._apply_hud_volume_slider(
             self._hud_volume_slider_kind, x, persist=False
         )
+        self.input.consume_scroll_drag()
+        return changed
+
+    def _apply_lofi_volume_slider(self, x: int, *, persist: bool = True) -> bool:
+        value = info.lofi_volume_slider_value_at(x, self._scroll.offset)
+        if value is None:
+            return False
+        if value == settings.lofi_volume():
+            self._display_focus = info.lofi_volume_row_index()
+            return False
+        settings.set_lofi_volume(value, persist=persist)
+        self._display_focus = info.lofi_volume_row_index()
+        return True
+
+    def _update_lofi_volume_slider_drag(self) -> bool:
+        if self.screen != SCREEN_SETTINGS or self.settings_page != info.PAGE_ATC:
+            self._lofi_volume_slider_active = False
+            return False
+        if not self.input.is_dragging():
+            if self._lofi_volume_slider_active:
+                self._lofi_volume_slider_active = False
+                settings.set_lofi_volume(settings.lofi_volume(), persist=True)
+                self.input.consume_scroll_drag()
+                return True
+            return False
+        pos = self.input.drag_pos()
+        if pos is None:
+            return False
+        x, y = pos
+        if not self._lofi_volume_slider_active:
+            if not info.lofi_volume_slider_at(x, y, self._scroll.offset):
+                return False
+            self._lofi_volume_slider_active = True
+        elif not info.lofi_volume_slider_drag_band(x, y, self._scroll.offset):
+            self._lofi_volume_slider_active = False
+            settings.set_lofi_volume(settings.lofi_volume(), persist=True)
+            self.input.consume_scroll_drag()
+            return True
+        changed = self._apply_lofi_volume_slider(x, persist=False)
         self.input.consume_scroll_drag()
         return changed
 
@@ -3434,6 +3473,10 @@ class RoundTouchDisplay:
                 x, y, self._scroll.offset
             ):
                 self._apply_atc_volume_slider(x, persist=True)
+            elif self.settings_page == info.PAGE_ATC and info.lofi_volume_slider_at(
+                x, y, self._scroll.offset
+            ):
+                self._apply_lofi_volume_slider(x, persist=True)
                 return
             if self.settings_page == info.PAGE_ATC:
                 btn = info.atc_action_at(x, y)
@@ -4778,6 +4821,7 @@ class RoundTouchDisplay:
                     or self._update_hud_opacity_slider_drag()
                     or self._update_chime_volume_slider_drag()
                     or self._update_vfr_opacity_slider_drag()
+                    or self._update_lofi_volume_slider_drag()
                     or self._update_atc_volume_slider_drag()
                     or self._update_radar_hud_volume_drag()
                 ):
@@ -5078,11 +5122,12 @@ class RoundTouchDisplay:
                         radar.invalidate_frame_layer()
                         self._safe_draw()
                     try:
-                        from utilities import lofi_audio
+                        from utilities import atc_audio, lofi_audio
 
+                        atc_audio.enforce_quiet_hours()
                         lofi_audio.app_tick()
                     except Exception:
-                        logger.debug("Lofi tick failed", exc_info=True)
+                        logger.debug("Audio tick failed", exc_info=True)
                     hourly_chime.tick()
                     self._tick_hourly_weather_refresh()
                     self._tick_manual_weather_refresh()
