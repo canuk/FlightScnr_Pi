@@ -72,7 +72,11 @@
         a{color:var(--link);}
         .lofi-player{display:flex;gap:.8rem;align-items:center;background:var(--card2);
         border:1px solid var(--fline);border-radius:12px;padding:.7rem;margin:.9rem 0 .5rem;}
-        .lofi-art-lg{width:72px;height:72px;border-radius:9px;object-fit:cover;background:#222;flex:none;}
+        .lofi-art-wrap{position:relative;width:72px;height:72px;border-radius:9px;flex:none;
+        overflow:hidden;border:1px solid var(--fline);display:grid;place-items:center;
+        background:radial-gradient(circle at 30% 25%,#2e2e2e,#191919 70%);}
+        .lofi-art-ph{color:var(--muted);font-size:1.7rem;opacity:.8;}
+        .lofi-art-lg{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:none;}
         .lofi-player-main{flex:1;min-width:0;}
         .lofi-player-title{font-size:.95rem;font-weight:600;white-space:nowrap;overflow:hidden;
         text-overflow:ellipsis;margin-bottom:.4rem;}
@@ -641,7 +645,7 @@
             <p class="hint">Prev/next pill on the rim opposite the clock HUD. Shows only while the beats are enabled.</p>
 
             <div id="lofi-player" class="lofi-player" hidden>
-                <img id="lofi-player-art" class="lofi-art-lg" alt="" src="">
+                <div class="lofi-art-wrap"><span class="lofi-art-ph">&#9835;</span><img id="lofi-player-art" class="lofi-art-lg" alt="" src=""></div>
                 <div class="lofi-player-main">
                     <div id="lofi-player-title" class="lofi-player-title">&nbsp;</div>
                     <div class="lofi-player-controls">
@@ -3307,6 +3311,7 @@ document.addEventListener("DOMContentLoaded", () => {
         panel.hidden = false;
         $("lofi-player-title").textContent = lofiPrettyName(name);
         const art = $("lofi-player-art");
+        art.style.display = "none";
         art.src = "/lofi/cover/" + encodeURIComponent(name);
         audio.src = "/lofi/stream/" + encodeURIComponent(name);
         audio.play().catch(() => {});
@@ -3338,7 +3343,10 @@ document.addEventListener("DOMContentLoaded", () => {
             }
         });
         const art = $("lofi-player-art");
-        if (art) art.addEventListener("error", () => { art.removeAttribute("src"); });
+        if (art) {
+            art.addEventListener("load", () => { art.style.display = "block"; });
+            art.addEventListener("error", () => { art.style.display = "none"; });
+        }
     }
     wireLofiPlayer();
     async function loadLofiTracks() {
