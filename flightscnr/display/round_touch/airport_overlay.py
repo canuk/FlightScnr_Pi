@@ -104,6 +104,7 @@ def _query_key() -> tuple | None:
             round(float(LOCATION_HOME[0]), 4),
             round(float(LOCATION_HOME[1]), 4),
             round(float(geo.fetch_max_km()), 2),
+            settings.airport_min_size(),
             bool(settings.show_airport_icons()),
             bool(settings.show_airport_centerlines()),
             int(settings.scale_index()),
@@ -146,13 +147,17 @@ def _load_worker(key: tuple) -> None:
     segs: list[dict[str, Any]] = []
     try:
         from config import LOCATION_HOME
-        from utilities.airports import iter_airports_near
+        from display.round_touch import settings
+        from utilities.airports import iter_airports_near, types_for_min_size
         from utilities.runways import runways_for_idents
 
+        size = settings.airport_min_size()
         points = iter_airports_near(
             float(LOCATION_HOME[0]),
             float(LOCATION_HOME[1]),
             float(geo.fetch_max_km()),
+            types=types_for_min_size(size),
+            small_paved_only=size == "small_paved",
         )
         if _runways_allowed():
             segs = runways_for_idents(ap.get("ident") for ap in points)

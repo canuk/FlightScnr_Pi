@@ -120,6 +120,7 @@ LAYERS_ACTIONS = (
     "earthquakes",
     "airport_centerlines",
     "airport_icons",
+    "airport_size",
     "ground_vehicles",
     "idle_clock",
     "default_clock",
@@ -189,6 +190,7 @@ LIST_PICKER_KINDS = frozenset(
         "default_clock",
         "default_clock_off_hours",
         "hud_dark",
+        "airport_size",
         "zoom_position",
     }
 )
@@ -212,6 +214,7 @@ _LIST_PICKER_TITLES = {
     "quiet_start": "Quiet start",
     "quiet_end": "Quiet end",
     "hud_position": "Clock position",
+    "airport_size": "Airport size",
     "zoom_position": "Zoom position",
     "default_clock": "Daytime clock",
     "default_clock_off_hours": "Off-hours clock",
@@ -530,6 +533,12 @@ def _build_settings_picker_items(kind: str) -> list[dict]:
         )
         slots = [format_hhmm(mins) for mins in range(0, 24 * 60, 30)]
         return _enum_picker_items(slots, current, format_hhmm_12h)
+    if kind == "airport_size":
+        return _enum_picker_items(
+            settings.AIRPORT_MIN_SIZES,
+            settings.airport_min_size(),
+            lambda size: settings.AIRPORT_MIN_SIZE_LABELS.get(size, str(size)),
+        )
     if kind == "hud_position":
         return _enum_picker_items(
             settings.RADAR_HUD_POSITIONS,
@@ -1914,6 +1923,7 @@ def _layers_row_labels() -> list[str]:
         "Show Earthquakes",
         "Show Airport Centerlines",
         "Show Airport Icons",
+        f"Airports \u203a {settings.airport_min_size_label()}",
         "Show Ground Vehicles",
         "Auto Idle Clock",
         f"Daytime Clock › {settings.default_clock_label()}",
