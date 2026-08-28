@@ -35,10 +35,20 @@ logger = logging.getLogger(__name__)
 
 BASE_DIR = os.path.dirname(os.path.dirname(__file__))
 BUNDLED_DIR = os.path.join(BASE_DIR, "assets", "lofi")
+PACK_CATALOG_PATH = os.path.join(BUNDLED_DIR, "pack.json")
 # Starter-pack tracks downloaded from a GitHub Release via the portal.
 # They behave like bundled tracks (play/disable, no remove).
 PACK_DIR = os.path.join(
     os.environ.get("FLIGHTSCNR_DATA_DIR", "/var/lib/flightscnr"), "lofi-pack"
+)
+# Release id for the starter zip (lofi-pack-v1 on GitHub). A marker file is
+# written only after a successful portal download — stray MP3s alone must not
+# hide the "Download starter playlist" button.
+LOFI_PACK_ID = os.environ.get("LOFI_PACK_ID", "lofi-pack-v1")
+PACK_MARKER_NAME = ".lofi-pack.installed"
+_FALLBACK_PACK_URL = (
+    "https://github.com/yashmulgaonkar/FlightScnr_Pi/releases/download/"
+    "lofi-pack-v1/lofi-pack.zip"
 )
 PLAYLIST_DIR = os.path.join(
     os.environ.get("FLIGHTSCNR_DATA_DIR", "/var/lib/flightscnr"), "lofi"
@@ -46,6 +56,43 @@ PLAYLIST_DIR = os.path.join(
 CROSSFADE_S = 8.0
 # Keep IPC chatter light: poll/ramp at most this often outside a fade.
 _TICK_MIN_INTERVAL_S = 0.5
+
+
+def load_pack_catalog() -> dict:
+    """Single-pack catalog in assets/lofi/pack.json (extensible later)."""
+    try:
+        with open(PACK_CATALOG_PATH, encoding="utf-8") as fh:
+            data = json.load(fh)
+        if isinstance(data, dict) and isinstance(data.get("packs"), list):
+            return data
+    except (OSError, json.JSONDecodeError):
+        pass
+    return {"default": LOFI_PACK_ID, "packs": []}
+
+
+def default_pack_id() -> str:
+    cat = load_pack_catalog()
+    return str(os.environ.get("LOFI_PACK_ID") or cat.get("default") or LOFI_PACK_ID)
+
+
+def default_pack() -> dict | None:
+    """The configured starter pack (one entry in pack.json for now)."""
+    pack_id = default_pack_id()
+    for pack in load_pack_catalog().get("packs") or []:
+        if isinstance(pack, dict) and pack.get("id") == pack_id:
+            return pack
+    packs = load_pack_catalog().get("packs") or []
+    return packs[0] if packs and isinstance(packs[0], dict) else None
+
+
+def default_pack_url() -> str:
+    override = os.environ.get("LOFI_PACK_URL")
+    if override:
+        return str(override)
+    pack = default_pack()
+    if pack and pack.get("url"):
+        return str(pack["url"])
+    return _FALLBACK_PACK_URL
 
 
 def _disabled_names() -> set[str]:
@@ -131,6 +178,63 @@ def has_tracks(ttl: float = 5.0) -> bool:
             continue
     _has_tracks_cache = (now, found)
     return found
+
+
+def _pack_marker_path() -> str:
+    return os.path.join(PACK_DIR, PACK_MARKER_NAME)
+
+
+def pack_track_count() -> int:
+    """MP3 count in the pack folder (includes partial/stray files)."""
+    try:
+        return sum(
+            1 for n in os.listdir(PACK_DIR) if n.lower().endswith(".mp3")
+        )
+    except OSError:
+        return 0
+
+
+def is_pack_installed() -> bool:
+    """True only after a successful portal pack download (marker on disk)."""
+    try:
+        with open(_pack_marker_path(), encoding="utf-8") as fh:
+            line = fh.readline().strip()
+        return line == default_pack_id()
+    except OSError:
+        return False
+
+
+def mark_pack_installed(*, track_count: int) -> None:
+    """Record a completed starter-pack install."""
+    global _has_tracks_cache
+    pack_id = default_pack_id()
+    try:
+        os.makedirs(PACK_DIR, exist_ok=True)
+        with open(_pack_marker_path(), "w", encoding="utf-8") as fh:
+            fh.write(f"{pack_id}\n{int(track_count)}\n")
+    except OSError as exc:
+        logger.warning("[Lofi] pack marker write failed: %s", exc)
+    _has_tracks_cache = None
+
+
+def clear_pack_install() -> None:
+    """Remove pack MP3s and the install marker (before a fresh download)."""
+    global _has_tracks_cache
+    try:
+        if os.path.isdir(PACK_DIR):
+            for name in os.listdir(PACK_DIR):
+                if name.lower().endswith(".mp3"):
+                    try:
+                        os.unlink(os.path.join(PACK_DIR, name))
+                    except OSError:
+                        pass
+        try:
+            os.unlink(_pack_marker_path())
+        except OSError:
+            pass
+    except OSError:
+        pass
+    _has_tracks_cache = None
 
 
 def install_pack_zip(zip_path: str) -> int:

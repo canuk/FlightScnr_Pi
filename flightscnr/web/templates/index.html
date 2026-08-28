@@ -649,7 +649,7 @@
             </div>
             <p class="hint">Marquee the track name through the pill. Off = truncate long names at 20 characters.</p>
 
-            <div id="lofi-pack" hidden style="margin:.8rem 0 0">
+            <div id="lofi-pack" style="margin:.8rem 0 0">
                 <p class="hint" id="lofi_pack_hint">The starter playlist is not installed yet — the beats need tracks to play.</p>
                 <button class="btn btn-primary" id="btn-lofi-pack" type="button" style="margin-top:.4rem">Download starter playlist (~190 MB)</button>
                 <div id="lofi_pack_progress" hidden style="margin-top:.55rem">
@@ -3381,8 +3381,30 @@ document.addEventListener("DOMContentLoaded", () => {
         try {
             const d = await (await fetch("/lofi/pack/status")).json();
             const busy = d.state === "downloading" || d.state === "installing";
-            box.hidden = d.installed && !busy && d.state !== "error";
-            $("btn-lofi-pack").disabled = busy;
+            const label = d.label || "starter playlist";
+            const sizeMb = d.size_mb ? ` (~${d.size_mb} MB)` : " (~190 MB)";
+            const btn = $("btn-lofi-pack");
+            if (btn) {
+                btn.textContent = d.installed
+                    ? `Re-download ${label}${sizeMb}`
+                    : `Download ${label}${sizeMb}`;
+            }
+            const hint = $("lofi_pack_hint");
+            if (hint) {
+                if (d.installed && !busy && d.state !== "error") {
+                    const expect = d.tracks ? ` (${d.tracks} in release)` : "";
+                    hint.textContent =
+                        `Installed: ${d.count} pack track${d.count === 1 ? "" : "s"}${expect}. Re-download to replace with the latest release.`;
+                } else if (d.count > 0 && !d.installed) {
+                    hint.textContent =
+                        `Found ${d.count} pack track${d.count === 1 ? "" : "s"} but the starter playlist is not fully installed — download to get the full set.`;
+                } else if (!d.installed) {
+                    const desc = d.description ? `${d.description} ` : "";
+                    hint.textContent =
+                        desc + "Download once from GitHub Releases — tracks install to this Pi and play locally under ATC.";
+                }
+            }
+            if (btn) btn.disabled = busy;
             $("lofi_pack_progress").hidden = !busy && d.state !== "error";
             if (busy) {
                 const pct = d.total > 0 ? Math.round(100 * d.received / d.total) : 0;

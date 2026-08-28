@@ -1056,16 +1056,15 @@ def lofi_stream(name):
 
 
 # Starter-pack download — MP3s live on a GitHub Release, not in git, so the
-# OTA `git pull` stays light. Upstream forks can repoint via LOFI_PACK_URL.
-DEFAULT_LOFI_PACK_URL = (
-    "https://github.com/canuk/FlightScnr_Pi/releases/download/"
-    "lofi-pack-v1/lofi-pack.zip"
-)
+# OTA `git pull` stays light. Catalog: assets/lofi/pack.json; override URL
+# with LOFI_PACK_URL in the environment.
 _pack_progress = {"state": "idle", "received": 0, "total": 0, "message": ""}
 
 
 def _lofi_pack_url() -> str:
-    return os.environ.get("LOFI_PACK_URL") or DEFAULT_LOFI_PACK_URL
+    from utilities import lofi_audio
+
+    return lofi_audio.default_pack_url()
 
 
 def _pack_tmp_path() -> str:
@@ -1074,24 +1073,13 @@ def _pack_tmp_path() -> str:
     return lofi_audio.PACK_DIR + ".zip.part"
 
 
-def _pack_installed_count() -> int:
-    from utilities import lofi_audio
-
-    try:
-        return sum(
-            1 for n in os.listdir(lofi_audio.PACK_DIR)
-            if n.lower().endswith(".mp3")
-        )
-    except OSError:
-        return 0
-
-
 def _pack_download_worker(url: str) -> None:
     import requests
 
     from utilities import lofi_audio
 
     tmp = _pack_tmp_path()
+    lofi_audio.clear_pack_install()
     _pack_progress.update(
         {"state": "downloading", "received": 0, "total": 0, "message": ""})
     try:
@@ -1108,6 +1096,7 @@ def _pack_download_worker(url: str) -> None:
         _pack_progress["state"] = "installing"
         count = lofi_audio.install_pack_zip(tmp)
         if count > 0:
+            lofi_audio.mark_pack_installed(track_count=count)
             _pack_progress.update(
                 {"state": "done", "message": f"Installed {count} tracks."})
         else:
@@ -1125,11 +1114,19 @@ def _pack_download_worker(url: str) -> None:
 
 @app.get("/lofi/pack/status")
 def lofi_pack_status():
-    count = _pack_installed_count()
+    from utilities import lofi_audio
+
+    pack = lofi_audio.default_pack() or {}
+    count = lofi_audio.pack_track_count()
     return jsonify({
-        "installed": count > 0,
+        "installed": lofi_audio.is_pack_installed(),
         "count": count,
-        "url": _lofi_pack_url(),
+        "pack_id": pack.get("id"),
+        "label": pack.get("label"),
+        "description": pack.get("description"),
+        "size_mb": pack.get("size_mb"),
+        "tracks": pack.get("tracks"),
+        "url": lofi_audio.default_pack_url(),
         "state": _pack_progress["state"],
         "received": _pack_progress["received"],
         "total": _pack_progress["total"],
