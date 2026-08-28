@@ -28,6 +28,14 @@ os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _no_wifi_portal(monkeypatch):
+    """Portal GET routes redirect to /wifi when setup mode is active."""
+    from web import app as web_app
+
+    monkeypatch.setattr(web_app, "_wifi_portal_active", lambda: False)
+
+
 @pytest.fixture()
 def client():
     from web import app as web_app
@@ -137,8 +145,11 @@ class TestLofiPackEndpoints:
         assert r.status_code == 200
         body = r.get_json()
         assert body["installed"] is False
+        assert body["pack_id"] == "lofi-pack-v1"
+        assert body["label"] == "Starter playlist"
         assert body["state"] == "idle"
         assert body["url"].startswith("https://")
+        assert "yashmulgaonkar/FlightScnr_Pi" in body["url"]
 
     def test_status_counts_installed_pack(self, client, tmp_path, monkeypatch):
         from utilities import lofi_audio
@@ -147,9 +158,22 @@ class TestLofiPackEndpoints:
         pack.mkdir()
         (pack / "one.mp3").write_bytes(b"x")
         monkeypatch.setattr(lofi_audio, "PACK_DIR", str(pack))
+        lofi_audio.mark_pack_installed(track_count=1)
         body = client.get("/lofi/pack/status").get_json()
         assert body["installed"] is True
         assert body["count"] == 1
+
+    def test_status_partial_without_marker(self, client, tmp_path, monkeypatch):
+        from utilities import lofi_audio
+
+        pack = tmp_path / "pack"
+        pack.mkdir()
+        (pack / "stray.mp3").write_bytes(b"x")
+        (pack / "orphan.mp3").write_bytes(b"x")
+        monkeypatch.setattr(lofi_audio, "PACK_DIR", str(pack))
+        body = client.get("/lofi/pack/status").get_json()
+        assert body["installed"] is False
+        assert body["count"] == 2
 
     def test_download_worker_installs_from_stream(self, tmp_path, monkeypatch):
         import io
@@ -190,7 +214,8 @@ class TestLofiPackEndpoints:
         web_app._pack_download_worker("https://example.invalid/pack.zip")
         assert web_app._pack_progress["state"] == "done"
         assert sorted(os.listdir(tmp_path / "pack")) == [
-            "Song One.mp3", "Song Two.mp3"]
+            ".lofi-pack.installed", "Song One.mp3", "Song Two.mp3"]
+        assert lofi_audio.is_pack_installed()
         assert not os.path.exists(tmp_path / "pack.zip.part")
 
     def test_download_endpoint_rejects_concurrent(self, client):

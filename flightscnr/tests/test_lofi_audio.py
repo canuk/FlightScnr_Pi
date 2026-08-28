@@ -318,6 +318,19 @@ class TestGating:
         assert lofi_audio.has_tracks(ttl=0) is True
 
 
+class TestPackCatalog:
+    def test_default_pack_from_catalog(self):
+        pack = lofi_audio.default_pack()
+        assert pack is not None
+        assert pack["id"] == "lofi-pack-v1"
+        assert pack["tracks"] == 45
+        assert "yashmulgaonkar/FlightScnr_Pi" in lofi_audio.default_pack_url()
+
+    def test_lofi_pack_url_env_override(self, monkeypatch):
+        monkeypatch.setenv("LOFI_PACK_URL", "https://example.invalid/custom.zip")
+        assert lofi_audio.default_pack_url() == "https://example.invalid/custom.zip"
+
+
 class TestPackInstall:
     def _zip(self, tmp_path, entries):
         import zipfile
