@@ -100,6 +100,7 @@ HUD_ACTIONS = (
     "traffic_sfx_volume",
     "military_sfx_volume",
     "earthquake_voice_volume",
+    "lofi_volume",
 )
 # Filter / map controls — kept short so rows fit the round viewport.
 OPTIONS_ACTIONS = (
@@ -1386,6 +1387,7 @@ _HUD_VOLUME_ACTIONS = (
     "traffic_sfx_volume",
     "military_sfx_volume",
     "earthquake_voice_volume",
+    "lofi_volume",
 )
 # Volume row -> the sound toggle drawn as a switch at the head of that row.
 _HUD_VOLUME_TOGGLES = {
@@ -1393,11 +1395,18 @@ _HUD_VOLUME_TOGGLES = {
     "traffic_sfx_volume": "traffic_sfx",
     "military_sfx_volume": "military_sfx",
     "earthquake_voice_volume": "earthquake_voice",
+    "lofi_volume": "lofi_beats",
 }
 
 
 def _hud_volume_meta(action: str):
     """Return (label, getter, setter) for a HUD volume slider action."""
+    if action == "lofi_volume":
+        return (
+            "Lofi volume",
+            settings.lofi_volume,
+            settings.set_lofi_volume,
+        )
     if action == "chime_volume":
         return (
             "Chime volume",
@@ -1435,6 +1444,8 @@ def hud_sound_enabled(action: str) -> bool:
         return settings.military_sfx_enabled()
     if action == "earthquake_voice_volume":
         return settings.earthquake_voice_enabled()
+    if action == "lofi_volume":
+        return settings.lofi_enabled()
     return True
 
 
@@ -1904,6 +1915,7 @@ def _hud_row_labels() -> list[str]:
         "",  # traffic switch + volume slider
         "",  # military switch + volume slider
         "",  # earthquake voice switch + volume slider
+        "",  # lofi beats switch + volume slider
     ]
 
 
