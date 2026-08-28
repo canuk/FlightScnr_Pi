@@ -177,3 +177,28 @@ class TestGating:
         names = [os.path.basename(p) for p in lofi_audio.playlist()]
         assert "rain-on-vinyl.mp3" in names
         assert "late-night-static.mp3" in names
+
+
+class TestUserTrackManagement:
+    def test_safe_track_name(self):
+        assert lofi_audio.safe_track_name("My Song.mp3") == "My Song.mp3"
+        assert lofi_audio.safe_track_name("../../etc/passwd") is None
+        assert lofi_audio.safe_track_name("notes.txt") is None
+        assert lofi_audio.safe_track_name("a/b.mp3") is None
+        assert lofi_audio.safe_track_name("") is None
+
+    def test_user_tracks_and_delete(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(lofi_audio, "PLAYLIST_DIR", str(tmp_path))
+        (tmp_path / "mine.mp3").write_bytes(b"x")
+        assert lofi_audio.user_tracks() == ["mine.mp3"]
+        assert lofi_audio.delete_user_track("mine.mp3") is True
+        assert lofi_audio.user_tracks() == []
+        assert lofi_audio.delete_user_track("nope.mp3") is False
+        assert lofi_audio.delete_user_track("../escape.mp3") is False
+
+    def test_save_user_track(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(lofi_audio, "PLAYLIST_DIR", str(tmp_path / "new"))
+        path = lofi_audio.save_user_track("Chill.mp3", b"ID3fakebytes")
+        assert path is not None and os.path.isfile(path)
+        assert lofi_audio.user_tracks() == ["Chill.mp3"]
+        assert lofi_audio.save_user_track("bad.txt", b"x") is None
