@@ -17,10 +17,10 @@ controls on the bottom rim, and vice versa.
 from __future__ import annotations
 
 import math
+import time
 
 import pygame
 
-from display.round_touch import arc_ui
 from display.round_touch import draw as draw_mod
 from display.round_touch import settings, theme
 
@@ -32,12 +32,13 @@ _title_char_centers: list[tuple[int, int]] = []
 
 
 def _reset_for_tests() -> None:
-    global _prev_rect, _next_rect, _prev_c, _next_c, _title_char_centers
+    global _prev_rect, _next_rect, _prev_c, _next_c, _title_char_centers, _char_cache
     _prev_rect = pygame.Rect(0, 0, 0, 0)
     _next_rect = pygame.Rect(0, 0, 0, 0)
     _prev_c = (0, 0)
     _next_c = (0, 0)
     _title_char_centers = []
+    _char_cache = None
 
 
 def visible() -> bool:
@@ -87,8 +88,55 @@ def _skip_glyph(size: int, *, forward: bool, color) -> pygame.Surface:
     return pygame.transform.smoothscale(icon, (size, size))
 
 
-def draw(surface: pygame.Surface) -> pygame.Rect | None:
-    """Draw the pill; refresh hit rects. Returns bounds or None when hidden."""
+TITLE_CHARS = 20
+_MARQUEE_SPEED = 22  # theme.s px per second
+_char_cache: tuple[str, tuple, list[pygame.Surface], list[int]] | None = None
+
+
+def _marquee_positions(
+    widths: list[int], *, window: float, offset: float, gap: float,
+) -> list[tuple[int, float]]:
+    """(index, u-center) per visible char; u is px left→right in the window.
+
+    Fits → centered and static. Too long → loops through the window with a
+    ``gap`` px pause between repeats; ``offset`` advances the scroll.
+    """
+    total = float(sum(widths))
+    out: list[tuple[int, float]] = []
+    if total <= window:
+        s = (window - total) / 2.0
+        for i, w in enumerate(widths):
+            out.append((i, s + w / 2.0))
+            s += w
+        return out
+    loop = total + gap
+    s = 0.0
+    for i, w in enumerate(widths):
+        u = (s + w / 2.0 - offset) % loop
+        s += w
+        if -w / 2.0 < u < window + w / 2.0:
+            out.append((i, u))
+    return out
+
+
+def _title_surfaces(name: str, color) -> tuple[list[pygame.Surface], list[int]]:
+    global _char_cache
+    key_color = tuple(color)
+    if _char_cache is not None and _char_cache[0] == name and _char_cache[1] == key_color:
+        return _char_cache[2], _char_cache[3]
+    font = draw_mod.load_font(max(8, theme.s(10)), bold=True)
+    surfs = [font.render(ch, True, color) for ch in name]
+    widths = [s.get_width() for s in surfs]
+    _char_cache = (name, key_color, surfs, widths)
+    return surfs, widths
+
+
+def draw(surface: pygame.Surface, now: float | None = None) -> pygame.Rect | None:
+    """Draw the pill; refresh hit rects. Returns bounds or None when hidden.
+
+    The pill has a fixed footprint sized for TITLE_CHARS characters; long
+    titles marquee through the window (or truncate when scroll is off).
+    """
     global _prev_rect, _next_rect, _prev_c, _next_c, _title_char_centers
     if not visible():
         _prev_rect = pygame.Rect(0, 0, 0, 0)
@@ -99,60 +147,94 @@ def draw(surface: pygame.Surface) -> pygame.Rect | None:
     from display.round_touch import radar_hud
     from utilities import lofi_audio
 
+    if now is None:
+        now = time.monotonic()
     glyph_rgb, fill_rgba = radar_hud._hud_chrome()
     cx, cy = theme.CENTER_X, theme.CENTER_Y
     r_mid = int(theme.VISIBLE_RADIUS * 0.84)
+    rr = float(max(1, r_mid))
     band = theme.s(30)
     mid = _mid_angle()
     bottom = mid > 0
 
+    scroll = settings.lofi_title_scroll()
     name = lofi_audio.now_playing_name() or "lofi beats"
-    if len(name) > 22:
-        name = name[:21] + "…"
+    if not scroll and len(name) > TITLE_CHARS:
+        name = name[: TITLE_CHARS - 1] + "…"
+
     chars: list[pygame.Surface] = []
+    char_w: list[int] = []
+    char_ref = theme.s(8)
     try:
+        chars, char_w = _title_surfaces(name, glyph_rgb)
         font = draw_mod.load_font(max(8, theme.s(10)), bold=True)
-        chars = [font.render(ch, True, glyph_rgb) for ch in name]
+        char_ref = max(4, font.size("n")[0])
     except Exception:
-        chars = []
+        chars, char_w = [], []
 
     icon_px = theme.s(14)
-    prev_icon = _skip_glyph(icon_px, forward=False, color=glyph_rgb)
-    next_icon = _skip_glyph(icon_px, forward=True, color=glyph_rgb)
-    spacer = pygame.Surface((theme.s(10), 1), pygame.SRCALPHA)
-    items = [prev_icon, spacer, *chars, spacer, next_icon]
-    widths = [s.get_width() for s in items]
+    gap_px = float(theme.s(10))
+    window = float(TITLE_CHARS * char_ref)
+    total_w = icon_px + gap_px + window + gap_px + icon_px
 
-    half = arc_ui.arc_span(widths, r_mid) / 2 + theme.s(14) / float(r_mid)
+    # Fixed pill footprint regardless of the current track name.
+    half = (total_w / 2.0 + theme.s(14)) / rr
     radar_hud._draw_curved_white_pill(
         surface, cx, cy, r_mid, mid, band, fill_rgba,
         arc_a0=mid - half, arc_a1=mid + half,
     )
 
-    placed = arc_ui.arc_layout(widths, r=r_mid, mid=mid, bottom=bottom)
-    centers: list[tuple[int, int]] = []
-    for surf, (x, y, rot) in zip(items, placed):
-        c = (cx + int(round(x)), cy + int(round(y)))
-        centers.append(c)
-        if surf is spacer:
-            continue
+    def place(t: float) -> tuple[tuple[int, int], float]:
+        """Arc position + rotation for pixel offset ``t`` (0 = left edge)."""
+        if bottom:
+            a = mid + (total_w / 2.0 - t) / rr
+            rot = -math.degrees(a - math.pi / 2)
+        else:
+            a = mid - (total_w / 2.0 - t) / rr
+            rot = -math.degrees(a + math.pi / 2)
+        c = (cx + int(round(rr * math.cos(a))), cy + int(round(rr * math.sin(a))))
+        return c, rot
+
+    def stamp(surf: pygame.Surface, t: float) -> tuple[int, int]:
+        c, rot = place(t)
         rotated = pygame.transform.rotate(surf, rot)
         rotated.set_alpha(165)  # keep the pill quiet next to the radar
         surface.blit(rotated, rotated.get_rect(center=c))
+        return c
 
-    _prev_c = centers[0]
-    _next_c = centers[-1]
-    _title_char_centers = centers[2:-2]
+    prev_icon = _skip_glyph(icon_px, forward=False, color=glyph_rgb)
+    next_icon = _skip_glyph(icon_px, forward=True, color=glyph_rgb)
+    _prev_c = stamp(prev_icon, icon_px / 2.0)
+    _next_c = stamp(next_icon, total_w - icon_px / 2.0)
+
+    _title_char_centers = []
+    if chars:
+        offset = (now * float(theme.s(_MARQUEE_SPEED))) if scroll else 0.0
+        win_left = icon_px + gap_px
+        for i, u in _marquee_positions(
+            char_w, window=window, offset=offset, gap=window * 0.35,
+        ):
+            # Only stamp glyphs fully inside the window — no bleed into icons.
+            if u - char_w[i] / 2.0 < -1 or u + char_w[i] / 2.0 > window + 1:
+                continue
+            _title_char_centers.append(stamp(chars[i], win_left + u))
 
     hit = band + theme.s(14)
     _prev_rect = pygame.Rect(0, 0, hit, hit)
     _prev_rect.center = _prev_c
     _next_rect = pygame.Rect(0, 0, hit, hit)
     _next_rect.center = _next_c
-    xs = [c[0] for c in centers]
-    ys = [c[1] for c in centers]
+
+    # Fixed bounds from the pill arc itself (independent of the title).
+    pts = []
+    for a in (mid - half, mid, mid + half):
+        for rad in (rr - band, rr + band):
+            pts.append((cx + rad * math.cos(a), cy + rad * math.sin(a)))
+    xs = [p[0] for p in pts]
+    ys = [p[1] for p in pts]
+    pad = theme.s(8)
     bounds = pygame.Rect(
-        min(xs) - band, min(ys) - band,
-        (max(xs) - min(xs)) + 2 * band, (max(ys) - min(ys)) + 2 * band,
+        int(min(xs)) - pad, int(min(ys)) - pad,
+        int(max(xs) - min(xs)) + 2 * pad, int(max(ys) - min(ys)) + 2 * pad,
     )
     return bounds

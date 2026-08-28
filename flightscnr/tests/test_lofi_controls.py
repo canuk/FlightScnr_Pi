@@ -42,6 +42,7 @@ from display.round_touch import lofi_controls, settings, theme
 def _reset():
     settings.set_lofi_enabled(True)
     settings.set_lofi_controls_enabled(True)
+    settings.set_lofi_title_scroll(True)
     settings.set_radar_hud_enabled(True)
     settings.set_radar_hud_position("top")
     lofi_controls._reset_for_tests()
@@ -88,6 +89,60 @@ class TestPlacement:
         lofi_controls.draw(_surface())
         prev_c, _ = lofi_controls.button_centers()
         assert prev_c[1] > theme.CENTER_Y
+
+
+class TestMarquee:
+    def test_scroll_setting_default_on(self):
+        assert settings.lofi_title_scroll() is True
+        settings.set_lofi_title_scroll(False)
+        assert settings.lofi_title_scroll() is False
+        settings.toggle_lofi_title_scroll()
+        assert settings.lofi_title_scroll() is True
+
+    def test_positions_center_when_title_fits(self):
+        pos = lofi_controls._marquee_positions(
+            [10, 10, 10], window=100, offset=0.0, gap=24)
+        assert [i for i, _ in pos] == [0, 1, 2]
+        us = [u for _, u in pos]
+        assert us == sorted(us)
+        # Centered: symmetric margins inside the window.
+        assert abs((us[0] - 5) - (100 - (us[-1] + 5))) <= 1
+
+    def test_positions_scroll_and_wrap_when_too_long(self):
+        widths = [10] * 30  # 300px of text in a 100px window
+        a = dict(lofi_controls._marquee_positions(widths, window=100, offset=0.0, gap=24))
+        b = dict(lofi_controls._marquee_positions(widths, window=100, offset=50.0, gap=24))
+        assert a and b and a != b
+        for pos in (a, b):
+            for u in pos.values():
+                assert -5 <= u <= 105
+        # A full loop returns to the same layout.
+        loop = 300 + 24
+        c = dict(lofi_controls._marquee_positions(widths, window=100, offset=float(loop), gap=24))
+        assert c == a
+
+    @pytest.mark.skipif(not _FONT_OK, reason="pygame.font unavailable")
+    def test_pill_size_fixed_across_names(self, monkeypatch):
+        from utilities import lofi_audio
+
+        monkeypatch.setattr(lofi_audio, "now_playing_name", lambda: "aa")
+        r_short = lofi_controls.draw(_surface())
+        monkeypatch.setattr(
+            lofi_audio, "now_playing_name",
+            lambda: "an extremely long track title that keeps going")
+        r_long = lofi_controls.draw(_surface())
+        assert r_short == r_long
+
+    @pytest.mark.skipif(not _FONT_OK, reason="pygame.font unavailable")
+    def test_show_mode_truncates_at_20(self, monkeypatch):
+        from utilities import lofi_audio
+
+        settings.set_lofi_title_scroll(False)
+        monkeypatch.setattr(
+            lofi_audio, "now_playing_name",
+            lambda: "an extremely long track title that keeps going")
+        lofi_controls.draw(_surface())
+        assert 0 < len(lofi_controls._title_char_centers) <= 20
 
 
 class TestCurvature:
