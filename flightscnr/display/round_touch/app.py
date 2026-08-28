@@ -2247,6 +2247,7 @@ class RoundTouchDisplay:
             "traffic_sfx": "traffic_sfx_volume",
             "military_sfx": "military_sfx_volume",
             "earthquake_voice": "earthquake_voice_volume",
+            "lofi_beats": "lofi_volume",
         }.get(action)
         if volume_action is None:
             return False
@@ -2259,6 +2260,8 @@ class RoundTouchDisplay:
             settings.toggle_earthquake_voice_enabled()
             if settings.earthquake_voice_enabled():
                 earthquake_overlay.prime_voice_seen()
+        elif action == "lofi_beats":
+            settings.toggle_lofi_enabled()
         else:
             settings.toggle_military_sfx_enabled()
         self._display_focus = info.hud_volume_row_index(volume_action)

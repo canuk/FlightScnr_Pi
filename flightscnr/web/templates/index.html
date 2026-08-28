@@ -589,6 +589,7 @@
             </div>
             <label for="earthquake_voice_volume">Earthquake alert volume <span id="earthquake_voice_volume_label">80%</span></label>
             <input id="earthquake_voice_volume" type="range" min="0" max="100" step="1" value="80">
+            <p class="hint">Off by default. Plays a voice clip once per new USGS event M3.0+ in radar range. Not earthquake early warning — catalog events can be minutes old. Silent during quiet hours and display off-hours. Needs the earthquake layer on, plus a USB or Bluetooth speaker.</p>
             <div class="chk">
                 <label for="lofi_enabled">Background lofi beats</label>
                 <span class="switch"><input id="lofi_enabled" type="checkbox"><span class="track"></span></span>
@@ -602,7 +603,6 @@
                 <button class="btn btn-sm" id="btn-lofi-upload" type="button">Add track</button>
             </div>
             <p class="hint" id="lofi_upload_msg"></p>
-            <p class="hint">Off by default. Plays a voice clip once per new USGS event M3.0+ in radar range. Not earthquake early warning — catalog events can be minutes old. Silent during quiet hours and display off-hours. Needs the earthquake layer on, plus a USB or Bluetooth speaker.</p>
             <button class="btn btn-primary" id="btn-save-reload" style="margin-top:.7rem" type="button">Save &amp; reload on display</button>
             <div id="display-status" class="status"></div>
         </div>
@@ -3225,15 +3225,31 @@ document.addEventListener("DOMContentLoaded", () => {
         try {
             const r = await fetch("/lofi/tracks");
             const d = await r.json();
-            const parts = [];
-            (d.bundled || []).forEach(n => parts.push(`<div>&#9835; ${n} <span style="opacity:.6">(built-in)</span></div>`));
-            (d.user || []).forEach(n => parts.push(`<div>&#9835; ${n} <a href="#" data-lofi-del="${n}">remove</a></div>`));
-            box.innerHTML = parts.join("") || "No tracks yet.";
-            box.querySelectorAll("[data-lofi-del]").forEach(a => a.addEventListener("click", async (e) => {
-                e.preventDefault();
-                await fetch("/lofi/delete", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({name: a.dataset.lofiDel})});
-                loadLofiTracks();
-            }));
+            box.textContent = "";
+            const addRow = (name, builtin) => {
+                const row = document.createElement("div");
+                row.textContent = "\u266B " + name + " ";
+                if (builtin) {
+                    const tag = document.createElement("span");
+                    tag.style.opacity = ".6";
+                    tag.textContent = "(built-in)";
+                    row.appendChild(tag);
+                } else {
+                    const del = document.createElement("a");
+                    del.href = "#";
+                    del.textContent = "remove";
+                    del.addEventListener("click", async (e) => {
+                        e.preventDefault();
+                        await fetch("/lofi/delete", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({name})});
+                        loadLofiTracks();
+                    });
+                    row.appendChild(del);
+                }
+                box.appendChild(row);
+            };
+            (d.bundled || []).forEach(n => addRow(n, true));
+            (d.user || []).forEach(n => addRow(n, false));
+            if (!box.childNodes.length) box.textContent = "No tracks yet.";
         } catch (_) {}
     }
     if ($("btn-lofi-upload")) $("btn-lofi-upload").addEventListener("click", async () => {

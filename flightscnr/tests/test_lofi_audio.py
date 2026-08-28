@@ -202,3 +202,45 @@ class TestUserTrackManagement:
         assert path is not None and os.path.isfile(path)
         assert lofi_audio.user_tracks() == ["Chill.mp3"]
         assert lofi_audio.save_user_track("bad.txt", b"x") is None
+
+
+class TestHudVolumeRow:
+    def test_lofi_volume_is_a_hud_sound_row(self):
+        from display.round_touch.screens import info
+
+        assert "lofi_volume" in info._HUD_VOLUME_ACTIONS
+        assert info._HUD_VOLUME_TOGGLES["lofi_volume"] == "lofi_beats"
+        label, getter, setter = info._hud_volume_meta("lofi_volume")
+        assert "ofi" in label
+        setter(33)
+        assert getter() == 33
+        setter(25)
+
+    def test_row_switch_follows_lofi_enabled(self):
+        from display.round_touch.screens import info
+
+        settings.set_lofi_enabled(True)
+        assert info.hud_sound_enabled("lofi_volume") is True
+        settings.set_lofi_enabled(False)
+        assert info.hud_sound_enabled("lofi_volume") is False
+
+    def test_toggle_dispatch(self):
+        from display.round_touch.app import RoundTouchDisplay
+
+        fake = object.__new__(RoundTouchDisplay)
+        settings.set_lofi_enabled(False)
+        assert RoundTouchDisplay._apply_hud_sound_toggle(fake, "lofi_beats") is True
+        assert settings.lofi_enabled() is True
+        RoundTouchDisplay._apply_hud_sound_toggle(fake, "lofi_beats")
+        assert settings.lofi_enabled() is False
+
+    def test_set_volume_supports_drag_persist_kwarg(self):
+        assert settings.set_lofi_volume(40, persist=False) == 40
+        assert settings.lofi_volume() == 40
+        settings.set_lofi_volume(25)
+
+    def test_hostile_filenames_rejected(self):
+        assert lofi_audio.safe_track_name('x<img onerror=alert(1)>.mp3') is None
+        assert lofi_audio.safe_track_name('a"b.mp3') is None
+        assert lofi_audio.safe_track_name("tick'.mp3") is None
+        assert lofi_audio.safe_track_name("Fine Track_2 (mix).mp3") == "Fine Track_2 (mix).mp3"

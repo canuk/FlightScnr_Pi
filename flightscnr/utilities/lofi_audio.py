@@ -73,6 +73,11 @@ def safe_track_name(name: str) -> str | None:
         return None
     if name != os.path.basename(name) or name.startswith("."):
         return None
+    # Conservative charset: nothing HTML- or shell-hostile survives.
+    import re as _re
+
+    if not _re.fullmatch(r"[A-Za-z0-9 ._()\-]{1,120}\.mp3", name, _re.IGNORECASE):
+        return None
     return name
 
 
