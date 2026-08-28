@@ -129,16 +129,6 @@ def content_bottom_y(footer_y_offset: int = 0, *, footer_rows: int = 1) -> int:
     return top - theme.s(10)
 
 
-def curved_content_bottom_y() -> int:
-    """Content limit above the curved footer pills.
-
-    The curved pills hug the rim, so settings content may run deeper than
-    the old straight button band allowed.
-    """
-    r = int(theme.VISIBLE_RADIUS * 0.84)
-    return theme.CENTER_Y + r - theme.s(30) // 2 - theme.s(8)
-
-
 def attribution_y(footer_y_offset: int = 0) -> int:
     """Y coordinate for Tomorrow.io attribution — near the bottom rim, below footer buttons."""
     top, band_h = _footer_band(footer_y_offset)

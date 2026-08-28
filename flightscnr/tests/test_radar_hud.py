@@ -694,7 +694,7 @@ class HudSettingsRowTests(unittest.TestCase):
         from display.round_touch import nav
         from display.round_touch.screens import info
 
-        bottom = nav.curved_content_bottom_y()
+        bottom = nav.content_bottom_y()
         for action in info._HUD_VOLUME_ACTIONS:
             hit, _track_x, _track_w = info._hud_volume_slider_geometry(action)
             self.assertLess(hit.bottom, bottom)
