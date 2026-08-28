@@ -429,7 +429,7 @@ def _build_overlay(
         return None
 
     home_lat, home_lon = float(LOCATION_HOME[0]), float(LOCATION_HOME[1])
-    outer_km = scale.SCALE_BANDS[scale_index]["label_km"]
+    outer_km = scale.bands()[scale_index]["label_km"]
     px_per_km = theme.GRID_OUTER_RADIUS / outer_km
     zoom = MAX_ZOOM
 

@@ -872,7 +872,7 @@ def _radar_airport_radius_km() -> float:
         scale_mod.select(idx)
     except Exception:
         pass
-    band = scale_mod.SCALE_BANDS[idx]
+    band = scale_mod.bands()[idx]
     try:
         screen_r = theme.VISIBLE_RADIUS - theme.BEYOND_RING_MARGIN
         return float(band["coverage_km"]) * (float(screen_r) / float(theme.GRID_OUTER_RADIUS))

@@ -954,7 +954,35 @@ class VisibleAirportsRadiusTests(unittest.TestCase):
         ):
             radius = atc_audio._radar_airport_radius_km()
         self.assertEqual(scale_mod.active_index(), last_idx)
-        self.assertGreater(radius, scale_mod.SCALE_BANDS[1]["coverage_km"])
+        self.assertGreater(radius, scale_mod.bands()[1]["coverage_km"])
+
+    def test_radius_follows_display_unit_bands(self):
+        from display.round_touch import scale as scale_mod
+        from display.round_touch import settings, theme
+        from utilities import atc_audio
+
+        scale_mod.select(4)
+        screen_r = theme.VISIBLE_RADIUS - theme.BEYOND_RING_MARGIN
+        edge_factor = float(screen_r) / float(theme.GRID_OUTER_RADIUS)
+        with mock.patch(
+            "display.round_touch.settings.scale_index", return_value=4
+        ), mock.patch.object(settings, "distance_units", return_value="km"):
+            km_radius = atc_audio._radar_airport_radius_km()
+        with mock.patch(
+            "display.round_touch.settings.scale_index", return_value=4
+        ), mock.patch.object(settings, "distance_units", return_value="mi"):
+            mi_radius = atc_audio._radar_airport_radius_km()
+        self.assertAlmostEqual(
+            km_radius,
+            scale_mod.bands("km")[4]["coverage_km"] * edge_factor,
+            places=3,
+        )
+        self.assertAlmostEqual(
+            mi_radius,
+            scale_mod.bands("mi")[4]["coverage_km"] * edge_factor,
+            places=3,
+        )
+        self.assertGreater(abs(km_radius - mi_radius), 0.5)
 
     def test_visible_airports_queries_settings_radius(self):
         from utilities import atc_audio

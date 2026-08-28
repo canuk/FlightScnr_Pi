@@ -176,8 +176,9 @@ def preset_labels_mi() -> str:
 def index_for_radius_nm(radius_nm: float) -> int:
     """Scale band index that fits the configured search radius."""
     radius_km = radius_nm * 1.852
-    best = len(SCALE_BANDS) - 1
-    for i, band in enumerate(SCALE_BANDS):
+    unit_bands = bands()
+    best = len(unit_bands) - 1
+    for i, band in enumerate(unit_bands):
         if band["coverage_km"] >= radius_km:
             best = i
             break
