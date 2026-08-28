@@ -68,7 +68,7 @@ def adsb_coverage_hit(x: int, y: int) -> bool:
 
 
 def _draw_adsb_coverage_button(surface, bottom: int) -> None:
-    """Pill on Settings › Main opening the ADSB coverage diagnostic."""
+    """Small round ADSB/Local button beside the Settings › Main text."""
     global _adsb_button_rect
     _adsb_button_rect = None
     try:
@@ -79,22 +79,23 @@ def _draw_adsb_coverage_button(surface, bottom: int) -> None:
     except Exception:
         return
     try:
-        font = draw.load_font(theme.s(13), bold=True)
-        label = font.render("ADSB Coverage  \u203a", True, theme.MUTED)
+        font = draw.load_font(theme.s(10), bold=True)
+        top_lbl = font.render("ADSB", True, theme.MUTED)
+        bot_lbl = font.render("Local", True, theme.HINT)
     except Exception:
         return
-    pad_x, pad_y = theme.s(16), theme.s(7)
-    rect = pygame.Rect(
-        0, 0, label.get_width() + 2 * pad_x, label.get_height() + 2 * pad_y
+    radius = theme.s(27)
+    center = (theme.CENTER_X - theme.s(150), theme.CENTER_Y + theme.s(60))
+    pygame.draw.circle(surface, (26, 29, 33), center, radius)
+    pygame.draw.circle(surface, theme.GRID, center, radius, width=1)
+    surface.blit(top_lbl, top_lbl.get_rect(
+        center=(center[0], center[1] - top_lbl.get_height() // 2)))
+    surface.blit(bot_lbl, bot_lbl.get_rect(
+        center=(center[0], center[1] + bot_lbl.get_height() // 2 + theme.s(1))))
+    hit = radius + theme.s(8)
+    _adsb_button_rect = pygame.Rect(
+        center[0] - hit, center[1] - hit, 2 * hit, 2 * hit
     )
-    rect.center = (theme.CENTER_X, bottom - rect.height // 2 - theme.s(2))
-    pygame.draw.rect(surface, (28, 30, 34), rect, border_radius=rect.height // 2)
-    pygame.draw.rect(
-        surface, theme.GRID, rect, width=1, border_radius=rect.height // 2
-    )
-    surface.blit(label, label.get_rect(center=rect.center))
-    _adsb_button_rect = pygame.Rect(rect).inflate(theme.s(8), theme.s(8))
-
 
 def footer_kinds_for_page(page: int) -> tuple[str, ...]:
     """Settings footer: Prev always (Main returns to About); omit Next on last."""
