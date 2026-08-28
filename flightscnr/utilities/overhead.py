@@ -635,6 +635,25 @@ def load_tracked_callsign():
     return _tracked_cache["value"]
 
 
+def set_tracked_callsign(callsign: str) -> None:
+    """Write tracked_flight.json (same file the portal writes) and reset
+    the mtime cache so the change is visible immediately."""
+    cs = (callsign or "").strip().upper()[:12]
+    try:
+        with open(TRACKED_FILE, "w", encoding="utf-8") as f:
+            json.dump({"callsign": cs}, f)
+        try:
+            os.chmod(TRACKED_FILE, 0o666)
+        except OSError:
+            pass
+    except OSError:
+        logging.getLogger("flightscnr").warning(
+            "Could not write tracked flight file", exc_info=True
+        )
+        return
+    _tracked_cache.update({"at": 0.0, "mtime": None, "value": cs})
+
+
 def _load_counter_log() -> dict:
     try:
         with open(COUNTER_FILE, "r", encoding="utf-8") as f:
