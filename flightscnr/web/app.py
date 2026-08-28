@@ -890,6 +890,7 @@ def display_json():
             "earthquake_voice_volume": settings.earthquake_voice_volume(),
             "lofi_enabled": settings.lofi_enabled(),
             "lofi_volume": settings.lofi_volume(),
+            "lofi_controls_enabled": settings.lofi_controls_enabled(),
         }
     )
 
@@ -980,6 +981,8 @@ def display_save():
             settings.set_lofi_volume(int(data.get("lofi_volume")))
         except (TypeError, ValueError):
             return jsonify({"message": "lofi_volume must be a number"}), 400
+    if "lofi_controls_enabled" in data:
+        settings.set_lofi_controls_enabled(bool(data.get("lofi_controls_enabled")))
     return jsonify(
         {
             "ok": True,
@@ -1009,6 +1012,7 @@ def display_save():
             "earthquake_voice_volume": settings.earthquake_voice_volume(),
             "lofi_enabled": settings.lofi_enabled(),
             "lofi_volume": settings.lofi_volume(),
+            "lofi_controls_enabled": settings.lofi_controls_enabled(),
             "message": "Display settings saved.",
         }
     )
@@ -1026,7 +1030,40 @@ def lofi_tracks():
         )
     except OSError:
         pass
-    return jsonify({"bundled": bundled, "user": lofi_audio.user_tracks()})
+    return jsonify({
+        "bundled": bundled,
+        "user": lofi_audio.user_tracks(),
+        "disabled": settings.lofi_disabled_tracks(),
+    })
+
+
+@app.get("/lofi/stream/<path:name>")
+def lofi_stream(name):
+    from utilities import lofi_audio
+
+    path = lofi_audio.track_path(name)
+    if path is None:
+        return jsonify({"message": "Unknown track."}), 404
+    from flask import send_file
+
+    return send_file(path, mimetype="audio/mpeg", conditional=True)
+
+
+@app.post("/lofi/toggle_disabled")
+def lofi_toggle_disabled():
+    from utilities import lofi_audio
+
+    data = request.get_json(silent=True) or {}
+    name = lofi_audio.safe_track_name(str(data.get("name") or ""))
+    if name is None:
+        return jsonify({"message": "Bad track name."}), 400
+    disabled = set(settings.lofi_disabled_tracks())
+    if name in disabled:
+        disabled.discard(name)
+    else:
+        disabled.add(name)
+    settings.set_lofi_disabled_tracks(sorted(disabled))
+    return jsonify({"ok": True, "disabled": settings.lofi_disabled_tracks()})
 
 
 @app.post("/lofi/upload")
@@ -1139,6 +1176,8 @@ def display_earthquake_voice_preview():
             settings.set_lofi_volume(int(data.get("lofi_volume")))
         except (TypeError, ValueError):
             return jsonify({"message": "lofi_volume must be a number"}), 400
+    if "lofi_controls_enabled" in data:
+        settings.set_lofi_controls_enabled(bool(data.get("lofi_controls_enabled")))
     earthquake_overlay.play_voice_preview()
     return jsonify(
         {
@@ -1146,6 +1185,7 @@ def display_earthquake_voice_preview():
             "earthquake_voice_volume": settings.earthquake_voice_volume(),
             "lofi_enabled": settings.lofi_enabled(),
             "lofi_volume": settings.lofi_volume(),
+            "lofi_controls_enabled": settings.lofi_controls_enabled(),
             "message": "Playing earthquake alert preview.",
         }
     )
