@@ -1789,7 +1789,7 @@ def _atc_row_labels() -> list[str]:
     rows = (
         "ATC Audio",
         "",  # volume slider
-        "Lofi Bed",
+        "Background Lofi Beats",
         f"Airport › {_atc_airport_label()}",
         f"Channel › {_atc_channel_label_from_status(st)}",
         f"Output › {_atc_output_label()}",
