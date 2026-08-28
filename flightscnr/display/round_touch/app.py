@@ -4512,11 +4512,20 @@ class RoundTouchDisplay:
             airport_overlay.clear_callout()
             return self._open_picked_flight(flight)
         if airport is not None:
-            airport_overlay.show_callout(airport)
+            from display.round_touch import airport_tile
+
+            airport_tile.open_tile(airport)
             radar.invalidate_frame_layer()
             self._note_activity()
             return True
         airport_overlay.clear_callout()
+        from display.round_touch import airport_tile
+
+        if airport_tile.is_open():
+            airport_tile.dismiss()
+            radar.invalidate_frame_layer()
+            self._note_activity()
+            return True
         return False
 
     def _tick_ais(self):
@@ -5056,6 +5065,11 @@ class RoundTouchDisplay:
                         radar.invalidate_frame_layer()
                         self._safe_draw()
                     if zoom_buttons.tick():
+                        radar.invalidate_frame_layer()
+                        self._safe_draw()
+                    from display.round_touch import airport_tile
+
+                    if airport_tile.tick():
                         radar.invalidate_frame_layer()
                         self._safe_draw()
                     hourly_chime.tick()
