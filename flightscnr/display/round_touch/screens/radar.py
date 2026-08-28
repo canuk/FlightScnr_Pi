@@ -273,12 +273,6 @@ def _build_frame_layer(build: pygame.Surface, backdrop, flights, offset) -> bool
         zoom_buttons.draw(build)
     except Exception:
         pass
-    try:
-        from display.round_touch import airport_tile
-
-        airport_tile.draw(build)
-    except Exception:
-        pass
     _t = _rebuild_stage("2r_status", _t)
     # HUD lives on a transparent overlay (rebuilt here) so the sweep can pass
     # under the curved frost without a rectangular clip from the bake layer.
@@ -556,9 +550,6 @@ def draw_radar(
             from display.round_touch import zoom_buttons
 
             zoom_buttons.draw(surface)
-            from display.round_touch import airport_tile
-
-            airport_tile.draw(surface)
             # Sweep under the HUD pill.
             if settings.show_sweep_line() and layer is None:
                 draw.draw_sweep_line(
