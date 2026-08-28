@@ -220,6 +220,7 @@ class CrossfadeScheduler:
         self._index = 0
         self._started_at: float | None = None
         self._incoming = False
+        self._last_spawn = -1e9
 
     def current_track(self) -> str | None:
         tracks = self._get_tracks()
@@ -241,14 +242,39 @@ class CrossfadeScheduler:
         active = self._players[self._active]
         other = self._players[1 - self._active]
 
+        now = self._clock()
         if self._started_at is None or not active.alive():
+            # Self-heal: the active player died (track EOF racing the
+            # timeline, audio-device flap, mpv crash).
+            if self._incoming and other.alive():
+                # Mid-fade: promote the incoming player instead of
+                # restarting the dead track over it (that doubled audio).
+                self._index = (self._index + 1) % len(tracks)
+                self._active = 1 - self._active
+                self._started_at = now - self._fade
+                self._incoming = False
+                self._players[self._active].set_volume(vol)
+                return
+            if self._started_at is not None:
+                # Unexpected death outside a fade: move on, never replay the
+                # same file into a loop; brief backoff between respawns.
+                self._index = (self._index + 1) % len(tracks)
+                self._started_at = None
+            if now - self._last_spawn < 2.0:
+                return
             track = self.current_track()
             if track is None:
                 return
             active.play(track, vol)
-            self._started_at = self._clock()
+            self._started_at = now
+            self._last_spawn = now
             self._incoming = False
             return
+
+        # Invariant: outside a fade exactly one player runs. Heal any stray
+        # second stream (orphaned overlap, drift) immediately.
+        if not self._incoming and other.alive():
+            other.stop()
 
         duration = active.duration()
         elapsed = self._clock() - self._started_at
@@ -258,14 +284,25 @@ class CrossfadeScheduler:
         remaining = duration - elapsed
 
         if remaining <= 0:
-            # Fade over: incoming player becomes the active one.
             active.stop()
             self._index = (self._index + 1) % len(tracks)
-            self._active = 1 - self._active
-            # The incoming track started ~fade seconds before the old ended.
-            self._started_at = self._clock() - self._fade
-            self._incoming = False
-            self._players[self._active].set_volume(vol)
+            if self._incoming and other.alive():
+                # Fade over: the incoming player becomes the active one; it
+                # started ~fade seconds before the old track ended.
+                self._active = 1 - self._active
+                self._started_at = now - self._fade
+                self._incoming = False
+                self._players[self._active].set_volume(vol)
+            else:
+                # No crossfade in flight (clock jump / stalled duration):
+                # start the next track fresh rather than promoting a dead slot.
+                self._incoming = False
+                other.stop()
+                track = self.current_track()
+                if track is not None:
+                    active.play(track, vol)
+                    self._started_at = now
+                    self._last_spawn = now
             return
 
         if remaining <= self._fade:
@@ -274,6 +311,7 @@ class CrossfadeScheduler:
                 nxt = self._next_track()
                 if nxt is not None:
                     other.play(nxt, vol * frac)
+                    self._last_spawn = self._clock()
                     self._incoming = True
             else:
                 other.set_volume(vol * frac)
@@ -293,9 +331,29 @@ _scheduler: CrossfadeScheduler | None = None
 _last_tick = 0.0
 
 
+def _reap_orphans() -> None:
+    """Kill lofi mpv processes left over from a previous app generation.
+
+    Our players are identified by the ``flightscnr-lofi-`` IPC socket arg;
+    anything matching that pattern before we own any players is a stray
+    that would double the audio.
+    """
+    try:
+        subprocess.run(
+            ["pkill", "-f", "flightscnr-lofi-"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+            timeout=5,
+        )
+    except Exception:
+        pass
+
+
 def _ensure_scheduler() -> CrossfadeScheduler | None:
     global _scheduler
     if _scheduler is None:
+        _reap_orphans()
         _scheduler = CrossfadeScheduler(
             MpvPlayer("a"), MpvPlayer("b"), playlist
         )
