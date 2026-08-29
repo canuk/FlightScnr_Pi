@@ -404,6 +404,21 @@ class TestAtcPageVolume:
         assert len(info._atc_row_labels()) == len(info.ATC_ACTIONS)
 
 
+class TestSliderDragTolerance:
+    def test_drag_band_forgives_arced_thumbs(self):
+        import pygame
+
+        from display.round_touch import theme
+        from display.round_touch.screens import info
+
+        hit = pygame.Rect(100, 300, 400, 40)
+        # A thumb arcing ~60px off the row must NOT cancel the drag.
+        assert info.slider_drag_band_contains(hit, 300 - theme.s(56)) is True
+        assert info.slider_drag_band_contains(hit, 340 + theme.s(56)) is True
+        # Far-off wanders still cancel (the sticky-X steal guard).
+        assert info.slider_drag_band_contains(hit, 340 + theme.s(90)) is False
+
+
 class TestAtcLofiGating:
     def test_lofi_rows_hidden_without_tracks(self, monkeypatch):
         from display.round_touch.screens import info
