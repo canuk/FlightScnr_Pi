@@ -222,6 +222,31 @@ class TestTileDraw:
         surface = pygame.Surface((theme.SIZE, theme.SIZE))
         assert airport_tile.draw(surface) is None
 
+    @pytest.mark.skipif(not _FONT_OK, reason="pygame.font unavailable on this host")
+    def test_draw_puts_chart_symbol_beside_ident(self, monkeypatch):
+        """The sectional chart symbol renders right of the identifier."""
+        from display.round_touch import airport_overlay
+
+        calls = []
+
+        def spy(surface, center, radius, **flags):
+            calls.append((center, radius, flags))
+
+        monkeypatch.setattr(airport_overlay, "draw_chart_icon", spy)
+        monkeypatch.setattr(
+            airport_overlay, "chart_icon_flags", lambda ident: (True, True, False)
+        )
+        monkeypatch.setattr(airport_tile, "_start_fetch", lambda ident: None)
+        airport_tile.open_tile({"ident": "KNKX", "name": "Miramar MCAS", "type": "medium_airport"})
+        airport_tile._set_metar_for_tests(metar.parse_api_row(_API_ROW))
+        surface = pygame.Surface((theme.SIZE, theme.SIZE))
+        assert airport_tile.draw(surface) is not None
+        assert len(calls) == 1
+        (cx, cy), radius, flags = calls[0]
+        ident_font = airport_tile._load(theme.s(15), bold=True)
+        assert cx > theme.s(10) + ident_font.size("KNKX")[0]
+        assert flags == {"towered": True, "fuel": True, "beacon": False}
+
 
 class TestTilePlacement:
     def _corners_in_circle(self, rect, pad=0):
