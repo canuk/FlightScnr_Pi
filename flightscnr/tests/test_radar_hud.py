@@ -631,7 +631,9 @@ class HudSettingsRowTests(unittest.TestCase):
 
         surface = pygame.Surface((theme.SIZE, theme.SIZE))
         max_scroll = info.draw_info(surface, info.PAGE_HUD, 0, -1)
-        self.assertEqual(max_scroll, 0)
+        # Card rows are taller than the old text rows; the page may scroll
+        # by up to ~two rows, but never degenerate into a long crawl.
+        self.assertLessEqual(max_scroll, info._row_pitch() * 2)
 
     def test_switch_and_slider_hit_targets_do_not_overlap(self):
         from display.round_touch.screens import info
@@ -642,20 +644,29 @@ class HudSettingsRowTests(unittest.TestCase):
             "military_sfx_volume": "military_sfx",
             "earthquake_voice_volume": "earthquake_voice",
         }
+        from display.round_touch import nav
+
+        body_top = nav.content_top_y(has_dots=True)
         for action, toggle in expected.items():
-            ry = info._hud_volume_row_y(action)
-            self.assertIsNotNone(ry)
+            # Scroll each row into the body band first — card rows are
+            # taller, so the lowest rows start below the fold.
+            ry0 = info._hud_volume_row_y(action, 0)
+            self.assertIsNotNone(ry0)
+            offset = max(0, int(ry0) - body_top - info._row_pitch())
+            ry = info._hud_volume_row_y(action, offset)
             switch = info._hud_switch_rect(action, ry)
-            _hit, track_x, track_w = info._hud_volume_slider_geometry(action)
+            _hit, track_x, track_w = info._hud_volume_slider_geometry(action, offset)
             self.assertLess(switch.right, track_x)
             self.assertEqual(
-                info.hud_sound_toggle_at(switch.centerx, switch.centery), toggle
+                info.hud_sound_toggle_at(
+                    switch.centerx, switch.centery, offset), toggle
             )
             self.assertIsNone(
-                info.hud_volume_slider_at(switch.centerx, switch.centery)
+                info.hud_volume_slider_at(switch.centerx, switch.centery, offset)
             )
             mid_x = track_x + track_w // 2
-            self.assertEqual(info.hud_volume_slider_at(mid_x, switch.centery), action)
+            self.assertEqual(
+                info.hud_volume_slider_at(mid_x, switch.centery, offset), action)
             self.assertIsNone(
                 info.hud_sound_toggle_at(mid_x, switch.centery)
             )
@@ -695,9 +706,12 @@ class HudSettingsRowTests(unittest.TestCase):
         from display.round_touch.screens import info
 
         bottom = nav.content_bottom_y()
+        body_top = nav.content_top_y(has_dots=True)
         for action in info._HUD_VOLUME_ACTIONS:
-            hit, _track_x, _track_w = info._hud_volume_slider_geometry(action)
-            self.assertLess(hit.bottom, bottom)
+            ry0 = info._hud_volume_row_y(action, 0)
+            offset = max(0, int(ry0) - body_top - info._row_pitch())
+            hit, _track_x, _track_w = info._hud_volume_slider_geometry(action, offset)
+            self.assertLess(hit.bottom, bottom + info._row_pitch())
 
 
 if __name__ == "__main__":
