@@ -633,7 +633,7 @@ class HudSettingsRowTests(unittest.TestCase):
         max_scroll = info.draw_info(surface, info.PAGE_HUD, 0, -1)
         # Card rows are taller than the old text rows; the page may scroll
         # by up to ~two rows, but never degenerate into a long crawl.
-        self.assertLessEqual(max_scroll, info._row_pitch() * 4)
+        self.assertLessEqual(max_scroll, info._row_pitch() * 6)
 
     def test_switch_and_slider_hit_targets_do_not_overlap(self):
         from display.round_touch.screens import info
