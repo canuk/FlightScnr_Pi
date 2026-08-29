@@ -1957,8 +1957,8 @@ def _atc_row_labels() -> list[str]:
         "",  # volume slider
         "Background Lofi Beats",
         "",  # lofi volume slider
-        "Track Buttons on Radar",
-        "Scroll Track Name",
+        "Lofi Prev/Next Buttons",
+        "Scroll Lofi Track Name",
         f"Airport › {_atc_airport_label()}",
         f"Channel › {_atc_channel_label_from_status(st)}",
         f"Output › {_atc_output_label()}",
