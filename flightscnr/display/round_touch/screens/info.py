@@ -2259,34 +2259,41 @@ def _draw_quiet_dim_slider_row(surface, ry: int, focused: bool) -> None:
     text_h = body_font.get_height()
     row_h = _row_pitch() - theme.s(5)
     _draw_card(surface, ry, focused=focused)
-    # Screen-off button: slashed monitor; lit SWEEP while the level is 0.
+    # Screen on/off toggle art: the colored radar icon while the screen
+    # stays on at the dim level; a slashed dark circle once it is off.
     off_active = enabled and pct == 0
-    icon_color = theme.SWEEP if off_active else (
-        theme.MUTED if enabled else theme.HINT
-    )
     lw = max(2, theme.s(2))
-    screen_rect = pygame.Rect(
-        icon.left, icon.top + theme.s(1), icon.width, int(icon.height * 0.62)
-    )
-    pygame.draw.rect(surface, icon_color, screen_rect, lw, border_radius=theme.s(3))
-    pygame.draw.line(
-        surface, icon_color,
-        (icon.centerx, screen_rect.bottom),
-        (icon.centerx, icon.bottom - theme.s(2)),
-        lw,
-    )
-    pygame.draw.line(
-        surface, icon_color,
-        (icon.centerx - theme.s(4), icon.bottom - theme.s(1)),
-        (icon.centerx + theme.s(4), icon.bottom - theme.s(1)),
-        lw,
-    )
-    pygame.draw.line(
-        surface, icon_color,
-        (icon.left - theme.s(2), icon.bottom + theme.s(1)),
-        (icon.right + theme.s(2), icon.top - theme.s(1)),
-        lw,
-    )
+    if off_active:
+        icon_color = theme.SWEEP if enabled else theme.HINT
+        r_icon = icon.width // 2 - theme.s(1)
+        pygame.draw.circle(surface, (6, 8, 6), icon.center, r_icon)
+        pygame.draw.circle(surface, icon_color, icon.center, r_icon, lw)
+        off = int(r_icon * 0.7071)
+        pygame.draw.line(
+            surface, icon_color,
+            (icon.centerx - off, icon.centery + off),
+            (icon.centerx + off, icon.centery - off),
+            lw,
+        )
+    else:
+        radar_img = None
+        try:
+            from display.round_touch import buttons
+
+            radar_img = buttons.load_button_surface(
+                "radar", icon.width, icon.height
+            )
+        except Exception:
+            radar_img = None
+        if radar_img is not None:
+            if not enabled:
+                radar_img = radar_img.copy()
+                radar_img.set_alpha(110)
+            surface.blit(radar_img, radar_img.get_rect(center=icon.center))
+        else:
+            icon_color = theme.MUTED if enabled else theme.HINT
+            r_icon = icon.width // 2 - theme.s(1)
+            pygame.draw.circle(surface, icon_color, icon.center, r_icon, lw)
     label = body_font.render(
         "Dim", True, theme.LABEL if enabled else theme.HINT
     )
