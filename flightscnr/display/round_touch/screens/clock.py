@@ -281,7 +281,7 @@ def tap_on_time(x: int, y: int) -> bool:
 
 
 def draw_clock(surface):
-    draw.fill_background(surface)
+    draw.fill_background_textured(surface)
     nav.draw_curved_breadcrumb(surface, ["Radar", "Clock"])
 
     wx = weather_data.refresh() or weather_data.snapshot()
