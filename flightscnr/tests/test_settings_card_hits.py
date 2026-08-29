@@ -118,6 +118,36 @@ class TestPressedRowHighlight:
         )
 
 
+class TestThemeCrayonGrid:
+    def teardown_method(self):
+        info._theme_expanded.clear()
+
+    def test_swatch_tap_returns_group_and_rgb(self):
+        group = info.RGB_GROUP_THEME
+        x0, y0 = info._swatch_grid_origin(group, 0)
+        cell = info._swatch_cell()
+        hit = info.theme_swatch_at(x0 + cell // 2, y0 + cell // 2, 0)
+        assert hit == (group, info.THEME_SWATCHES[0])
+
+    def test_sliders_hidden_until_expanded(self):
+        group = info.RGB_GROUP_THEME
+        rows = info._theme_slider_geometry(0, group=group)
+        cx, cy = rows[0][0].center
+        assert info.theme_slider_at(cx, cy, 0) is None
+        info.theme_toggle_expanded(group)
+        rows = info._theme_slider_geometry(0, group=group)
+        hit_rect = rows[0][0]
+        got = info.theme_slider_at(hit_rect.centerx, hit_rect.centery, 0)
+        assert got == (group, 0)
+
+    def test_expander_toggle_grows_content(self):
+        h0 = info._theme_content_height()
+        info.theme_toggle_expanded(info.RGB_GROUP_RUNWAY)
+        assert info._theme_content_height() > h0
+        info.theme_toggle_expanded(info.RGB_GROUP_RUNWAY)
+        assert info._theme_content_height() == h0
+
+
 class TestRowsStartAtContentTop:
     def test_rows_top_is_content_top(self):
         """Rows start at the normal content top again (2/5 was reverted)."""
