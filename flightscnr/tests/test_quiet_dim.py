@@ -77,13 +77,17 @@ class TestQuietDimRows:
         assert "Dim During Quiet Hours" in labels
 
     def test_slider_hit_and_value(self):
-        geom = info._quiet_dim_slider_geometry(0)
+        # The dim row sits low on the page — scroll it into the body band.
+        row_y, row_h, _ = info._display_layout(info.PAGE_ATC_QUIET, 0)
+        ry = row_y + info.quiet_dim_row_index() * row_h
+        scroll = max(0, int(ry + row_h - info.nav.content_bottom_y()))
+        geom = info._quiet_dim_slider_geometry(scroll)
         assert geom is not None
         hit, track_x, track_w = geom
-        assert info.quiet_dim_slider_at(hit.centerx, hit.centery, 0) is True
-        assert info.quiet_dim_slider_value_at(track_x, 0) == 0
-        assert info.quiet_dim_slider_value_at(track_x + track_w, 0) == 100
-        mid = info.quiet_dim_slider_value_at(track_x + track_w // 2, 0)
+        assert info.quiet_dim_slider_at(hit.centerx, hit.centery, scroll) is True
+        assert info.quiet_dim_slider_value_at(track_x, scroll) == 0
+        assert info.quiet_dim_slider_value_at(track_x + track_w, scroll) == 100
+        mid = info.quiet_dim_slider_value_at(track_x + track_w // 2, scroll)
         assert 45 <= mid <= 55
 
     def test_slider_row_not_a_tap_row(self):
