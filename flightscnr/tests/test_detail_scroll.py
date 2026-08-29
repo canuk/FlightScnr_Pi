@@ -90,6 +90,31 @@ class DetailScrollTests(unittest.TestCase):
         self.assertEqual(max_scroll, 0)
         cue.assert_not_called()
 
+    def test_tall_flight_scroll_includes_follow_row(self):
+        from display.round_touch import nav
+        from display.round_touch.screens import common, flight_detail
+
+        flight = {
+            "callsign": "UAL123",
+            "airline": "United",
+            "origin": "SFO",
+            "destination": "EWR",
+            "plane": "B738",
+            "altitude": 32000,
+            "ground_speed": 450,
+            "heading": 90,
+            "plane_latitude": 37.6,
+            "plane_longitude": -122.3,
+        }
+        with mock.patch.object(common, "draw_logo", side_effect=_tall_header):
+            with mock.patch.object(nav, "draw_curved_scroll_arc"):
+                max_scroll = flight_detail.draw_flight_detail(
+                    self._surface(), [flight], 0, 0
+                )
+        self.assertGreater(max_scroll, 0)
+        flight_detail.draw_flight_detail(self._surface(), [flight], 0, 0)
+        self.assertIsNotNone(flight_detail._follow_btn_rect)
+
     def test_fire_overflow_draws_scrollbar(self):
         from display.round_touch import nav
         from display.round_touch.screens import fire_detail

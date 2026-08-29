@@ -46,12 +46,20 @@ def follow_confirm_hit(x: int, y: int) -> str | None:
     return None
 
 
-def _draw_follow_button(surface, flight) -> None:
+def _draw_follow_row(
+    surface,
+    flight,
+    y: int,
+    *,
+    chrome_top: int,
+    bottom: int,
+) -> int:
+    """Follow pill as the last scrollable row — below telemetry, not over it."""
     global _follow_btn_rect
     _follow_btn_rect = None
     callsign = str(flight.get("callsign") or "").strip()
     if not callsign or flight.get("kind") == "vessel":
-        return
+        return y
     try:
         from utilities.overhead import load_tracked_callsign
 
@@ -63,18 +71,21 @@ def _draw_follow_button(surface, flight) -> None:
         font = draw.load_font(theme.s(13), bold=True)
         label = font.render(label_text, True, theme.LABEL if already else theme.MUTED)
     except Exception:
-        return
+        return y
     pad_x, pad_y = theme.s(16), theme.s(7)
+    gap = theme.s(6)
+    y += gap
     rect = pygame.Rect(0, 0, label.get_width() + 2 * pad_x, label.get_height() + 2 * pad_y)
-    rect.center = (
-        theme.CENTER_X,
-        nav.content_bottom_y() - rect.height // 2 - theme.s(2),
-    )
-    pygame.draw.rect(surface, (24, 27, 31), rect, border_radius=rect.height // 2)
-    pygame.draw.rect(surface, theme.GRID, rect, width=1, border_radius=rect.height // 2)
-    surface.blit(label, label.get_rect(center=rect.center))
-    if not already:
-        _follow_btn_rect = pygame.Rect(rect).inflate(theme.s(8), theme.s(8))
+    rect.midtop = (theme.CENTER_X, int(y))
+    if rect.bottom > chrome_top and rect.top < bottom:
+        pygame.draw.rect(surface, (24, 27, 31), rect, border_radius=rect.height // 2)
+        pygame.draw.rect(
+            surface, theme.GRID, rect, width=1, border_radius=rect.height // 2
+        )
+        surface.blit(label, label.get_rect(center=rect.center))
+        if not already:
+            _follow_btn_rect = pygame.Rect(rect).inflate(theme.s(8), theme.s(8))
+    return y + rect.height + gap
 
 
 def draw_follow_confirm(surface, new_id: str, current_id: str) -> None:
@@ -296,6 +307,12 @@ def draw_flight_detail(surface, flights, selected_index, scroll_offset: int = 0)
             bottom=bottom,
             line_gap=line_gap,
         )
+        if not is_vessel:
+            y = _draw_follow_row(
+                surface, f, y, chrome_top=chrome_top, bottom=bottom
+            )
+        else:
+            _follow_btn_rect = None
     finally:
         max_scroll = common.finish_detail_scroll(
             surface,
@@ -307,6 +324,5 @@ def draw_flight_detail(surface, flights, selected_index, scroll_offset: int = 0)
             curved=True,
         )
 
-    _draw_follow_button(surface, f)
     nav.draw_curved_footer(surface, list(FOOTER_BUTTONS))
     return max_scroll
