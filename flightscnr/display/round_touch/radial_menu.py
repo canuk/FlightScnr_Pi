@@ -207,24 +207,38 @@ def _plane_glyph(size: int, flight: dict | None = None) -> pygame.Surface:
     except Exception:
         pygame.draw.circle(surf, (*_LABEL, 255), (side // 2, side // 2),
                            side // 4, 2)
-    return pygame.transform.smoothscale(surf, (size, size))
+    return _fit_glyph(surf, size)
+
+
+def _fit_glyph(surf: pygame.Surface, size: int) -> pygame.Surface:
+    """Crop to the drawn pixels, then scale to fill the icon box."""
+    crop = surf.get_bounding_rect(min_alpha=8)
+    if crop.width > 2 and crop.height > 2:
+        surf = surf.subsurface(crop)
+    w, h = surf.get_size()
+    if w >= h:
+        out = (size, max(2, int(size * h / w)))
+    else:
+        out = (max(2, int(size * w / h)), size)
+    return pygame.transform.smoothscale(surf, out)
 
 
 def _chart_glyph(size: int, chart) -> pygame.Surface:
     """Sectional-style airport symbol for a wedge."""
-    surf = pygame.Surface((size, size), pygame.SRCALPHA)
+    big = size * 2
+    surf = pygame.Surface((big, big), pygame.SRCALPHA)
     try:
         from display.round_touch import airport_overlay as ao
 
         towered, fuel, beacon = chart or (False, False, False)
         ao.draw_chart_icon(
-            surf, (size // 2, size // 2), max(4, int(size * 0.30)),
+            surf, (big // 2, big // 2), max(5, int(big * 0.26)),
             towered=towered, fuel=fuel, beacon=beacon,
         )
     except Exception:
-        pygame.draw.circle(surf, (*_LABEL, 255), (size // 2, size // 2),
-                           max(3, size // 3), 2)
-    return surf
+        pygame.draw.circle(surf, (*_LABEL, 255), (big // 2, big // 2),
+                           max(3, big // 3), 2)
+    return _fit_glyph(surf, size)
 
 
 def draw(surface: pygame.Surface) -> pygame.Rect | None:
