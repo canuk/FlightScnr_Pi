@@ -87,35 +87,31 @@ SWITCH_KNOB_OFF = (150, 165, 180)
 
 
 def toggle_switch_size(font: pygame.font.Font) -> tuple[int, int]:
-    """Pill switch dimensions for a row drawn in ``font``."""
-    height = max(theme.s(14), font.get_height() - theme.s(8))
-    return int(height * 1.8), height
+    """Material 3 switch proportions (52x32dp track), scaled to the row."""
+    height = max(theme.s(21), font.get_height() - theme.s(2))
+    return int(height * 1.63), height
 
 
 def draw_toggle_switch(surface: pygame.Surface, rect: pygame.Rect, on: bool) -> None:
-    """Pill switch: green with the knob right when on, dim and left when off."""
+    """Material 3 style switch: filled track + big thumb when on,
+    outlined track + small thumb when off."""
     radius = max(2, rect.height // 2)
-    pygame.draw.rect(
-        surface,
-        theme.GRID if on else SWITCH_OFF_FILL,
-        rect,
-        border_radius=radius,
-    )
-    pygame.draw.rect(
-        surface,
-        theme.SWEEP if on else theme.HINT,
-        rect,
-        max(1, theme.s(1)),
-        border_radius=radius,
-    )
-    knob_r = max(2, radius - max(1, theme.s(2)))
-    knob_x = rect.right - radius if on else rect.left + radius
-    pygame.draw.circle(
-        surface,
-        SWITCH_KNOB_ON if on else SWITCH_KNOB_OFF,
-        (int(knob_x), rect.centery),
-        knob_r,
-    )
+    if on:
+        pygame.draw.rect(surface, theme.GRID, rect, border_radius=radius)
+        pygame.draw.rect(
+            surface, theme.SWEEP, rect, max(1, theme.s(1)), border_radius=radius)
+        knob_r = max(3, radius - max(1, theme.s(2)))
+        knob_x = rect.right - radius
+        pygame.draw.circle(
+            surface, SWITCH_KNOB_ON, (int(knob_x), rect.centery), knob_r)
+    else:
+        pygame.draw.rect(surface, SWITCH_OFF_FILL, rect, border_radius=radius)
+        pygame.draw.rect(
+            surface, theme.HINT, rect, max(1, theme.s(2)), border_radius=radius)
+        knob_r = max(3, radius - max(2, theme.s(5)))
+        knob_x = rect.left + radius
+        pygame.draw.circle(
+            surface, SWITCH_KNOB_OFF, (int(knob_x), rect.centery), knob_r)
 
 
 def draw_center_line(
