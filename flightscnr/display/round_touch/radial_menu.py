@@ -174,6 +174,7 @@ def _blit_curved(
     color,
     size: int,
     lead: pygame.Surface | None = None,
+    lead_upright: bool = False,
     alpha: int = 255,
 ) -> None:
     try:
@@ -187,6 +188,19 @@ def _blit_curved(
     if alpha < 255:
         for item in items:
             item.set_alpha(alpha)
+    if lead is not None and lead_upright:
+        placed = arc_ui.arc_layout(
+            [it.get_width() for it in items], r=r, mid=mid, bottom=bottom)
+        cx, cy = _center
+        for j, (item, (x, y, rot)) in enumerate(zip(items, placed)):
+            rotated = item if j == 0 else pygame.transform.rotate(item, rot)
+            if j == 0 and alpha < 255:
+                rotated.set_alpha(alpha)
+            surface.blit(
+                rotated,
+                rotated.get_rect(center=(cx + int(round(x)), cy + int(round(y)))),
+            )
+        return
     arc_ui.blit_arc_items(
         surface, items, r=r, mid=mid, bottom=bottom,
         cx=_center[0], cy=_center[1],
@@ -201,7 +215,7 @@ def _plane_glyph(size: int, flight: dict | None = None) -> pygame.Surface:
         from display.round_touch import aircraft
 
         aircraft.draw_plane_icon(
-            surf, side // 2, side // 2, 0.0, _LABEL,
+            surf, side // 2, side // 2, 0.0, theme.AIRCRAFT,
             compact=True, flight=flight or {},
         )
     except Exception:
@@ -349,7 +363,8 @@ def draw(surface: pygame.Surface) -> pygame.Rect | None:
             if arc_ui.arc_span(widths, label_r) <= wedge_span:
                 break
             size -= 1
-        if entry.get("kind") == "airport":
+        upright = entry.get("kind") == "airport"
+        if upright:
             lead = _chart_glyph(icon_px, entry.get("chart"))
         else:
             lead = _plane_glyph(icon_px, entry.get("flight"))
@@ -358,7 +373,8 @@ def draw(surface: pygame.Surface) -> pygame.Rect | None:
             continue
         _blit_curved(
             surface, label, r=label_r, mid=mid, bottom=math.sin(mid) > 0,
-            color=_LABEL, size=size, lead=lead, alpha=label_a,
+            color=_LABEL, size=size, lead=lead, lead_upright=upright,
+            alpha=label_a,
         )
 
     # Crosshair target on the exact tapped point.
