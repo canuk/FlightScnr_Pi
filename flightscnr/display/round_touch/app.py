@@ -3219,7 +3219,7 @@ class RoundTouchDisplay:
         before = self._scroll.offset
         self._apply_scroll_delta(int(round(self._scroll_momentum_v * dt)))
         # Exponential decay tuned to feel like a platform scroll view.
-        self._scroll_momentum_v *= 0.06 ** dt
+        self._scroll_momentum_v *= 0.135 ** dt
         if abs(self._scroll_momentum_v) < 40.0 or self._scroll.offset == before:
             self._scroll_momentum_v = 0.0
             self._safe_draw()
