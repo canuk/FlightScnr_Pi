@@ -214,6 +214,10 @@ class RoundTouchDisplay:
         self._timeout_rot_base: pygame.Surface | None = None
         self._prev_timeout_ring_frac: float | None = None
         self._last_slider_draw = 0.0
+        # Inertial settings scrolling: (velocity px/s, last tick time).
+        self._scroll_momentum_v = 0.0
+        self._scroll_momentum_t = 0.0
+        self._scroll_samples: list[tuple[float, int]] = []
         self._display_focus = 0
         self._system_confirm: str | None = None
         # Settings list picker kind (ATC + other multi-option rows), or None.
@@ -3224,6 +3228,24 @@ class RoundTouchDisplay:
         self._maybe_enrich_flight_detail()
         return True
 
+    def _tick_scroll_momentum(self) -> None:
+        """Decay-based inertial scroll after a settings flick."""
+        if not self._scroll_momentum_v:
+            return
+        if self.screen != SCREEN_SETTINGS or self.input.is_dragging():
+            self._scroll_momentum_v = 0.0
+            return
+        now = time.time()
+        dt = min(0.1, max(0.0, now - self._scroll_momentum_t))
+        self._scroll_momentum_t = now
+        before = self._scroll.offset
+        self._apply_scroll_delta(int(round(self._scroll_momentum_v * dt)))
+        # Exponential decay tuned to feel like a platform scroll view.
+        self._scroll_momentum_v *= 0.06 ** dt
+        if abs(self._scroll_momentum_v) < 40.0 or self._scroll.offset == before:
+            self._scroll_momentum_v = 0.0
+            self._safe_draw()
+
     def _apply_scroll_delta(self, delta: int):
         if not delta:
             return
@@ -3238,7 +3260,7 @@ class RoundTouchDisplay:
             # their bluetoothctl/IPC rebuild can't stall mid-gesture.
             info.hold_atc_labels()
             now_scroll = time.time()
-            if now_scroll - self._last_slider_draw < 0.04:
+            if now_scroll - self._last_slider_draw < 0.016:
                 return
             self._last_slider_draw = now_scroll
         self._safe_draw()
@@ -3343,18 +3365,34 @@ class RoundTouchDisplay:
             if self.input.is_dragging():
                 pos = self.input.drag_pos()
                 if pos is not None:
+                    now_t = time.time()
                     if self._settings_drag_y is None:
                         self._settings_drag_scrolled = False
+                        self._scroll_samples = [(now_t, pos[1])]
+                        self._scroll_momentum_v = 0.0
                     else:
                         dy = pos[1] - self._settings_drag_y
                         if dy:
                             self._settings_drag_scrolled = True
                             self._apply_scroll_delta(-dy)
+                        self._scroll_samples.append((now_t, pos[1]))
+                        if len(self._scroll_samples) > 6:
+                            self._scroll_samples.pop(0)
                     self._settings_drag_y = pos[1]
                     return
             if self._settings_drag_y is not None:
-                # Drag just ended — paint the resting position immediately.
+                # Drag ended — hand off to inertial scrolling (Apple-style).
                 self._settings_drag_y = None
+                v = 0.0
+                if len(self._scroll_samples) >= 2:
+                    t0, y0 = self._scroll_samples[0]
+                    t1, y1 = self._scroll_samples[-1]
+                    if t1 - t0 > 0.005:
+                        v = (y1 - y0) / (t1 - t0)
+                self._scroll_samples = []
+                if abs(v) > 120.0:
+                    self._scroll_momentum_v = -v
+                    self._scroll_momentum_t = time.time()
                 self._safe_draw()
                 return
             self._settings_drag_y = None
@@ -5103,6 +5141,7 @@ class RoundTouchDisplay:
                     self._safe_draw()
                     self._last_radar_draw = time.time()
 
+                self._tick_scroll_momentum()
                 if (
                     self._update_facing_drag()
                     or self._update_radar_hud_layout_drag()

@@ -141,11 +141,26 @@ def draw_arc_bar(
     radius = max(1, width // 2)
     # Step so consecutive discs overlap by half their radius.
     step = max(0.002, radius / max(1.0, r))
-    layer = pygame.Surface(surface.get_size(), pygame.SRCALPHA)
     steps = max(1, int(math.ceil(span / step)))
+    pts = []
+    min_x = min_y = 10 ** 9
+    max_x = max_y = -(10 ** 9)
     for i in range(steps + 1):
         a = a0 + span * i / steps
         px = int(round(cx + r * math.cos(a)))
         py = int(round(cy + r * math.sin(a)))
-        pygame.draw.circle(layer, color_rgba, (px, py), radius)
-    surface.blit(layer, (0, 0))
+        pts.append((px, py))
+        min_x = min(min_x, px)
+        max_x = max(max_x, px)
+        min_y = min(min_y, py)
+        max_y = max(max_y, py)
+    # Stamp into a layer sized to the arc's bounding box, not the screen —
+    # full-size SRCALPHA allocation + blit cost ~8 ms per call on the Pi.
+    pad = radius + 1
+    ox, oy = min_x - pad, min_y - pad
+    layer = pygame.Surface(
+        (max_x - min_x + 2 * pad, max_y - min_y + 2 * pad), pygame.SRCALPHA
+    )
+    for px, py in pts:
+        pygame.draw.circle(layer, color_rgba, (px - ox, py - oy), radius)
+    surface.blit(layer, (ox, oy))

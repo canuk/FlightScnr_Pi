@@ -1224,7 +1224,7 @@ def _display_font():
 
 def _row_pitch() -> int:
     """One row pitch for every settings page — layout, hits, and drawing."""
-    return _display_font().get_height() + theme.s(17)
+    return _display_font().get_height() + theme.s(35)
 
 
 # Card chrome (watch-style list): every row is a rounded chip whose width
@@ -2593,50 +2593,21 @@ def draw_info(
             ]
 
         lines = _main_lines(sys_lines)
-        # Diagnostics as compact label/value cards (denser pitch than the
-        # interactive pages — these rows are read, not tapped).
-        card_pitch = detail_font.get_height() + theme.s(9)
-        card_h = card_pitch - theme.s(3)
-        total_h = theme.s(4) + len(lines) * card_pitch + theme.s(8)
-        max_scroll = max(0, total_h - (bottom - body_top))
-        clip_prev = surface.get_clip()
-        surface.set_clip(
-            pygame.Rect(0, int(top), surface.get_width(), max(0, int(bottom - top)))
-        )
-        try:
-            ry = body_top - scroll_offset
-            for line in lines:
-                if ry + card_h >= top and ry <= bottom:
-                    rect = _card_rect(int(ry), card_h)
-                    pygame.draw.rect(
-                        surface, _CARD_FILL, rect, border_radius=theme.s(8))
-                    pygame.draw.rect(
-                        surface, _CARD_BORDER, rect, width=1,
-                        border_radius=theme.s(8))
-                    inner = rect.inflate(-theme.s(22), 0)
-                    ty = inner.centery - detail_font.get_height() // 2
-                    if ": " in line:
-                        lab, val = line.split(": ", 1)
-                        surface.blit(
-                            detail_font.render(lab, True, theme.LABEL),
-                            (inner.left, ty))
-                        val_img = detail_font.render(
-                            draw.fit_text(
-                                val, detail_font,
-                                inner.width - detail_font.size(lab)[0] - theme.s(10),
-                            ),
-                            True, theme.MUTED)
-                        surface.blit(
-                            val_img, (inner.right - val_img.get_width(), ty))
-                    else:
-                        surface.blit(
-                            detail_font.render(
-                                draw.fit_text(line, detail_font, inner.width),
-                                True, theme.MUTED),
-                            (inner.left, ty))
-                ry += card_pitch
-        finally:
-            surface.set_clip(clip_prev)
+        # Compact CPU+Temp onto one line only when the full list won't fit —
+        # this page is static diagnostics and must not scroll.
+        if len(lines) * line_pitch > avail:
+            try:
+                from utilities.system_stats import format_lines as _system_stat_lines
+
+                sys_lines = _system_stat_lines(compact=True)
+            except Exception:
+                sys_lines = ["CPU: —   Temp: —", "RAM: —"]
+            lines = _main_lines(sys_lines)
+        max_scroll = 0
+        y = body_top
+        for line in lines:
+            draw.draw_center_line(surface, line, int(y), detail_font, theme.MUTED)
+            y += line_pitch
         _draw_adsb_coverage_button(surface, bottom)
 
 
