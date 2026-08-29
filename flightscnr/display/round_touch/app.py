@@ -175,6 +175,8 @@ class RoundTouchDisplay:
         # Pending "Follow this Flight" confirmation: {"callsign", "display",
         # "current"} while the replace-follow popup is up.
         self._follow_confirm = None
+        # Auto-clear notice after Follow/Tracked loses the flight.
+        self._tracking_cleared_popup = False
         # Stable identity for the open detail page (index alone drifts as traffic changes).
         self._selected_flight_id: str | None = None
         self.fire_index = 0
@@ -1017,6 +1019,10 @@ class RoundTouchDisplay:
             self._invalidate_timeout_content_cache()
         # Reboot/shutdown progress sits above all screens (install auto-reboot,
         # System → Reboot, portal X11 switch).
+        if self._tracking_cleared_popup:
+            tracked.draw_tracking_cleared_popup(self.surface)
+        else:
+            tracked.clear_tracking_cleared_popup()
         self._draw_reboot_progress_overlay()
         _t = time.perf_counter()
         if not bezel_applied:
@@ -3485,6 +3491,35 @@ class RoundTouchDisplay:
         self._open_screen(SCREEN_LIVE)
         self._safe_draw()
 
+    def _maybe_handle_tracking_cleared(self) -> bool:
+        """Leave Follow/Tracked and show popup when overhead auto-cleared the pin.
+
+        Returns True when a notice was consumed (caller should redraw).
+        """
+        try:
+            notice = self.overhead.take_tracking_cleared_notice()
+        except Exception:
+            return False
+        if not notice:
+            return False
+        try:
+            self.overhead.set_follow_pin_polling(False)
+        except Exception:
+            pass
+        tracked.clear_pinned()
+        self._follow_photo_open = False
+        if self.screen in (SCREEN_LIVE, SCREEN_TRACKED):
+            self._return_to_radar()
+        self._tracking_cleared_popup = True
+        self._note_activity()
+        return True
+
+    def _dismiss_tracking_cleared_popup(self) -> None:
+        self._tracking_cleared_popup = False
+        tracked.clear_tracking_cleared_popup()
+        self._note_activity()
+        self._safe_draw()
+
     def _breadcrumb_tapped(self, x: int, y: int) -> bool:
         """Screen-aware breadcrumb hit: curved band on curved-chrome screens."""
         if self.screen in (
@@ -3816,6 +3851,12 @@ class RoundTouchDisplay:
                 self._apply_scroll_delta(delta)
         if tap and not theme.in_visible_circle(tap[0], tap[1]):
             tap = None
+        if tap and self._tracking_cleared_popup:
+            if tracked.tracking_cleared_ok_hit(tap[0], tap[1]):
+                self._dismiss_tracking_cleared_popup()
+            else:
+                self._note_activity()
+            return
         if tap and self._breadcrumb_tapped(tap[0], tap[1]) and self.screen != SCREEN_RADAR:
             if self.screen in (SCREEN_TRACKED, SCREEN_LIVE):
                 self._return_to_radar()
@@ -4969,7 +5010,11 @@ class RoundTouchDisplay:
                 grab_seq = self.overhead.grab_seq
                 if grab_seq != self._last_grab_seq:
                     self._last_grab_seq = grab_seq
-                    if not self._radar_modal_active():
+                    cleared = self._maybe_handle_tracking_cleared()
+                    if cleared:
+                        self._safe_draw()
+                        self._last_static_draw = now
+                    elif not self._radar_modal_active():
                         self._refresh_flights()
                         # Radar already redraws on the sweep cadence — forcing a
                         # draw here stacked on the just-finished grab and read as
