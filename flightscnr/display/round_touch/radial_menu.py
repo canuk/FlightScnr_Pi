@@ -347,13 +347,19 @@ def draw(surface: pygame.Surface) -> pygame.Rect | None:
     # icon shrink until every label fits inside its wedge's arc.
     label_r = wedge_r
     wedge_span = step * 0.86  # radians available per wedge
-    base_size = max(8, theme.s(11))
+    # Crowded menus (5-6 wedges): smaller icons buy room so the text can
+    # run bigger — names matter more than glyphs when space is tight.
+    crowded = len(_entries) >= 5
+    base_size = max(8, theme.s(11)) + (theme.s(4) if crowded else 0)
+    min_size = max(9, base_size - theme.s(2)) if crowded else 7
+    icon_default = theme.s(14) if crowded else theme.s(19)
     for i, entry in enumerate(_entries):
         mid = start + (i + 0.5) * step
         label = str(entry.get("label") or "?")[:9]
         size = base_size
-        icon_px = theme.s(19)
-        while size > 7:
+        icon_px = icon_default
+        font = None
+        while size > min_size:
             try:
                 font = draw_mod.load_font(size, bold=True)
                 widths = [icon_px, theme.s(3)] + [
@@ -364,6 +370,15 @@ def draw(surface: pygame.Surface) -> pygame.Rect | None:
             if arc_ui.arc_span(widths, label_r) <= wedge_span:
                 break
             size -= 1
+        # Still too wide at the floor size: trim characters, not pixels.
+        if font is not None:
+            while len(label) > 4:
+                widths = [icon_px, theme.s(3)] + [
+                    font.size(ch)[0] for ch in label
+                ]
+                if arc_ui.arc_span(widths, label_r) <= wedge_span:
+                    break
+                label = label[:-1]
         if entry.get("kind") == "airport":
             lead = _chart_glyph(icon_px, entry.get("chart"))
         else:
