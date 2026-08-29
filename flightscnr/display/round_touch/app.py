@@ -285,6 +285,9 @@ class RoundTouchDisplay:
         self._vfr_opacity_slider_active = False
         self._atc_volume_slider_active = False
         self._lofi_volume_slider_active = False
+        self._quiet_dim_slider_active = False
+        # Live dim preview while the quiet-dim slider is held.
+        self._quiet_dim_preview: int | None = None
         self._radar_hud_volume_drag = False
         self._radar_hud_layout_drag = False
         self._hud_opacity_slider_active = False
@@ -1816,6 +1819,9 @@ class RoundTouchDisplay:
             settings.toggle_lofi_title_scroll()
         elif action == "quiet":
             settings.set_atc_quiet_hours_enabled(not settings.atc_quiet_hours_enabled())
+        elif action == "quiet_dim":
+            settings.set_quiet_dim_enabled(not settings.quiet_dim_enabled())
+            self._apply_brightness()
         elif action == "quiet_start":
             self._open_atc_picker("quiet_start")
         elif action == "quiet_end":
@@ -2113,6 +2119,7 @@ class RoundTouchDisplay:
             or self._vfr_opacity_slider_active
             or self._atc_volume_slider_active
             or self._lofi_volume_slider_active
+            or self._quiet_dim_slider_active
             or self._hud_opacity_slider_active
             or self._hud_volume_slider_kind
             or self._radar_hud_volume_drag
@@ -2392,6 +2399,66 @@ class RoundTouchDisplay:
         settings.set_lofi_volume(value, persist=persist)
         self._display_focus = info.lofi_volume_row_index()
         return True
+
+    def _apply_quiet_dim_slider(self, x: int, *, persist: bool = True) -> bool:
+        from display.round_touch import backlight
+
+        value = info.quiet_dim_slider_value_at(x, self._scroll.offset)
+        if value is None:
+            return False
+        changed = value != settings.quiet_dim_percent()
+        settings.set_quiet_dim_percent(value, persist=persist)
+        self._display_focus = info.quiet_dim_row_index()
+        if persist:
+            # Finger lifted — drop the preview, restore normal brightness.
+            self._quiet_dim_preview = None
+            self._apply_brightness()
+        else:
+            # Held — the panel shows the dim level live.
+            self._quiet_dim_preview = value
+            backlight.apply_percent(value)
+        return changed
+
+    def _update_quiet_dim_slider_drag(self) -> bool:
+        if self.screen != SCREEN_SETTINGS or self.settings_page != info.PAGE_ATC_QUIET:
+            if self._quiet_dim_slider_active or self._quiet_dim_preview is not None:
+                self._quiet_dim_slider_active = False
+                self._quiet_dim_preview = None
+                self._apply_brightness()
+            return False
+        if not self.input.is_dragging():
+            if self._quiet_dim_slider_active:
+                self._quiet_dim_slider_active = False
+                settings.set_quiet_dim_percent(
+                    settings.quiet_dim_percent(), persist=True
+                )
+                self._quiet_dim_preview = None
+                self._apply_brightness()
+                self.input.consume_scroll_drag()
+                return True
+            return False
+        pos = self.input.drag_pos()
+        if pos is None:
+            return False
+        x, y = pos
+        if not self._quiet_dim_slider_active:
+            if self._slider_drag_armed():
+                return False
+            if not settings.quiet_dim_enabled():
+                return False
+            if not info.quiet_dim_slider_at(x, y, self._scroll.offset):
+                return False
+            self._quiet_dim_slider_active = True
+        elif not info.quiet_dim_slider_drag_band(x, y, self._scroll.offset):
+            self._quiet_dim_slider_active = False
+            settings.set_quiet_dim_percent(settings.quiet_dim_percent(), persist=True)
+            self._quiet_dim_preview = None
+            self._apply_brightness()
+            self.input.consume_scroll_drag()
+            return True
+        changed = self._apply_quiet_dim_slider(x, persist=False)
+        self.input.consume_scroll_drag()
+        return changed
 
     def _update_lofi_volume_slider_drag(self) -> bool:
         if self.screen != SCREEN_SETTINGS or self.settings_page != info.PAGE_ATC:
@@ -2878,8 +2945,21 @@ class RoundTouchDisplay:
     def _apply_brightness(self):
         from display.round_touch import backlight, off_hours
 
+        # A held quiet-dim slider previews its level directly.
+        if self._quiet_dim_preview is not None:
+            backlight.apply_percent(int(self._quiet_dim_preview))
+            return
+
         day_pct = settings.brightness_percent()
         pct = off_hours.effective_brightness_percent(day_pct)
+        if settings.quiet_dim_enabled():
+            try:
+                from utilities import atc_audio
+
+                if atc_audio.in_quiet_hours():
+                    pct = min(pct, settings.quiet_dim_percent())
+            except Exception:
+                pass
         # Display-off mode: temporary wake after touch keeps daytime brightness.
         if pct == 0 and time.time() < self._off_hours_wake_until:
             pct = day_pct
@@ -3731,6 +3811,12 @@ class RoundTouchDisplay:
                 x, y, self._scroll.offset
             ):
                 self._apply_lofi_volume_slider(x, persist=True)
+                return
+            if self.settings_page == info.PAGE_ATC_QUIET and info.quiet_dim_slider_at(
+                x, y, self._scroll.offset
+            ):
+                if settings.quiet_dim_enabled():
+                    self._apply_quiet_dim_slider(x, persist=True)
                 return
             if self.settings_page == info.PAGE_ATC:
                 btn = info.atc_action_at(x, y)
@@ -5109,6 +5195,7 @@ class RoundTouchDisplay:
                     or self._update_chime_volume_slider_drag()
                     or self._update_vfr_opacity_slider_drag()
                     or self._update_lofi_volume_slider_drag()
+                    or self._update_quiet_dim_slider_drag()
                     or self._update_atc_volume_slider_drag()
                     or self._update_radar_hud_volume_drag()
                 ):

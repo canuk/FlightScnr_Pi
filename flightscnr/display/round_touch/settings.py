@@ -360,6 +360,9 @@ _defaults = {
     "atc_quiet_hours_enabled": True,
     "atc_quiet_start": "",
     "atc_quiet_end": "",
+    # Dim the display during quiet hours (screen-side quiet mode).
+    "quiet_dim_enabled": False,
+    "quiet_dim_percent": 20,
     # Resume after app restart / reboot when ATC was left enabled.
     "atc_want_playing": False,
     # User enabled ATC during quiet hours — resume may keep overriding.
@@ -603,6 +606,8 @@ _ATC_PRESERVE_KEYS = (
     "atc_quiet_hours_enabled",
     "atc_quiet_start",
     "atc_quiet_end",
+    "quiet_dim_enabled",
+    "quiet_dim_percent",
     "atc_want_playing",
     "atc_quiet_override",
 )
@@ -1389,6 +1394,31 @@ _sync_config_max_height()
 
 def brightness_percent():
     return int(_state.get("brightness_percent", 100))
+
+
+def quiet_dim_enabled() -> bool:
+    return bool(_state.get("quiet_dim_enabled", False))
+
+
+def set_quiet_dim_enabled(enabled: bool) -> None:
+    _rmw_save({"quiet_dim_enabled": bool(enabled)})
+
+
+def quiet_dim_percent() -> int:
+    try:
+        pct = int(_state.get("quiet_dim_percent", 20))
+    except (TypeError, ValueError):
+        pct = 20
+    return max(0, min(100, pct))
+
+
+def set_quiet_dim_percent(value: int, *, persist: bool = True):
+    global _disk_synced
+    _state["quiet_dim_percent"] = max(0, min(100, int(value)))
+    if persist:
+        _save(_state)
+    else:
+        _disk_synced = False
 
 
 def set_brightness_percent(value: int, *, persist: bool = True):
