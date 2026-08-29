@@ -50,40 +50,55 @@ def _tappable_rows(page):
     return [i for i, a in enumerate(actions) if a not in skip]
 
 
+def _toggle_rows(page):
+    return [
+        i for i in _tappable_rows(page)
+        if info._row_actions(page)[i] in info._TOGGLE_ROW_STATE
+    ]
+
+
+def _button_rows(page):
+    return [
+        i for i in _tappable_rows(page)
+        if info._row_actions(page)[i] not in info._TOGGLE_ROW_STATE
+    ]
+
+
 class TestCardHitBand:
-    def test_tap_center_of_card_hits_row(self):
-        """A tap at the vertical center of a card must select that row."""
+    def test_toggle_row_body_is_scroll_only(self):
+        """A tap on a toggle pill's body must NOT flip the switch — swipes
+        that start on the label scroll the page instead."""
         page = info.PAGE_LAYERS
         row_y, row_h, _ = info._display_layout(page, 0)
-        for i in _tappable_rows(page):
-            ry = row_y + i * row_h
-            card = info._card_rect(int(ry), row_h - theme.s(5))
-            if card.bottom > theme.SIZE - theme.s(40):
-                break
-            hit = info.display_row_at(card.centerx, card.centery, page, 0)
-            assert hit == i, f"center tap on row {i} returned {hit}"
-
-    def test_tap_bottom_half_of_card_hits_row(self):
-        """Taps near the bottom edge of the pill must still register."""
-        page = info.PAGE_LAYERS
-        row_y, row_h, _ = info._display_layout(page, 0)
-        i = _tappable_rows(page)[0]
+        i = _toggle_rows(page)[0]
         ry = row_y + i * row_h
         card = info._card_rect(int(ry), row_h - theme.s(5))
-        y = card.bottom - theme.s(4)
-        hit = info.display_row_at(card.centerx, y, page, 0)
-        assert hit == i, f"bottom tap returned {hit}"
+        hit = info.display_row_at(card.left + theme.s(30), card.centery, page, 0)
+        assert hit is None, f"body tap on toggle row returned {hit}"
 
-    def test_tap_switch_side_of_card_hits_row(self):
-        """The right (switch) end of the pill is part of the tap target."""
+    def test_toggle_switch_takes_the_tap(self):
+        """The switch itself (plus finger padding) stays tappable."""
         page = info.PAGE_LAYERS
         row_y, row_h, _ = info._display_layout(page, 0)
-        i = _tappable_rows(page)[0]
+        i = _toggle_rows(page)[0]
+        ry = row_y + i * row_h
+        sw = info._toggle_switch_rect(int(ry))
+        hit = info.display_row_at(sw.centerx, sw.centery, page, 0)
+        assert hit == i, f"switch tap returned {hit}"
+
+    def test_button_row_keeps_whole_pill(self):
+        """Picker/action rows are buttons — the whole pill stays the target."""
+        page = info.PAGE_DISPLAY
+        rows = _button_rows(page)
+        assert rows, "expected at least one non-toggle row on Display"
+        row_y, row_h, _ = info._display_layout(page, 0)
+        i = rows[0]
         ry = row_y + i * row_h
         card = info._card_rect(int(ry), row_h - theme.s(5))
-        x = card.right - theme.s(20)
-        hit = info.display_row_at(x, card.centery, page, 0)
-        assert hit == i, f"switch-side tap returned {hit}"
+        if card.bottom > theme.SIZE - theme.s(40):
+            return
+        hit = info.display_row_at(card.centerx, card.centery, page, 0)
+        assert hit == i, f"center tap on button row returned {hit}"
 
     def test_gap_between_cards_hits_nothing(self):
         """The small gap between two pills stays dead so scroll flicks

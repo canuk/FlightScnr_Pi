@@ -143,6 +143,24 @@ class TestQuietDimRows:
         row = info.display_row_at(hit.centerx, hit.centery, info.PAGE_ATC_QUIET, 0)
         assert row != info.quiet_dim_row_index()
 
+    def test_off_button_left_of_slider(self):
+        row_y, row_h, _ = info._display_layout(info.PAGE_ATC_QUIET, 0)
+        ry = row_y + info.quiet_dim_row_index() * row_h
+        scroll = max(0, int(ry + row_h - info.nav.content_bottom_y()))
+        icon = info._quiet_dim_off_icon_rect(int(ry - scroll))
+        assert info.quiet_dim_off_button_at(icon.centerx, icon.centery, scroll)
+        # The icon is not part of the slider's drag target.
+        assert not info.quiet_dim_slider_at(icon.centerx, icon.centery, scroll)
+        geom = info._quiet_dim_slider_geometry(scroll)
+        assert geom is not None and geom[1] > icon.right
+
+    def test_restore_setting_round_trip(self):
+        settings.set_quiet_dim_restore(35)
+        assert settings.quiet_dim_restore() == 35
+        settings.set_quiet_dim_restore(0)   # clamps to at least 1
+        assert settings.quiet_dim_restore() == 1
+        settings.set_quiet_dim_restore(20)
+
     def test_toggle_row_is_tappable(self):
         idx = info.ATC_QUIET_ACTIONS.index("quiet_dim")
         row_y, row_h, _ = info._display_layout(info.PAGE_ATC_QUIET, 0)

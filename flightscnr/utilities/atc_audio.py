@@ -72,6 +72,9 @@ _KIND_ORDER = {
 }
 
 _lock = threading.RLock()
+# Serializes start()/stop() so a settings toggle and the speaker-watch
+# keepalive can never spawn two mpv streams (echo bug).
+_transport_lock = threading.RLock()
 _proc: subprocess.Popen | None = None
 _playing_mount: str | None = None
 _playing_airport: str | None = None
@@ -1211,6 +1214,11 @@ def reassert_output_levels() -> None:
 
 
 def stop(*, clear_override: bool = True) -> dict:
+    with _transport_lock:
+        return _stop_locked(clear_override=clear_override)
+
+
+def _stop_locked(*, clear_override: bool = True) -> dict:
     global _proc, _playing_mount, _playing_airport, _quiet_override, _last_error
     with _lock:
         proc = _proc
@@ -1274,6 +1282,16 @@ def start(
     override: bool = False,
 ) -> dict:
     """Start LiveATC stream. ``override=True`` allows play during quiet hours."""
+    with _transport_lock:
+        return _start_locked(airport=airport, mount=mount, override=override)
+
+
+def _start_locked(
+    *,
+    airport: str | None = None,
+    mount: str | None = None,
+    override: bool = False,
+) -> dict:
     global _proc, _playing_mount, _playing_airport, _quiet_override, _last_error
 
     settings = _settings()
@@ -1297,6 +1315,12 @@ def start(
         else:
             with _lock:
                 _last_error = "No LiveATC feed for airport"
+            return status()
+
+    # A concurrent start (toggle + keepalive) already brought this exact
+    # feed up while we waited on the transport lock — one stream is enough.
+    with _lock:
+        if _mpv_alive() and _playing_airport == icao and _playing_mount == feed:
             return status()
 
     known = {f["mount"] for f in feeds_for_airport(icao)}
@@ -1336,7 +1360,7 @@ def start(
         )
         return status()
 
-    stop(clear_override=False)
+    _stop_locked(clear_override=False)
     # USB/PipeWire sink is often left at ~40%; raise it before starting mpv.
     _ensure_system_output_volume(1.0)
 
@@ -1392,6 +1416,23 @@ def start(
             _quiet_override = False
         logger.info("ATC mpv died on start (code %s) — %s", proc.returncode, detail)
         return status()
+
+    # Two processes (display + portal) can race past each other's stop() and
+    # both spawn mpv — the echo bug. Deterministic tie-break: lowest pid wins.
+    rivals = [p for p in _atc_mpv_pids() if p != proc.pid]
+    if rivals and min(rivals) < proc.pid:
+        logger.info(
+            "ATC duplicate stream race — conceding to mpv pid %s", min(rivals)
+        )
+        _kill_pids([proc.pid])
+        try:
+            proc.wait(timeout=2.0)
+        except (subprocess.TimeoutExpired, OSError):
+            _kill_pids([proc.pid], sig=signal.SIGKILL)
+        return status()
+    if rivals:
+        logger.info("ATC duplicate stream race — reaping rivals %s", rivals)
+        _kill_pids(rivals)
 
     with _lock:
         _proc = proc

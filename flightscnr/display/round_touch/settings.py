@@ -363,6 +363,8 @@ _defaults = {
     # Dim the display during quiet hours (screen-side quiet mode).
     "quiet_dim_enabled": False,
     "quiet_dim_percent": 20,
+    # Last non-zero dim level, restored by the screen-off button.
+    "quiet_dim_restore": 20,
     # Resume after app restart / reboot when ATC was left enabled.
     "atc_want_playing": False,
     # User enabled ATC during quiet hours — resume may keep overriding.
@@ -608,6 +610,7 @@ _ATC_PRESERVE_KEYS = (
     "atc_quiet_end",
     "quiet_dim_enabled",
     "quiet_dim_percent",
+    "quiet_dim_restore",
     "atc_want_playing",
     "atc_quiet_override",
 )
@@ -1410,6 +1413,18 @@ def quiet_dim_percent() -> int:
     except (TypeError, ValueError):
         pct = 20
     return max(0, min(100, pct))
+
+
+def quiet_dim_restore() -> int:
+    try:
+        pct = int(_state.get("quiet_dim_restore", 20))
+    except (TypeError, ValueError):
+        pct = 20
+    return max(1, min(100, pct))
+
+
+def set_quiet_dim_restore(value: int) -> None:
+    _rmw_save({"quiet_dim_restore": max(1, min(100, int(value)))})
 
 
 def set_quiet_dim_percent(value: int, *, persist: bool = True):

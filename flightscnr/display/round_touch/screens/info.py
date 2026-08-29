@@ -1671,8 +1671,14 @@ def display_row_at(x: int, y: int, page: int, scroll_offset: int = 0) -> int | N
         ry = row_y + i * row_h
         if ry + card_h < top or ry > bottom:
             continue
-        # The whole visible pill is the tap target — same rect the row
-        # is drawn with, so taps land wherever the finger sees a card.
+        if actions[i] in _TOGGLE_ROW_STATE:
+            # Toggle rows: only the switch flips — a swipe that starts on
+            # the pill body scrolls the page instead of toggling settings.
+            pad = theme.s(14)
+            if _toggle_switch_rect(int(ry)).inflate(pad * 2, pad * 2).collidepoint(x, y):
+                return i
+            continue
+        # Rows that ARE buttons (pickers, actions) keep the whole pill.
         if _card_rect(int(ry), card_h).collidepoint(x, y):
             return i
     return None
@@ -2225,8 +2231,9 @@ def _quiet_dim_slider_geometry(scroll_offset: int = 0) -> tuple[pygame.Rect, int
     gap = theme.s(8)
     ry = row_y + idx * row_h
     inner = _card_inner_row(ry)
-    track_w = inner.width - label_w - value_w - 2 * gap
-    track_x = inner.left + label_w + gap
+    icon_w = _quiet_dim_off_icon_rect(int(ry)).width + gap
+    track_w = inner.width - icon_w - label_w - value_w - 2 * gap
+    track_x = inner.left + icon_w + label_w + gap
     hit_pad = theme.s(8)
     hit = pygame.Rect(
         track_x - hit_pad,
@@ -2235,6 +2242,23 @@ def _quiet_dim_slider_geometry(scroll_offset: int = 0) -> tuple[pygame.Rect, int
         max(row_h, slider_h) + theme.s(4),
     )
     return hit, track_x, track_w
+
+
+def _quiet_dim_off_icon_rect(ry: int) -> pygame.Rect:
+    """Screen-off button at the left end of the Dim slider row."""
+    inner = _card_inner_row(int(ry))
+    size = theme.s(22)
+    return pygame.Rect(inner.left, inner.centery - size // 2, size, size)
+
+
+def quiet_dim_off_button_at(x: int, y: int, scroll_offset: int = 0) -> bool:
+    idx = quiet_dim_row_index()
+    if idx < 0 or not _in_settings_body(y):
+        return False
+    row_y, row_h, _ = _display_layout(PAGE_ATC_QUIET, scroll_offset)
+    ry = row_y + idx * row_h
+    pad = theme.s(12)
+    return _quiet_dim_off_icon_rect(int(ry)).inflate(pad * 2, pad * 2).collidepoint(x, y)
 
 
 def quiet_dim_slider_at(x: int, y: int, scroll_offset: int = 0) -> bool:
@@ -2267,12 +2291,28 @@ def _draw_quiet_dim_slider_row(surface, ry: int, focused: bool) -> None:
     pct = settings.quiet_dim_percent()
     enabled = settings.quiet_dim_enabled()
     inner = _card_inner_row(ry)
-    left_x = inner.left
-    track_w = inner.width - label_w - value_w - 2 * gap
+    icon = _quiet_dim_off_icon_rect(int(ry))
+    left_x = icon.right + gap
+    track_w = inner.width - (icon.width + gap) - label_w - value_w - 2 * gap
     track_x = left_x + label_w + gap
     text_h = body_font.get_height()
     row_h = _row_pitch() - theme.s(5)
     _draw_card(surface, ry, focused=focused)
+    # Screen-off button: power glyph; lit SWEEP while the dim level is 0.
+    off_active = enabled and pct == 0
+    icon_color = theme.SWEEP if off_active else (
+        theme.MUTED if enabled else theme.HINT
+    )
+    r_icon = icon.width // 2 - theme.s(2)
+    pygame.draw.circle(
+        surface, icon_color, icon.center, r_icon, max(1, theme.s(2))
+    )
+    pygame.draw.line(
+        surface, icon_color,
+        (icon.centerx, icon.top + theme.s(1)),
+        (icon.centerx, icon.centery),
+        max(2, theme.s(2)),
+    )
     label = body_font.render(
         "Dim", True, theme.LABEL if enabled else theme.HINT
     )
@@ -2571,6 +2611,18 @@ _TOGGLE_ROW_STATE = {
 }
 
 
+def _toggle_switch_rect(ry: int) -> pygame.Rect:
+    """Where the row's switch sits — the only tappable part of a toggle row."""
+    inner = _card_inner_row(ry)
+    switch_w, switch_h = draw.toggle_switch_size(_display_font())
+    return pygame.Rect(
+        inner.right - switch_w,
+        inner.centery - switch_h // 2,
+        switch_w,
+        switch_h,
+    )
+
+
 def _draw_toggle_row(surface, label: str, ry: int, focused: bool, on: bool) -> None:
     body_font = _display_font()
     inner = _draw_card(surface, ry, focused=focused)
@@ -2579,13 +2631,7 @@ def _draw_toggle_row(surface, label: str, ry: int, focused: bool, on: bool) -> N
     text = draw.fit_text(label, body_font, inner.width - switch_w - theme.s(10))
     ty = inner.centery - text_h // 2
     surface.blit(_cached_text(body_font, text, theme.LABEL), (inner.left, ty))
-    switch = pygame.Rect(
-        inner.right - switch_w,
-        inner.centery - switch_h // 2,
-        switch_w,
-        switch_h,
-    )
-    draw.draw_toggle_switch(surface, switch, on)
+    draw.draw_toggle_switch(surface, _toggle_switch_rect(int(ry)), on)
 
 
 def _draw_settings_rows(
