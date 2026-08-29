@@ -370,14 +370,18 @@ def draw(surface: pygame.Surface) -> pygame.Rect | None:
             if arc_ui.arc_span(widths, label_r) <= wedge_span:
                 break
             size -= 1
-        # Still too wide at the floor size: trim characters, not pixels.
+        # Still too wide at the floor size: shrink the icon once more,
+        # then trim characters — the text size stays put.
         if font is not None:
-            while len(label) > 4:
+            def _fits() -> bool:
                 widths = [icon_px, theme.s(3)] + [
                     font.size(ch)[0] for ch in label
                 ]
-                if arc_ui.arc_span(widths, label_r) <= wedge_span:
-                    break
+                return arc_ui.arc_span(widths, label_r) <= wedge_span
+
+            if not _fits() and crowded:
+                icon_px = theme.s(11)
+            while len(label) > 3 and not _fits():
                 label = label[:-1]
         if entry.get("kind") == "airport":
             lead = _chart_glyph(icon_px, entry.get("chart"))
