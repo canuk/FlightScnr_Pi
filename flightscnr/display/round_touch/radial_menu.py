@@ -245,7 +245,7 @@ def draw(surface: pygame.Surface) -> pygame.Rect | None:
     def _p(t0: float, dur: float) -> float:
         return max(0.0, min(1.0, (t - t0) / dur))
 
-    band_p = _p(0.03, 0.30)
+    band_p = _p(0.02, 0.15)
     n = len(_entries)
     step = 2 * math.pi / n
     band_r = (r_hole + r_mid) // 2
@@ -264,7 +264,7 @@ def draw(surface: pygame.Surface) -> pygame.Rect | None:
             a0=-math.pi / 2, a1=-math.pi / 2 + 2 * math.pi * band_p,
             width=r_mid - r_hole, color_rgba=_BAND_WHITE,
         )
-    wedge_ps = [_p(0.18 + i * 0.045, 0.22) for i in range(n)]
+    wedge_ps = [_p(0.09 + i * 0.022, 0.11) for i in range(n)]
     if all(wp >= 1.0 for wp in wedge_ps):
         pygame.draw.circle(rings, _BAND_DARK, (rc, rc), r_out, r_out - r_mid)
     else:
@@ -299,7 +299,7 @@ def draw(surface: pygame.Surface) -> pygame.Rect | None:
     dist_txt = (f"{dist:.1f}" if dist < 100 else f"{dist:.0f}") + units.upper()
     brg_txt = f"{brg:03.0f}°"
     text_r = band_r + theme.s(1)
-    readout_a = int(255 * _p(0.26, 0.20))
+    readout_a = int(255 * _p(0.13, 0.10))
     if readout_a > 0:
         _blit_curved(surface, dist_txt, r=text_r, mid=math.pi, bottom=False,
                      color=_INK, size=max(8, theme.s(11)), alpha=readout_a)
