@@ -2431,6 +2431,21 @@ class RoundTouchDisplay:
         self._display_focus = info.lofi_volume_row_index()
         return True
 
+    def _toggle_quiet_dim_off(self) -> None:
+        """Screen-off button: dim level 0 <-> last non-zero level."""
+        current = settings.quiet_dim_percent()
+        if current > 0:
+            settings.set_quiet_dim_restore(current)
+            settings.set_quiet_dim_percent(0, persist=True)
+        else:
+            settings.set_quiet_dim_percent(
+                settings.quiet_dim_restore(), persist=True
+            )
+        self._display_focus = info.quiet_dim_row_index()
+        self._apply_brightness()
+        self._note_activity()
+        self._safe_draw()
+
     def _apply_quiet_dim_slider(self, x: int, *, persist: bool = True) -> bool:
         from display.round_touch import backlight
 
@@ -3842,6 +3857,12 @@ class RoundTouchDisplay:
                 x, y, self._scroll.offset
             ):
                 self._apply_lofi_volume_slider(x, persist=True)
+                return
+            if self.settings_page == info.PAGE_ATC_QUIET and info.quiet_dim_off_button_at(
+                x, y, self._scroll.offset
+            ):
+                if settings.quiet_dim_enabled():
+                    self._toggle_quiet_dim_off()
                 return
             if self.settings_page == info.PAGE_ATC_QUIET and info.quiet_dim_slider_at(
                 x, y, self._scroll.offset

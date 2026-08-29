@@ -537,6 +537,66 @@ class PlayerTests(unittest.TestCase):
         self.settings.set_atc_enabled.assert_called_with(False)
         self.settings.set_atc_want_playing.assert_called_with(False)
 
+    def test_second_start_same_feed_reuses_stream(self):
+        """Echo regression: toggle + keepalive must never stack two mpvs."""
+        from utilities import atc_audio
+
+        proc = self._fake_proc()
+        with mock.patch.object(atc_audio, "in_quiet_hours", return_value=False), mock.patch(
+            "utilities.atc_audio.subprocess.Popen", return_value=proc
+        ) as popen, mock.patch("utilities.atc_audio.time.sleep"):
+            atc_audio.start(override=True)
+            st = atc_audio.start(override=True)
+        self.assertTrue(st["playing"])
+        self.assertEqual(popen.call_count, 1)
+
+    def test_concurrent_starts_spawn_one_mpv(self):
+        """Two threads racing into start() serialize on the transport lock."""
+        import threading
+
+        from utilities import atc_audio
+
+        proc = self._fake_proc()
+
+        def slow_popen(*args, **kwargs):
+            import time as _t
+
+            _t.sleep(0.05)
+            return proc
+
+        with mock.patch.object(atc_audio, "in_quiet_hours", return_value=False), mock.patch(
+            "utilities.atc_audio.subprocess.Popen", side_effect=slow_popen
+        ) as popen:
+            threads = [
+                threading.Thread(target=lambda: atc_audio.start(override=True))
+                for _ in range(2)
+            ]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join(timeout=10)
+        self.assertEqual(popen.call_count, 1)
+        self.assertTrue(atc_audio.is_playing())
+
+    def test_duplicate_mpv_race_concedes_to_lower_pid(self):
+        """Cross-process race: the newer mpv (higher pid) kills itself."""
+        from utilities import atc_audio
+
+        proc = self._fake_proc()  # pid 4242
+        killed = []
+        with mock.patch.object(atc_audio, "in_quiet_hours", return_value=False), mock.patch(
+            "utilities.atc_audio.subprocess.Popen", return_value=proc
+        ), mock.patch("utilities.atc_audio.time.sleep"), mock.patch.object(
+            atc_audio, "_reap_atc_mpv_orphans"
+        ), mock.patch.object(
+            atc_audio, "_atc_mpv_pids", return_value=[100]
+        ), mock.patch.object(
+            atc_audio, "_kill_pids", side_effect=lambda pids, **kw: killed.extend(pids)
+        ):
+            atc_audio.start(override=True)
+        self.assertIn(proc.pid, killed)
+        self.assertNotIn(100, killed)
+
     def test_toggle_power_flips_enabled(self):
         from utilities import atc_audio
 
