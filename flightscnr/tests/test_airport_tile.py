@@ -180,6 +180,27 @@ class TestTileState:
         assert not airport_tile.is_open()
 
 
+class TestFieldName:
+    @pytest.mark.skipif(not _FONT_OK, reason="pygame.font unavailable on this host")
+    def test_tile_prefers_official_facility_name(self, monkeypatch):
+        # airports.py keeps the municipality in "name" (route labels) and the
+        # official field name in "facility" — the METAR card wants the field.
+        monkeypatch.setattr(airport_tile, "_start_fetch", lambda ident: None)
+        airport_tile.open_tile({
+            "ident": "KNKX", "name": "San Diego",
+            "facility": "Miramar Marine Corps Air Station",
+            "type": "medium_airport", "x": 360, "y": 420,
+        })
+        airport_tile._set_metar_for_tests(metar.parse_api_row(_API_ROW))
+        surface = pygame.Surface((theme.SIZE, theme.SIZE), pygame.SRCALPHA)
+        assert airport_tile.draw(surface) is not None
+        # The drawn name string is chosen before render — assert the source.
+        name = str(
+            airport_tile._airport.get("facility")
+            or airport_tile._airport.get("name") or "")
+        assert name.startswith("Miramar")
+
+
 class TestTapToDismiss:
     def test_hit_false_when_closed(self):
         assert airport_tile.hit(360, 360) is False

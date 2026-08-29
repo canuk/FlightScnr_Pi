@@ -226,7 +226,7 @@ def draw(surface: pygame.Surface) -> pygame.Rect | None:
     value_font = _load(max(8, theme.s(10)))
 
     ident = str(_airport.get("ident") or "?")
-    name = str(_airport.get("name") or _airport.get("facility") or "").strip()
+    name = str(_airport.get("facility") or _airport.get("name") or "").strip()
     m = _metar
 
     rows: list[tuple[str, str]] = []
