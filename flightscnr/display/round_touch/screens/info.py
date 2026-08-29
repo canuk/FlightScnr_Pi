@@ -1224,7 +1224,7 @@ def _display_font():
 
 def _row_pitch() -> int:
     """One row pitch for every settings page — layout, hits, and drawing."""
-    return _display_font().get_height() + theme.s(12)
+    return _display_font().get_height() + theme.s(17)
 
 
 # Card chrome (watch-style list): every row is a rounded chip whose width
@@ -1243,6 +1243,21 @@ def _card_rect(ry: int, card_h: int) -> pygame.Rect:
     w = max(theme.s(120), 2 * half - theme.s(26))
     w = min(w, theme.s(330))
     return pygame.Rect(theme.CENTER_X - w // 2, int(ry), w, int(card_h))
+
+
+_text_cache: dict = {}
+
+
+def _cached_text(font, text: str, color) -> pygame.Surface:
+    """Memoized font.render — settings pages repaint whole rows per frame."""
+    key = (id(font), text, tuple(color))
+    img = _text_cache.get(key)
+    if img is None:
+        if len(_text_cache) > 384:
+            _text_cache.clear()
+        img = font.render(text, True, color)
+        _text_cache[key] = img
+    return img
 
 
 def _card_inner_row(ry: int) -> pygame.Rect:
@@ -2196,7 +2211,7 @@ def _draw_toggle_row(surface, label: str, ry: int, focused: bool, on: bool) -> N
     text_h = body_font.get_height()
     text = draw.fit_text(label, body_font, inner.width - switch_w - theme.s(10))
     ty = inner.centery - text_h // 2
-    surface.blit(body_font.render(text, True, theme.LABEL), (inner.left, ty))
+    surface.blit(_cached_text(body_font, text, theme.LABEL), (inner.left, ty))
     switch = pygame.Rect(
         inner.right - switch_w,
         inner.centery - switch_h // 2,
@@ -2299,12 +2314,13 @@ def _draw_settings_rows(
                 # "Label: value" rows read as label left, value right.
                 lab, val = line.split(": ", 1)
                 surface.blit(
-                    body_font.render(lab, True, theme.LABEL), (inner.left, ty))
-                val_img = body_font.render(
+                    _cached_text(body_font, lab, theme.LABEL), (inner.left, ty))
+                val_img = _cached_text(
+                    body_font,
                     draw.fit_text(
                         val, body_font,
                         inner.width - body_font.size(lab)[0] - theme.s(12)),
-                    True, theme.MUTED)
+                    theme.MUTED)
                 surface.blit(
                     val_img, (inner.right - val_img.get_width(), ty))
                 continue
@@ -2312,15 +2328,16 @@ def _draw_settings_rows(
                 # Picker rows: label left, value + chevron right.
                 lab, val = line.split(" › ", 1)
                 surface.blit(
-                    body_font.render(lab, True, theme.LABEL), (inner.left, ty))
-                chev = body_font.render("›", True, theme.HINT)
-                val_img = body_font.render(
+                    _cached_text(body_font, lab, theme.LABEL), (inner.left, ty))
+                chev = _cached_text(body_font, "›", theme.HINT)
+                val_img = _cached_text(
+                    body_font,
                     draw.fit_text(
                         val, body_font,
                         inner.width - body_font.size(lab)[0]
                         - chev.get_width() - theme.s(18),
                     ),
-                    True, theme.MUTED,
+                    theme.MUTED,
                 )
                 vx = inner.right - chev.get_width()
                 surface.blit(chev, (vx, ty))
@@ -2328,9 +2345,10 @@ def _draw_settings_rows(
                     val_img, (vx - theme.s(6) - val_img.get_width(), ty))
                 continue
             surface.blit(
-                body_font.render(
+                _cached_text(
+                    body_font,
                     draw.fit_text(line, body_font, inner.width),
-                    True, theme.LABEL,
+                    theme.LABEL,
                 ),
                 (inner.left, ty),
             )
