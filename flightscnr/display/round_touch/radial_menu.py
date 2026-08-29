@@ -193,22 +193,20 @@ def _blit_curved(
     )
 
 
-def _plane_glyph(size: int) -> pygame.Surface:
-    """Small upright airplane silhouette."""
-    scale = 2
-    side = size * scale
+def _plane_glyph(size: int, flight: dict | None = None) -> pygame.Surface:
+    """The radar's own type icon (heli / jet / GA / ship), upright."""
+    side = max(theme.s(30), size * 2)
     surf = pygame.Surface((side, side), pygame.SRCALPHA)
-    c = side / 2
-    u = side / 26.0
-    pts = [
-        (c, c - 11 * u), (c + 2 * u, c - 1 * u), (c + 11 * u, c + 3 * u),
-        (c + 11 * u, c + 5 * u), (c + 2 * u, c + 3 * u), (c + 2 * u, c + 8 * u),
-        (c + 5 * u, c + 10 * u), (c + 5 * u, c + 11 * u), (c, c + 9.5 * u),
-        (c - 5 * u, c + 11 * u), (c - 5 * u, c + 10 * u), (c - 2 * u, c + 8 * u),
-        (c - 2 * u, c + 3 * u), (c - 11 * u, c + 5 * u), (c - 11 * u, c + 3 * u),
-        (c - 2 * u, c - 1 * u),
-    ]
-    pygame.draw.polygon(surf, (*_LABEL, 255), pts)
+    try:
+        from display.round_touch import aircraft
+
+        aircraft.draw_plane_icon(
+            surf, side // 2, side // 2, 0.0, _LABEL,
+            compact=True, flight=flight or {},
+        )
+    except Exception:
+        pygame.draw.circle(surf, (*_LABEL, 255), (side // 2, side // 2),
+                           side // 4, 2)
     return pygame.transform.smoothscale(surf, (size, size))
 
 
@@ -341,7 +339,7 @@ def draw(surface: pygame.Surface) -> pygame.Rect | None:
         if entry.get("kind") == "airport":
             lead = _chart_glyph(icon_px, entry.get("chart"))
         else:
-            lead = _plane_glyph(icon_px)
+            lead = _plane_glyph(icon_px, entry.get("flight"))
         label_a = int(255 * max(0.0, wedge_ps[i] - 0.55) / 0.45)
         if label_a <= 0:
             continue
