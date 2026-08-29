@@ -1859,6 +1859,8 @@ class RoundTouchDisplay:
         if kind == "channel" and not settings.atc_airport():
             return
         info.invalidate_atc_labels()
+        if kind in info.TIME_PICKER_KINDS:
+            info.time_picker_reset(kind)
         self._atc_picker = kind
         self._atc_picker_scroll.reset()
         self._atc_picker_drag_y = None
@@ -1968,6 +1970,35 @@ class RoundTouchDisplay:
         action, value = hit
         if action in ("close", "outside"):
             self._close_atc_picker()
+            return
+        if action == "time_num":
+            try:
+                info.time_picker_pick(int(value))
+            except (TypeError, ValueError):
+                return
+            self._note_activity()
+            self._safe_draw()
+            return
+        if action == "time_ampm":
+            info.time_picker_set_pm(value == "PM")
+            self._note_activity()
+            self._safe_draw()
+            return
+        if action == "time_part":
+            info.time_picker_set_stage(value)
+            self._note_activity()
+            self._safe_draw()
+            return
+        if action == "time_set":
+            kind = self._atc_picker
+            self._close_atc_picker()
+            hhmm = info.time_picker_value()
+            if kind == "quiet_start":
+                settings.set_atc_quiet_start(hhmm)
+            elif kind == "quiet_end":
+                settings.set_atc_quiet_end(hhmm)
+            self._note_activity()
+            self._safe_draw()
             return
         if action != "item" or not value:
             return

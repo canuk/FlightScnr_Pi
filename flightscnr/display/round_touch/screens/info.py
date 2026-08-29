@@ -757,6 +757,179 @@ def _atc_output_picker_items() -> list[dict]:
     return out
 
 
+# --- Dial time picker (Quiet start / end) ---------------------------------
+# Material-style dial for the round screen: tap the hour on the ring, the
+# picker advances to minutes, AM/PM pills, Set confirms.
+
+TIME_PICKER_KINDS = frozenset(("quiet_start", "quiet_end"))
+_time_picker = {"stage": "hour", "hour12": 10, "minute": 0, "pm": True}
+
+
+def time_picker_reset(kind: str) -> None:
+    raw = (
+        settings.atc_quiet_start()
+        if kind == "quiet_start"
+        else settings.atc_quiet_end()
+    )
+    try:
+        h, m = (int(part) for part in str(raw).split(":", 1))
+    except (TypeError, ValueError):
+        h, m = (22, 0)
+    _time_picker.update(
+        stage="hour",
+        hour12=(h % 12) or 12,
+        minute=(m // 5) * 5,
+        pm=h >= 12,
+    )
+
+
+def time_picker_value() -> str:
+    h = _time_picker["hour12"] % 12 + (12 if _time_picker["pm"] else 0)
+    return f"{h:02d}:{_time_picker['minute']:02d}"
+
+
+def time_picker_pick(number: int) -> None:
+    if _time_picker["stage"] == "hour":
+        _time_picker["hour12"] = (number % 12) or 12
+        _time_picker["stage"] = "minute"
+    else:
+        _time_picker["minute"] = max(0, min(55, number - number % 5))
+
+
+def time_picker_set_pm(pm: bool) -> None:
+    _time_picker["pm"] = bool(pm)
+
+
+def time_picker_set_stage(stage: str) -> None:
+    if stage in ("hour", "minute"):
+        _time_picker["stage"] = stage
+
+
+def _draw_time_picker(surface, kind: str) -> int:
+    """Dial picker for quiet hours; registers hits like the list picker."""
+    global _atc_picker_hits, _atc_picker_list_rect
+    _atc_picker_hits = []
+    _atc_picker_list_rect = None
+
+    import math as _math
+
+    draw.fill_background_textured(surface)
+    title_font = draw.load_font(theme.s(15), bold=True)
+    num_font = draw.load_font(theme.s(14), bold=True)
+    big_font = draw.load_font(theme.s(26), bold=True)
+    small_font = draw.load_font(theme.s(12), bold=True)
+
+    stage = _time_picker["stage"]
+    hour12 = _time_picker["hour12"]
+    minute = _time_picker["minute"]
+    pm = _time_picker["pm"]
+
+    title_text = "Quiet Start" if kind == "quiet_start" else "Quiet End"
+    title = title_font.render(title_text, True, theme.LABEL)
+    title_y = theme.CENTER_Y - int(theme.VISIBLE_RADIUS * 0.86)
+    surface.blit(title, title.get_rect(midtop=(theme.CENTER_X, title_y)))
+
+    # Close X, mirrored from the list picker (geometric — Pi fonts lack ✕).
+    close_size = theme.s(28)
+    close_rect = pygame.Rect(0, 0, close_size, close_size)
+    close_rect.center = (
+        theme.CENTER_X + int(theme.VISIBLE_RADIUS * 0.62),
+        title_y + close_size // 2,
+    )
+    inset = max(6, theme.s(7))
+    x_w = max(2, theme.s(2))
+    for (x0, y0), (x1, y1) in (
+        ((close_rect.left + inset, close_rect.top + inset),
+         (close_rect.right - inset, close_rect.bottom - inset)),
+        ((close_rect.right - inset, close_rect.top + inset),
+         (close_rect.left + inset, close_rect.bottom - inset)),
+    ):
+        pygame.draw.line(surface, theme.LABEL, (x0, y0), (x1, y1), x_w)
+    _atc_picker_hits.append(("close", "", close_rect.inflate(theme.s(10), theme.s(10))))
+
+    # Center preview: 10:30 PM — tap hour or minutes to edit that part.
+    hour_img = big_font.render(f"{hour12}", True,
+                               theme.SWEEP if stage == "hour" else theme.LABEL)
+    colon_img = big_font.render(":", True, theme.LABEL)
+    min_img = big_font.render(f"{minute:02d}", True,
+                              theme.SWEEP if stage == "minute" else theme.LABEL)
+    ampm_img = small_font.render("PM" if pm else "AM", True, theme.MUTED)
+    gap = theme.s(2)
+    total_w = (hour_img.get_width() + colon_img.get_width() + min_img.get_width()
+               + gap * 3 + ampm_img.get_width())
+    cx = theme.CENTER_X - total_w // 2
+    cy = theme.CENTER_Y - big_font.get_height() // 2
+    hour_rect = surface.blit(hour_img, (cx, cy))
+    cx += hour_img.get_width() + gap
+    surface.blit(colon_img, (cx, cy))
+    cx += colon_img.get_width() + gap
+    min_rect = surface.blit(min_img, (cx, cy))
+    cx += min_img.get_width() + gap
+    surface.blit(ampm_img, (cx, cy + big_font.get_height() - ampm_img.get_height() - theme.s(3)))
+    _atc_picker_hits.append(("time_part", "hour", hour_rect.inflate(theme.s(12), theme.s(12))))
+    _atc_picker_hits.append(("time_part", "minute", min_rect.inflate(theme.s(12), theme.s(12))))
+
+    # Dial ring: 12 at the top, clockwise.
+    ring_r = int(theme.VISIBLE_RADIUS * 0.64)
+    dot_r = theme.s(21)
+    for i in range(12):
+        ang = -_math.pi / 2 + i * (_math.pi / 6)
+        px = theme.CENTER_X + int(ring_r * _math.cos(ang))
+        py = theme.CENTER_Y + int(ring_r * _math.sin(ang))
+        if stage == "hour":
+            number = 12 if i == 0 else i
+            selected = number == hour12
+            label = str(number)
+        else:
+            number = i * 5
+            selected = number == minute
+            label = f"{number:02d}"
+        if selected:
+            pygame.draw.circle(surface, theme.SWEEP, (px, py), dot_r)
+            img = num_font.render(label, True, (10, 16, 12))
+        else:
+            pygame.draw.circle(surface, _CARD_FILL, (px, py), dot_r)
+            pygame.draw.circle(surface, _CARD_BORDER, (px, py), dot_r, 1)
+            img = num_font.render(label, True, theme.MUTED)
+        surface.blit(img, img.get_rect(center=(px, py)))
+        hit = pygame.Rect(0, 0, dot_r * 2 + theme.s(8), dot_r * 2 + theme.s(8))
+        hit.center = (px, py)
+        _atc_picker_hits.append(("time_num", str(number), hit))
+
+    # AM / PM pills just under the preview.
+    pill_w, pill_h = theme.s(52), theme.s(26)
+    pill_y = theme.CENTER_Y + big_font.get_height() // 2 + theme.s(12)
+    for idx, label in enumerate(("AM", "PM")):
+        rect = pygame.Rect(0, 0, pill_w, pill_h)
+        rect.center = (
+            theme.CENTER_X + (idx * 2 - 1) * (pill_w // 2 + theme.s(6)),
+            pill_y + pill_h // 2,
+        )
+        active = (label == "PM") == pm
+        fill = _CARD_FILL_FOCUS if active else _CARD_FILL
+        border = theme.SWEEP if active else _CARD_BORDER
+        pygame.draw.rect(surface, fill, rect, border_radius=pill_h // 2)
+        pygame.draw.rect(surface, border, rect,
+                         max(1, theme.s(2)) if active else 1,
+                         border_radius=pill_h // 2)
+        img = small_font.render(label, True,
+                                theme.LABEL if active else theme.MUTED)
+        surface.blit(img, img.get_rect(center=rect.center))
+        _atc_picker_hits.append(("time_ampm", label, rect.inflate(theme.s(8), theme.s(8))))
+
+    # Set pill at the bottom of the dial.
+    set_w, set_h = theme.s(96), theme.s(30)
+    set_rect = pygame.Rect(0, 0, set_w, set_h)
+    set_rect.center = (theme.CENTER_X, theme.CENTER_Y + int(theme.VISIBLE_RADIUS * 0.84))
+    pygame.draw.rect(surface, (12, 52, 22), set_rect, border_radius=set_h // 2)
+    pygame.draw.rect(surface, theme.SWEEP, set_rect, max(1, theme.s(2)),
+                     border_radius=set_h // 2)
+    img = title_font.render("Set", True, theme.LABEL)
+    surface.blit(img, img.get_rect(center=set_rect.center))
+    _atc_picker_hits.append(("time_set", "", set_rect.inflate(theme.s(10), theme.s(8))))
+    return 0
+
+
 def draw_atc_picker(
     surface,
     kind: str,
@@ -770,6 +943,8 @@ def draw_atc_picker(
     _atc_picker_list_rect = None
 
     kind = str(kind or "").strip().lower()
+    if kind in TIME_PICKER_KINDS:
+        return _draw_time_picker(surface, kind)
     title_text = _LIST_PICKER_TITLES.get(kind, "Select")
     items = atc_picker_items(kind)
     pressed = str(pressed_id or "").strip()

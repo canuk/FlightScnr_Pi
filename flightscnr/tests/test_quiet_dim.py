@@ -67,6 +67,51 @@ class TestQuietDimSettings:
         assert settings.quiet_dim_enabled() is False
 
 
+class TestDialTimePicker:
+    def test_reset_parses_setting(self):
+        settings.set_atc_quiet_start("22:30")
+        info.time_picker_reset("quiet_start")
+        assert info._time_picker["hour12"] == 10
+        assert info._time_picker["pm"] is True
+        assert info._time_picker["minute"] == 30
+        assert info._time_picker["stage"] == "hour"
+
+    def test_pick_hour_advances_to_minutes(self):
+        info.time_picker_reset("quiet_start")
+        info.time_picker_pick(9)
+        assert info._time_picker["hour12"] == 9
+        assert info._time_picker["stage"] == "minute"
+        info.time_picker_pick(45)
+        assert info._time_picker["minute"] == 45
+
+    def test_value_round_trip(self):
+        info.time_picker_reset("quiet_start")
+        info.time_picker_pick(12)
+        info.time_picker_pick(0)
+        info.time_picker_set_pm(False)
+        assert info.time_picker_value() == "00:00"
+        info.time_picker_set_pm(True)
+        assert info.time_picker_value() == "12:00"
+        info.time_picker_set_stage("hour")
+        info.time_picker_pick(7)
+        info.time_picker_pick(5)
+        assert info.time_picker_value() == "19:05"
+
+    def test_dial_draw_registers_hits(self):
+        if not pygame.font.get_init():
+            return
+        from display.round_touch import theme
+
+        info.time_picker_reset("quiet_end")
+        surface = pygame.Surface((theme.SIZE, theme.SIZE))
+        info.draw_atc_picker(surface, "quiet_end")
+        actions = {a for a, _, _ in info._atc_picker_hits}
+        assert "time_num" in actions
+        assert "time_set" in actions
+        assert "time_ampm" in actions
+        assert "close" in actions
+
+
 class TestQuietDimRows:
     def test_actions_present_in_order(self):
         assert info.ATC_QUIET_ACTIONS.index("quiet_dim") < info.ATC_QUIET_ACTIONS.index(
