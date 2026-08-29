@@ -56,7 +56,7 @@ def _r_mid() -> int:
 
 
 def _r_out() -> int:
-    return theme.s(66)
+    return theme.s(58)
 
 
 def _reset_for_tests() -> None:
