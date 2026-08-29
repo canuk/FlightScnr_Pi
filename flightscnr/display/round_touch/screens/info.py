@@ -1253,17 +1253,16 @@ def _in_settings_body(y: int) -> bool:
 def slider_drag_band_contains(
     hit: pygame.Rect, y: int, *, pad_y: int | None = None
 ) -> bool:
-    """True while a sticky horizontal drag should keep mapping screen X.
+    """Armed slider drags capture the finger completely until release.
 
-    After a slider arms, X may leave the track (clamped to 0–100%); leaving this
-    vertical band cancels the drag so taps elsewhere on the screen cannot steal
-    the value (ATC volume / brightness sticky-X bug).
+    A finger on a slider covers it, so people naturally drift up or down
+    while sweeping left/right — the drag keeps mapping screen X wherever
+    the finger goes. Arming still requires pressing the slider itself, and
+    every handler releases (and persists) the moment the finger lifts, so
+    taps elsewhere can never steal the value.
     """
-    if pad_y is None:
-        # Generous: a thumb sweeping a slider on the round glass arcs well
-        # off the row. Only a far wander (another region entirely) cancels.
-        pad_y = theme.s(64)
-    return (hit.top - pad_y) <= y <= (hit.bottom + pad_y)
+    del hit, y, pad_y
+    return True
 
 
 def display_row_at(x: int, y: int, page: int, scroll_offset: int = 0) -> int | None:

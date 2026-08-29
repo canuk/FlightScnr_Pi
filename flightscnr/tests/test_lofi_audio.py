@@ -405,18 +405,17 @@ class TestAtcPageVolume:
 
 
 class TestSliderDragTolerance:
-    def test_drag_band_forgives_arced_thumbs(self):
+    def test_armed_drags_capture_the_finger_anywhere(self):
         import pygame
 
         from display.round_touch import theme
         from display.round_touch.screens import info
 
         hit = pygame.Rect(100, 300, 400, 40)
-        # A thumb arcing ~60px off the row must NOT cancel the drag.
+        # Fingers cover the slider they drag — any Y keeps the drag alive.
         assert info.slider_drag_band_contains(hit, 300 - theme.s(56)) is True
-        assert info.slider_drag_band_contains(hit, 340 + theme.s(56)) is True
-        # Far-off wanders still cancel (the sticky-X steal guard).
-        assert info.slider_drag_band_contains(hit, 340 + theme.s(90)) is False
+        assert info.slider_drag_band_contains(hit, 340 + theme.s(200)) is True
+        assert info.slider_drag_band_contains(hit, 0) is True
 
 
 class TestAtcLofiGating:
