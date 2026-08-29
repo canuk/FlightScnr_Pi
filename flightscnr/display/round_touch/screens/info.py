@@ -1262,7 +1262,9 @@ def _cached_text(font, text: str, color) -> pygame.Surface:
 
 def _card_inner_row(ry: int) -> pygame.Rect:
     """Content rect of the card that occupies the row starting at ry."""
-    return _card_rect(int(ry), _row_pitch() - theme.s(5)).inflate(-theme.s(24), 0)
+    card_h = _row_pitch() - theme.s(5)
+    rect = _card_rect(int(ry), card_h)
+    return rect.inflate(-(rect.height // 2 + theme.s(10)), 0)
 
 
 def _draw_card(
@@ -1273,7 +1275,7 @@ def _draw_card(
     if card_h is None:
         card_h = _row_pitch() - theme.s(5)
     rect = _card_rect(ry, card_h)
-    radius = theme.s(9)
+    radius = rect.height // 2  # Wear-style pill: fully rounded ends
     if tone == "danger":
         fill, border = _CARD_FILL_DANGER, _CARD_BORDER_DANGER
     else:
@@ -1284,7 +1286,8 @@ def _draw_card(
         surface, border, rect,
         width=max(1, theme.s(2)) if focused else 1, border_radius=radius,
     )
-    return rect.inflate(-theme.s(24), 0)
+    # Pill ends eat corner space — inset content past the curve.
+    return rect.inflate(-(radius + theme.s(10)), 0)
 
 
 
@@ -2355,7 +2358,44 @@ def _draw_settings_rows(
             continue
     finally:
         surface.set_clip(clip_prev)
+    _blit_edge_fades(surface, int(top), int(bottom))
     return max_scroll
+
+
+_edge_fade_cache: dict = {}
+
+
+def _blit_edge_fades(surface, top: int, bottom: int) -> None:
+    """Fade scrolled rows out under the header and above the footer."""
+    h = theme.s(26)
+    key = (int(top), int(bottom), h)
+    strips = _edge_fade_cache.get(key)
+    if strips is None:
+        bg = pygame.Surface((theme.SIZE, theme.SIZE))
+        draw.fill_background_textured(bg)
+        try:
+            import numpy as np
+            import pygame.surfarray as sa
+
+            def _make(y0: int, flip: bool) -> pygame.Surface:
+                strip = bg.subsurface(
+                    pygame.Rect(0, y0, theme.SIZE, h)).convert_alpha()
+                alpha = sa.pixels_alpha(strip)
+                ramp = np.linspace(255, 0, h).astype(np.uint8)
+                if flip:
+                    ramp = ramp[::-1]
+                alpha[:, :] = ramp[np.newaxis, :]
+                del alpha
+                return strip
+
+            strips = (_make(top, False), _make(bottom - h, True))
+        except Exception:
+            strips = (None, None)
+        _edge_fade_cache.clear()
+        _edge_fade_cache[key] = strips
+    if strips[0] is not None:
+        surface.blit(strips[0], (0, top))
+        surface.blit(strips[1], (0, bottom - h))
 
 
 def _draw_scroll_overflow_cues(
@@ -2608,8 +2648,22 @@ def draw_info(
         for line in lines:
             draw.draw_center_line(surface, line, int(y), detail_font, theme.MUTED)
             y += line_pitch
-        _draw_adsb_coverage_button(surface, bottom)
+        # Compact CPU+Temp onto one line only when the full list won't fit —
+        # this page is static diagnostics and must not scroll.
+        if len(lines) * line_pitch > avail:
+            try:
+                from utilities.system_stats import format_lines as _system_stat_lines
 
+                sys_lines = _system_stat_lines(compact=True)
+            except Exception:
+                sys_lines = ["CPU: —   Temp: —", "RAM: —"]
+            lines = _main_lines(sys_lines)
+        max_scroll = 0
+        y = body_top
+        for line in lines:
+            draw.draw_center_line(surface, line, int(y), detail_font, theme.MUTED)
+            y += line_pitch
+        _draw_adsb_coverage_button(surface, bottom)
 
     elif page == PAGE_DISPLAY:
         max_scroll = _draw_settings_rows(
