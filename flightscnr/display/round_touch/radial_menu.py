@@ -56,7 +56,7 @@ def _r_mid() -> int:
 
 
 def _r_out() -> int:
-    return theme.s(76)
+    return theme.s(66)
 
 
 def _reset_for_tests() -> None:
@@ -174,6 +174,7 @@ def _blit_curved(
     color,
     size: int,
     lead: pygame.Surface | None = None,
+    alpha: int = 255,
 ) -> None:
     try:
         font = draw_mod.load_font(size, bold=True)
@@ -183,6 +184,9 @@ def _blit_curved(
     if lead is not None:
         gap = pygame.Surface((theme.s(3), 1), pygame.SRCALPHA)
         items = [lead, gap] + items
+    if alpha < 255:
+        for item in items:
+            item.set_alpha(alpha)
     arc_ui.blit_arc_items(
         surface, items, r=r, mid=mid, bottom=bottom,
         cx=_center[0], cy=_center[1],
@@ -235,28 +239,59 @@ def draw(surface: pygame.Surface) -> pygame.Rect | None:
     cx, cy = _center
     r_hole, r_mid, r_out = _r_hole(), _r_mid(), _r_out()
 
-    # Both annuli drawn as clean circle strokes on one alpha overlay.
-    band_r = (r_hole + r_mid) // 2
+    # Build-around animation timings (seconds since open).
+    t = time.monotonic() - _opened_at
+
+    def _p(t0: float, dur: float) -> float:
+        return max(0.0, min(1.0, (t - t0) / dur))
+
+    band_p = _p(0.03, 0.30)
     n = len(_entries)
     step = 2 * math.pi / n
+    band_r = (r_hole + r_mid) // 2
     wedge_r = (r_mid + r_out) // 2
     start = -math.pi / 2
     pad = theme.s(4)
     side = 2 * (r_out + pad)
     rings = pygame.Surface((side, side), pygame.SRCALPHA)
     rc = side // 2
-    pygame.draw.circle(rings, _BAND_WHITE, (rc, rc), r_mid, r_mid - r_hole)
-    pygame.draw.circle(rings, _BAND_DARK, (rc, rc), r_out, r_out - r_mid)
+    if band_p >= 1.0:
+        pygame.draw.circle(rings, _BAND_WHITE, (rc, rc), r_mid, r_mid - r_hole)
+    elif band_p > 0.0:
+        # Sweep the white band clockwise from screen-up, like the mock.
+        arc_ui.draw_arc_bar(
+            rings, cx=rc, cy=rc, r=band_r,
+            a0=-math.pi / 2, a1=-math.pi / 2 + 2 * math.pi * band_p,
+            width=r_mid - r_hole, color_rgba=_BAND_WHITE,
+        )
+    wedge_ps = [_p(0.18 + i * 0.045, 0.22) for i in range(n)]
+    if all(wp >= 1.0 for wp in wedge_ps):
+        pygame.draw.circle(rings, _BAND_DARK, (rc, rc), r_out, r_out - r_mid)
+    else:
+        for i, wp in enumerate(wedge_ps):
+            if wp <= 0.0:
+                continue
+            a0 = start + i * step
+            arc_ui.draw_arc_bar(
+                rings, cx=rc, cy=rc, r=wedge_r, a0=a0, a1=a0 + step,
+                width=r_out - r_mid,
+                color_rgba=(*_BAND_DARK[:3], int(_BAND_DARK[3] * wp)),
+            )
     surface.blit(rings, rings.get_rect(center=(cx, cy)))
-    for i in range(n):
-        a = start + i * step
-        x0 = cx + int(round(r_mid * math.cos(a)))
-        y0 = cy + int(round(r_mid * math.sin(a)))
-        x1 = cx + int(round(r_out * math.cos(a)))
-        y1 = cy + int(round(r_out * math.sin(a)))
-        pygame.draw.line(surface, _HAIRLINE[:3], (x0, y0), (x1, y1), 1)
-    for radius, color in ((r_hole, _HAIRLINE), (r_mid, _HAIRLINE), (r_out, _RIM)):
-        pygame.draw.circle(surface, color[:3], (cx, cy), radius, 1)
+    if band_p >= 1.0:
+        for i in range(n):
+            if wedge_ps[i] < 1.0 and wedge_ps[(i - 1) % n] < 1.0:
+                continue
+            a = start + i * step
+            x0 = cx + int(round(r_mid * math.cos(a)))
+            y0 = cy + int(round(r_mid * math.sin(a)))
+            x1 = cx + int(round(r_out * math.cos(a)))
+            y1 = cy + int(round(r_out * math.sin(a)))
+            pygame.draw.line(surface, _HAIRLINE[:3], (x0, y0), (x1, y1), 1)
+        for radius, color in ((r_hole, _HAIRLINE), (r_mid, _HAIRLINE)):
+            pygame.draw.circle(surface, color[:3], (cx, cy), radius, 1)
+        if all(wp >= 1.0 for wp in wedge_ps):
+            pygame.draw.circle(surface, _RIM[:3], (cx, cy), r_out, 1)
 
     # Curved readouts: distance up the left, bearing down the right.
     dist, brg = _readout(*_tap)
@@ -264,24 +299,45 @@ def draw(surface: pygame.Surface) -> pygame.Rect | None:
     dist_txt = (f"{dist:.1f}" if dist < 100 else f"{dist:.0f}") + units.upper()
     brg_txt = f"{brg:03.0f}°"
     text_r = band_r + theme.s(1)
-    _blit_curved(surface, dist_txt, r=text_r, mid=math.pi, bottom=False,
-                 color=_INK, size=max(8, theme.s(11)))
-    _blit_curved(surface, brg_txt, r=text_r, mid=0.0, bottom=True,
-                 color=_INK, size=max(8, theme.s(11)))
+    readout_a = int(255 * _p(0.26, 0.20))
+    if readout_a > 0:
+        _blit_curved(surface, dist_txt, r=text_r, mid=math.pi, bottom=False,
+                     color=_INK, size=max(8, theme.s(11)), alpha=readout_a)
+        _blit_curved(surface, brg_txt, r=text_r, mid=0.0, bottom=True,
+                     color=_INK, size=max(8, theme.s(11)), alpha=readout_a)
 
-    # Wedge labels, curved, each led by its target-type glyph.
+    # Wedge labels, curved, each led by its target-type glyph. Text and
+    # icon shrink until every label fits inside its wedge's arc.
     label_r = wedge_r
-    icon_px = max(10, theme.s(14))
+    wedge_span = step * 0.86  # radians available per wedge
+    base_size = max(8, theme.s(11))
     for i, entry in enumerate(_entries):
         mid = start + (i + 0.5) * step
         label = str(entry.get("label") or "?")[:9]
+        size = base_size
+        icon_px = max(9, theme.s(14))
+        while size > 7:
+            try:
+                font = draw_mod.load_font(size, bold=True)
+                widths = [icon_px, theme.s(3)] + [
+                    font.size(ch)[0] for ch in label
+                ]
+            except Exception:
+                break
+            if arc_ui.arc_span(widths, label_r) <= wedge_span:
+                break
+            size -= 1
+            icon_px = max(9, icon_px - 1)
         if entry.get("kind") == "airport":
             lead = _chart_glyph(icon_px, entry.get("chart"))
         else:
             lead = _plane_glyph(icon_px)
+        label_a = int(255 * wedge_ps[i])
+        if label_a <= 0:
+            continue
         _blit_curved(
             surface, label, r=label_r, mid=mid, bottom=math.sin(mid) > 0,
-            color=_LABEL, size=max(8, theme.s(11)), lead=lead,
+            color=_LABEL, size=size, lead=lead, alpha=label_a,
         )
 
     # Crosshair target on the exact tapped point.

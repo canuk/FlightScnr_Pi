@@ -2747,6 +2747,11 @@ class RoundTouchDisplay:
             modal_active=self._radar_modal_active(),
             on_radar=self.screen == SCREEN_RADAR,
         ):
+            if radial_menu.is_open():
+                radial_menu.close()
+                radar.invalidate_frame_layer()
+                self._safe_draw()
+                return True
             self._begin_map_pan(from_long_press=True)
             return True
         return False
@@ -3709,7 +3714,12 @@ class RoundTouchDisplay:
         # Live ← Tracked ← Radar: swipe right moves leftward; swipe left returns.
         # On radar, swipe left also cycles favorite locations (Home → saved → Home).
         # Short flicks still pick aircraft / fires like a tap.
-        if swipe == input_handler.SWIPE_RIGHT and self.screen == SCREEN_RADAR:
+        if swipe and self.screen == SCREEN_RADAR and radial_menu.is_open():
+            radial_menu.close()
+            radar.invalidate_frame_layer()
+            self._note_activity()
+            self._safe_draw()
+        elif swipe == input_handler.SWIPE_RIGHT and self.screen == SCREEN_RADAR:
             if self._radar_swipe_committed(swipe_start, swipe_end):
                 self._open_screen(SCREEN_TRACKED)
                 self._scroll.reset()
@@ -3867,21 +3877,22 @@ class RoundTouchDisplay:
             if tap and self.pinch.should_suppress_tap():
                 tap = None
             if tap and not self._radar_modal_active():
-                # Arrange mode: consume taps on HUD items so they don't open flights.
-                if (
-                    settings.radar_hud_arrange()
-                    and settings.radar_hud_enabled()
-                    and radar_hud.handle_layout_drag_start(tap[0], tap[1]) is not None
-                ):
-                    radar_hud.handle_layout_drag_end(persist=False)
-                    self._note_activity()
-                    self._safe_draw()
-                elif radial_menu.is_open():
+                # Open radial menu is modal — it takes the tap before anything.
+                if radial_menu.is_open():
                     kind, idx = radial_menu.hit(tap[0], tap[1])
                     if kind == "select":
                         self._radial_menu_select(radial_menu.entries()[idx])
                     radial_menu.close()
                     radar.invalidate_frame_layer()
+                    self._note_activity()
+                    self._safe_draw()
+                # Arrange mode: consume taps on HUD items so they don't open flights.
+                elif (
+                    settings.radar_hud_arrange()
+                    and settings.radar_hud_enabled()
+                    and radar_hud.handle_layout_drag_start(tap[0], tap[1]) is not None
+                ):
+                    radar_hud.handle_layout_drag_end(persist=False)
                     self._note_activity()
                     self._safe_draw()
                 else:
@@ -4684,7 +4695,7 @@ class RoundTouchDisplay:
         # Several targets under the finger? Open the radial menu instead of
         # guessing (aircraft + airports only; a winning fire/quake was
         # handled above).
-        pick_r = max(theme.TAP_PICK_RADIUS, theme.s(36))
+        pick_r = theme.s(24)
         near_flights = radar.flights_near(self._radar_flights(), x, y, pick_r)
         near_airports = airport_overlay.airports_near(x, y, pick_r)
         if len(near_flights) + len(near_airports) >= 2:
