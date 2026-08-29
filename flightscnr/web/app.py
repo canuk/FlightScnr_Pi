@@ -865,6 +865,8 @@ def display_json():
     return jsonify(
         {
             "brightness_percent": settings.brightness_percent(),
+            "quiet_dim_enabled": settings.quiet_dim_enabled(),
+            "quiet_dim_percent": settings.quiet_dim_percent(),
             "flight_detail_timeout_s": settings.flight_detail_timeout_s(),
             "clock_timeout_s": settings.clock_timeout_s(),
             "auto_idle_clock": settings.auto_idle_clock_enabled(),
@@ -908,6 +910,13 @@ def display_save():
             return jsonify({"message": "brightness_percent must be a number"}), 400
     if "auto_idle_clock" in data:
         settings.set_auto_idle_clock_enabled(bool(data.get("auto_idle_clock")))
+    if "quiet_dim_enabled" in data:
+        settings.set_quiet_dim_enabled(bool(data.get("quiet_dim_enabled")))
+    if "quiet_dim_percent" in data:
+        try:
+            settings.set_quiet_dim_percent(int(data.get("quiet_dim_percent")))
+        except (TypeError, ValueError):
+            return jsonify({"message": "quiet_dim_percent must be a number"}), 400
     if "flight_detail_timeout_s" in data:
         settings.set_flight_detail_timeout_s(data.get("flight_detail_timeout_s"))
     if "clock_timeout_s" in data:
@@ -990,6 +999,8 @@ def display_save():
         {
             "ok": True,
             "brightness_percent": settings.brightness_percent(),
+            "quiet_dim_enabled": settings.quiet_dim_enabled(),
+            "quiet_dim_percent": settings.quiet_dim_percent(),
             "flight_detail_timeout_s": settings.flight_detail_timeout_s(),
             "clock_timeout_s": settings.clock_timeout_s(),
             "auto_idle_clock": settings.auto_idle_clock_enabled(),
