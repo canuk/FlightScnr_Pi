@@ -4139,6 +4139,19 @@ class RoundTouchDisplay:
                 self._return_to_radar()
                 self._safe_draw()
         elif tap and self.screen == SCREEN_TRACKED:
+            if tracked.stop_tracking_hit(tap[0], tap[1]):
+                from utilities.overhead import set_tracked_callsign
+
+                set_tracked_callsign("")
+                try:
+                    self.overhead.set_follow_pin_polling(False)
+                except Exception:
+                    pass
+                tracked.clear_pinned()
+                self._note_activity()
+                self._return_to_radar()
+                self._safe_draw()
+                return
             action = tracked.tap_footer_action(
                 tap[0], tap[1],
                 tracked.resolve_display_data(self.overhead.tracked_data, self.flights),
