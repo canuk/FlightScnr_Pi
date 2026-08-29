@@ -85,6 +85,15 @@ def open_menu(x: int, y: int, items: list[dict]) -> None:
     """Open at a tap point; the ring slides inward to stay on screen."""
     global _entries, _tap, _center, _opened_at, _closed_reported
     _entries = list(items[:MAX_ENTRIES])
+    for entry in _entries:
+        if entry.get("kind") == "airport" and "chart" not in entry:
+            try:
+                from display.round_touch.airport_overlay import chart_icon_flags
+
+                ident = str((entry.get("airport") or {}).get("ident") or "")
+                entry["chart"] = chart_icon_flags(ident)
+            except Exception:
+                entry["chart"] = (False, False, False)
     _tap = (int(x), int(y))
     cx, cy = float(x), float(y)
     dx = cx - theme.CENTER_X
@@ -164,16 +173,56 @@ def _blit_curved(
     bottom: bool,
     color,
     size: int,
+    lead: pygame.Surface | None = None,
 ) -> None:
     try:
         font = draw_mod.load_font(size, bold=True)
         items = [font.render(ch, True, color) for ch in text]
     except Exception:
         return
+    if lead is not None:
+        gap = pygame.Surface((theme.s(3), 1), pygame.SRCALPHA)
+        items = [lead, gap] + items
     arc_ui.blit_arc_items(
         surface, items, r=r, mid=mid, bottom=bottom,
         cx=_center[0], cy=_center[1],
     )
+
+
+def _plane_glyph(size: int) -> pygame.Surface:
+    """Small upright airplane silhouette."""
+    scale = 2
+    side = size * scale
+    surf = pygame.Surface((side, side), pygame.SRCALPHA)
+    c = side / 2
+    u = side / 26.0
+    pts = [
+        (c, c - 11 * u), (c + 2 * u, c - 1 * u), (c + 11 * u, c + 3 * u),
+        (c + 11 * u, c + 5 * u), (c + 2 * u, c + 3 * u), (c + 2 * u, c + 8 * u),
+        (c + 5 * u, c + 10 * u), (c + 5 * u, c + 11 * u), (c, c + 9.5 * u),
+        (c - 5 * u, c + 11 * u), (c - 5 * u, c + 10 * u), (c - 2 * u, c + 8 * u),
+        (c - 2 * u, c + 3 * u), (c - 11 * u, c + 5 * u), (c - 11 * u, c + 3 * u),
+        (c - 2 * u, c - 1 * u),
+    ]
+    pygame.draw.polygon(surf, (*_LABEL, 255), pts)
+    return pygame.transform.smoothscale(surf, (size, size))
+
+
+def _chart_glyph(size: int, chart) -> pygame.Surface:
+    """Sectional-style airport symbol for a wedge."""
+    surf = pygame.Surface((size, size), pygame.SRCALPHA)
+    try:
+        from display.round_touch import airport_overlay as ao
+
+        towered, fuel, beacon = chart or (False, False, False)
+        ao.draw_chart_icon(
+            surf, (size // 2, size // 2), max(3, int(size * 0.28)),
+            towered=towered, fuel=fuel, beacon=beacon,
+        )
+    except Exception:
+        pygame.draw.circle(surf, (*_LABEL, 255), (size // 2, size // 2),
+                           max(3, size // 3), 2)
+    return surf
 
 
 def draw(surface: pygame.Surface) -> pygame.Rect | None:
@@ -220,14 +269,19 @@ def draw(surface: pygame.Surface) -> pygame.Rect | None:
     _blit_curved(surface, brg_txt, r=text_r, mid=0.0, bottom=True,
                  color=_INK, size=max(8, theme.s(11)))
 
-    # Wedge labels, curved and upright.
+    # Wedge labels, curved, each led by its target-type glyph.
     label_r = wedge_r
+    icon_px = max(10, theme.s(14))
     for i, entry in enumerate(_entries):
         mid = start + (i + 0.5) * step
         label = str(entry.get("label") or "?")[:9]
+        if entry.get("kind") == "airport":
+            lead = _chart_glyph(icon_px, entry.get("chart"))
+        else:
+            lead = _plane_glyph(icon_px)
         _blit_curved(
             surface, label, r=label_r, mid=mid, bottom=math.sin(mid) > 0,
-            color=_LABEL, size=max(8, theme.s(11)),
+            color=_LABEL, size=max(8, theme.s(11)), lead=lead,
         )
 
     # Crosshair target on the exact tapped point.
