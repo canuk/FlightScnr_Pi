@@ -209,6 +209,7 @@ class RoundTouchDisplay:
         # Already-rotated content+bezel (no ring) for fast display blit.
         self._timeout_rot_base: pygame.Surface | None = None
         self._prev_timeout_ring_frac: float | None = None
+        self._last_slider_draw = 0.0
         self._display_focus = 0
         self._system_confirm: str | None = None
         # Settings list picker kind (ATC + other multi-option rows), or None.
@@ -4944,7 +4945,17 @@ class RoundTouchDisplay:
                     or self._update_atc_volume_slider_drag()
                     or self._update_radar_hud_volume_drag()
                 ):
-                    self._safe_draw()
+                    # Settings pages repaint in full — throttle mid-drag
+                    # redraws so the loop keeps sampling the finger instead
+                    # of choking on layout. The release frame always draws.
+                    now_drag = time.time()
+                    if (
+                        now_drag - self._last_slider_draw >= 0.05
+                        or not self.input.is_dragging()
+                    ):
+                        self._safe_draw()
+                        self._last_slider_draw = now_drag
+                        self._last_static_draw = now_drag
                     self._last_radar_draw = time.time()
 
                 now = time.time()
