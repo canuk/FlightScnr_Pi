@@ -919,27 +919,13 @@ def _draw_time_picker(surface, kind: str) -> int:
         ("close", "Cancel", bottom_mid + half + gap / 2, False),
         ("time_set", "Set", bottom_mid - half - gap / 2, True),
     ):
-        if accent:
-            # Outlined accent pill: SWEEP band under a slightly thinner fill.
-            radar_hud._draw_curved_white_pill(
-                surface, theme.CENTER_X, theme.CENTER_Y, arc_r, mid,
-                band + theme.s(4), (*theme.SWEEP, 255),
-                arc_a0=mid - half, arc_a1=mid + half,
-            )
-            radar_hud._draw_curved_white_pill(
-                surface, theme.CENTER_X, theme.CENTER_Y, arc_r, mid,
-                band, (12, 52, 22, 255),
-                arc_a0=mid - half + theme.s(2) / max(1, arc_r),
-                arc_a1=mid + half - theme.s(2) / max(1, arc_r),
-            )
-            color = theme.LABEL
-        else:
-            radar_hud._draw_curved_white_pill(
-                surface, theme.CENTER_X, theme.CENTER_Y, arc_r, mid,
-                band, frost_rgba,
-                arc_a0=mid - half, arc_a1=mid + half,
-            )
-            color = glyph_color
+        fill = (14, 58, 24, 240) if accent else frost_rgba
+        radar_hud._draw_curved_white_pill(
+            surface, theme.CENTER_X, theme.CENTER_Y, arc_r, mid,
+            band, fill,
+            arc_a0=mid - half, arc_a1=mid + half,
+        )
+        color = theme.SWEEP if accent else glyph_color
         items = [pill_font.render(ch, True, color) for ch in label]
         arc_ui.blit_arc_items(
             surface, items,
