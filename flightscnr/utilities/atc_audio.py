@@ -1186,10 +1186,16 @@ def _effective_atc_ui_volume(ui_percent: float | int | None = None) -> float:
 
 
 def set_volume(percent: int, *, persist: bool = True) -> int:
-    """Clamp, optionally persist, and apply volume to a running mpv (if any)."""
+    """Clamp, optionally persist, and apply volume to a running mpv (if any).
+
+    ``persist=False`` marks a mid-drag update: only the cheap mpv softvol
+    IPC runs. The OS-mixer subprocesses (wpctl/pactl/amixer, seconds of
+    UI-thread stall) run on the final persisting call alone.
+    """
     value = _settings().set_atc_volume(percent, persist=persist)
-    # Keep OS mixer at full while ATC is in use; softvol handles finer gain.
-    _ensure_system_output_volume(1.0)
+    if persist:
+        # Keep OS mixer at full while ATC is in use; softvol handles gain.
+        _ensure_system_output_volume(1.0)
     _send_ipc(
         ["set_property", "volume", _mpv_softvol(_effective_atc_ui_volume(value))]
     )
