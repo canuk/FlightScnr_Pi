@@ -200,6 +200,8 @@ ATC_QUIET_ACTIONS = (
     "quiet",
     "quiet_start",
     "quiet_end",
+    "quiet_dim",
+    "quiet_dim_level",
 )
 # Power / service controls (portal System section equivalent).
 SYSTEM_ACTIONS = (
@@ -1478,6 +1480,7 @@ def display_row_at(x: int, y: int, page: int, scroll_offset: int = 0) -> int | N
             "volume",
             "status",
             "hud_opacity",
+            "quiet_dim_level",
         ) or actions[i] in _HUD_VOLUME_ACTIONS:
             continue
         ry = row_y + i * row_h
@@ -2014,6 +2017,89 @@ def lofi_volume_slider_value_at(x: int, scroll_offset: int = 0) -> int | None:
     return max(0, min(100, int(round(t * 100))))
 
 
+def quiet_dim_row_index() -> int:
+    try:
+        return ATC_QUIET_ACTIONS.index("quiet_dim_level")
+    except ValueError:
+        return -1
+
+
+def _quiet_dim_slider_metrics() -> tuple[int, int, int, int]:
+    body_font = _display_font()
+    label_w = body_font.size("Dim")[0]
+    value_w = body_font.size("100%")[0]
+    return theme.s(120), _row_pitch(), label_w, value_w
+
+
+def _quiet_dim_slider_geometry(scroll_offset: int = 0) -> tuple[pygame.Rect, int, int] | None:
+    idx = quiet_dim_row_index()
+    if idx < 0:
+        return None
+    row_y, row_h, _ = _display_layout(PAGE_ATC_QUIET, scroll_offset)
+    _, slider_h, label_w, value_w = _quiet_dim_slider_metrics()
+    gap = theme.s(8)
+    ry = row_y + idx * row_h
+    inner = _card_inner_row(ry)
+    track_w = inner.width - label_w - value_w - 2 * gap
+    track_x = inner.left + label_w + gap
+    hit_pad = theme.s(8)
+    hit = pygame.Rect(
+        track_x - hit_pad,
+        int(ry - theme.s(2)),
+        track_w + 2 * hit_pad,
+        max(row_h, slider_h) + theme.s(4),
+    )
+    return hit, track_x, track_w
+
+
+def quiet_dim_slider_at(x: int, y: int, scroll_offset: int = 0) -> bool:
+    geom = _quiet_dim_slider_geometry(scroll_offset)
+    if geom is None or not _in_settings_body(y):
+        return False
+    return geom[0].collidepoint(x, y)
+
+
+def quiet_dim_slider_drag_band(x: int, y: int, scroll_offset: int = 0) -> bool:
+    geom = _quiet_dim_slider_geometry(scroll_offset)
+    if geom is None:
+        return False
+    return slider_drag_band_contains(geom[0], y)
+
+
+def quiet_dim_slider_value_at(x: int, scroll_offset: int = 0) -> int | None:
+    geom = _quiet_dim_slider_geometry(scroll_offset)
+    if geom is None:
+        return None
+    _, track_x, track_w = geom
+    t = (x - track_x) / max(1, track_w)
+    return max(0, min(100, int(round(t * 100))))
+
+
+def _draw_quiet_dim_slider_row(surface, ry: int, focused: bool) -> None:
+    body_font = _display_font()
+    _, slider_h, label_w, value_w = _quiet_dim_slider_metrics()
+    gap = theme.s(8)
+    pct = settings.quiet_dim_percent()
+    enabled = settings.quiet_dim_enabled()
+    inner = _card_inner_row(ry)
+    left_x = inner.left
+    track_w = inner.width - label_w - value_w - 2 * gap
+    track_x = left_x + label_w + gap
+    text_h = body_font.get_height()
+    row_h = _row_pitch() - theme.s(5)
+    _draw_card(surface, ry, focused=focused)
+    label = body_font.render(
+        "Dim", True, theme.LABEL if enabled else theme.HINT
+    )
+    surface.blit(label, (left_x, int(ry + (row_h - text_h) // 2)))
+    track_cy = int(ry + row_h // 2)
+    draw.draw_slider(surface, track_x, track_cy, track_w, pct, enabled=enabled)
+    value = body_font.render(
+        f"{pct}%", True, theme.MUTED if enabled else theme.HINT
+    )
+    surface.blit(value, (track_x + track_w + gap, int(ry + (row_h - text_h) // 2)))
+
+
 def display_action_at(page: int, row: int) -> str | None:
     actions = _row_actions(page)
     if 0 <= row < len(actions):
@@ -2123,6 +2209,8 @@ def _atc_quiet_row_labels() -> list[str]:
         "Quiet hours",
         f"Quiet start › {settings.atc_quiet_start_label()}",
         f"Quiet end › {settings.atc_quiet_end_label()}",
+        "Dim During Quiet Hours",
+        "",  # quiet dim level slider
     ]
 
 
@@ -2294,6 +2382,7 @@ _TOGGLE_ROW_STATE = {
     "lofi_controls": settings.lofi_controls_enabled,
     "lofi_title_scroll": settings.lofi_title_scroll,
     "quiet": settings.atc_quiet_hours_enabled,
+    "quiet_dim": settings.quiet_dim_enabled,
 }
 
 
@@ -2327,6 +2416,7 @@ def _draw_settings_rows(
     draw_hud_opacity_slider: bool = False,
     draw_chime_volume_slider: bool = False,
     draw_vfr_opacity_slider: bool = False,
+    draw_quiet_dim_slider: bool = False,
     draw_atc_volume_slider: bool = False,
 ) -> int:
     body_font = _display_font()
@@ -2352,6 +2442,7 @@ def _draw_settings_rows(
     vfr_idx = vfr_opacity_row_index() if draw_vfr_opacity_slider else -1
     volume_idx = atc_volume_row_index() if draw_atc_volume_slider else -1
     lofi_vol_row_idx = lofi_volume_row_index() if draw_atc_volume_slider else -1
+    quiet_dim_idx = quiet_dim_row_index() if draw_quiet_dim_slider else -1
     # Clip to the body band so scrolled rows never bleed over the footer buttons.
     clip_prev = surface.get_clip()
     surface.set_clip(pygame.Rect(0, int(top), surface.get_width(), max(0, int(bottom - top))))
@@ -2394,6 +2485,9 @@ def _draw_settings_rows(
                 continue
             if draw_atc_volume_slider and i == lofi_vol_row_idx:
                 _draw_lofi_volume_slider_row(surface, int(ry), display_focus == i)
+                continue
+            if draw_quiet_dim_slider and i == quiet_dim_idx:
+                _draw_quiet_dim_slider_row(surface, int(ry), display_focus == i)
                 continue
             state = _TOGGLE_ROW_STATE.get(actions[i]) if i < len(actions) else None
             if state is not None:
@@ -2798,6 +2892,7 @@ def draw_info(
             top,
             bottom,
             actions=ATC_QUIET_ACTIONS,
+            draw_quiet_dim_slider=True,
         )
 
     elif page == PAGE_COLORS:
