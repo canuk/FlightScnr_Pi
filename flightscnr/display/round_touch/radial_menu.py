@@ -48,11 +48,11 @@ _last_rect: pygame.Rect | None = None
 
 
 def _r_hole() -> int:
-    return theme.s(22)
+    return theme.s(21)
 
 
 def _r_mid() -> int:
-    return theme.s(42)
+    return theme.s(34)
 
 
 def _r_out() -> int:
@@ -298,13 +298,15 @@ def draw(surface: pygame.Surface) -> pygame.Rect | None:
     units = settings.distance_units()
     dist_txt = (f"{dist:.1f}" if dist < 100 else f"{dist:.0f}") + units.upper()
     brg_txt = f"{brg:03.0f}°"
-    text_r = band_r + theme.s(1)
+    text_r = band_r
     readout_a = int(255 * _p(0.13, 0.10))
     if readout_a > 0:
-        _blit_curved(surface, dist_txt, r=text_r, mid=math.pi, bottom=False,
-                     color=_INK, size=max(8, theme.s(11)), alpha=readout_a)
-        _blit_curved(surface, brg_txt, r=text_r, mid=0.0, bottom=True,
-                     color=_INK, size=max(8, theme.s(11)), alpha=readout_a)
+        _blit_curved(surface, dist_txt, r=text_r, mid=-math.pi / 2,
+                     bottom=False, color=_INK, size=max(7, theme.s(9)),
+                     alpha=readout_a)
+        _blit_curved(surface, brg_txt, r=text_r, mid=math.pi / 2,
+                     bottom=True, color=_INK, size=max(7, theme.s(9)),
+                     alpha=readout_a)
 
     # Wedge labels, curved, each led by its target-type glyph. Text and
     # icon shrink until every label fits inside its wedge's arc.
