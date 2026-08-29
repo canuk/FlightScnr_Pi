@@ -504,6 +504,13 @@
         <div class="body">
             <label for="bright_pct">Screen brightness <span id="bright_pct_label">100%</span></label>
             <input id="bright_pct" type="range" min="3" max="100" step="1" value="100">
+            <div class="chk">
+                <label for="quiet_dim_enabled">Dim during quiet hours</label>
+                <span class="switch"><input id="quiet_dim_enabled" type="checkbox"><span class="track"></span></span>
+            </div>
+            <label for="quiet_dim_pct">Quiet-hours dim level <span id="quiet_dim_pct_label">20%</span></label>
+            <input id="quiet_dim_pct" type="range" min="0" max="100" step="1" value="20" oninput="document.getElementById('quiet_dim_pct_label').textContent = this.value + '%'">
+            <p class="hint">Caps the screen at this brightness while ATC quiet hours are active. Same as Settings &rarr; Quiet on the device, where the slider previews the dimness live.</p>
             <label for="display_rotation">Screen rotation</label>
             <select id="display_rotation">
                 <option value="0">0°</option>
@@ -1402,6 +1409,11 @@ async function loadAll() {
         const d = await jsonFetch("/display/json");
         $("bright_pct").value = String(d.brightness_percent || 100);
         syncBrightLabel();
+        if ($("quiet_dim_enabled")) $("quiet_dim_enabled").checked = !!d.quiet_dim_enabled;
+        if ($("quiet_dim_pct")) {
+            $("quiet_dim_pct").value = String(d.quiet_dim_percent ?? 20);
+            document.getElementById("quiet_dim_pct_label").textContent = ($("quiet_dim_pct").value) + "%";
+        }
         if ($("display_rotation")) {
             const rot = [0, 90, 180, 270].includes(Number(d.display_rotation))
                 ? String(d.display_rotation)
@@ -2052,6 +2064,8 @@ async function saveAndReloadSettings(statusId) {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
                 brightness_percent: Number($("bright_pct").value),
+                quiet_dim_enabled: $("quiet_dim_enabled") ? $("quiet_dim_enabled").checked : false,
+                quiet_dim_percent: $("quiet_dim_pct") ? Number($("quiet_dim_pct").value) : 20,
                 display_rotation: Number($("display_rotation") ? $("display_rotation").value : 90),
                 flight_detail_timeout_s: Number($("detail_timeout").value),
                 clock_timeout_s: Number($("clock_timeout").value),

@@ -1414,10 +1414,13 @@ def quiet_dim_percent() -> int:
 
 def set_quiet_dim_percent(value: int, *, persist: bool = True):
     global _disk_synced
-    _state["quiet_dim_percent"] = max(0, min(100, int(value)))
+    pct = max(0, min(100, int(value)))
     if persist:
-        _save(_state)
+        # Preserve-listed key: a plain _save(_state) would re-read the old
+        # disk value over the new one (the snap-back-to-default bug).
+        _rmw_save({"quiet_dim_percent": pct})
     else:
+        _state["quiet_dim_percent"] = pct
         _disk_synced = False
 
 

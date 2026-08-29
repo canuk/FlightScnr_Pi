@@ -45,6 +45,21 @@ class TestQuietDimSettings:
         assert settings.quiet_dim_percent() == 0
         settings.set_quiet_dim_percent(20, persist=False)
 
+    def test_release_persists_through_full_save(self):
+        """Snap-back regression: quiet_dim_percent is preserve-listed, so a
+        plain _save(_state) used to pull the stale disk value back over a
+        just-released slider value."""
+        import json
+
+        settings.set_quiet_dim_percent(20, persist=True)   # seed disk
+        settings.set_quiet_dim_percent(55, persist=False)  # drag frames
+        settings.set_quiet_dim_percent(55, persist=True)   # finger up
+        settings._save(settings._state)                    # any later full save
+        assert settings.quiet_dim_percent() == 55
+        with open(settings.SETTINGS_PATH, encoding="utf-8") as fh:
+            assert json.load(fh)["quiet_dim_percent"] == 55
+        settings.set_quiet_dim_percent(20, persist=True)
+
     def test_enable_round_trip(self):
         settings.set_quiet_dim_enabled(True)
         assert settings.quiet_dim_enabled() is True
