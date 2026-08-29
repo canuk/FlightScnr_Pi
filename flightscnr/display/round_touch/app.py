@@ -251,6 +251,8 @@ class RoundTouchDisplay:
         self._aircraft_photo_inflight: set[str] = set()
         self._aircraft_photo_miss: set[str] = set()
         self._aircraft_photo_redraw = False
+        # Set by the async ATC power worker once mpv transport settles.
+        self._atc_power_redraw = False
         self._vessel_photos: dict[str, dict] = {}
         self._vessel_photo_inflight: set[str] = set()
         self._vessel_photo_miss: set[str] = set()
@@ -1802,10 +1804,7 @@ class RoundTouchDisplay:
             # Switch and slider are hit-tested directly on the row.
             return
         elif action == "enabled":
-            from utilities import atc_audio
-
-            atc_audio.toggle_power()
-            info.invalidate_atc_labels()
+            self._async_atc_power(not settings.atc_enabled())
         elif action == "volume":
             return
         elif action == "lofi":
@@ -2570,6 +2569,30 @@ class RoundTouchDisplay:
         self.input.consume_scroll_drag()
         return changed
 
+    def _async_atc_power(self, enabled: bool) -> None:
+        """Flip the ATC switch instantly; run the slow mpv work off-thread.
+
+        toggle_power() on the UI thread blocked for seconds (feed fetch,
+        mixer subprocesses, mpv spawn, transport lock) — the switch felt
+        dead. The persisted enable flips first so the row repaints at
+        once, then a worker does the transport and requests a redraw.
+        """
+        from utilities import atc_audio
+
+        target = bool(enabled)
+        settings.set_atc_enabled(target)
+        info.invalidate_atc_labels()
+
+        def _worker() -> None:
+            try:
+                atc_audio.apply_enabled(target)
+            except Exception:
+                logger.exception("ATC power apply failed")
+            info.invalidate_atc_labels()
+            self._atc_power_redraw = True
+
+        Thread(target=_worker, daemon=True, name="atc-power").start()
+
     def _execute_atc_action(self, action: str) -> None:
         """Legacy Play/Stop actions — both map to the single ATC power switch."""
         from utilities import atc_audio
@@ -2583,10 +2606,7 @@ class RoundTouchDisplay:
 
     def _toggle_radar_hud_atc(self) -> None:
         """HUD ATC long-press: same enable/disable as Settings → ATC Audio."""
-        from utilities import atc_audio
-
-        atc_audio.toggle_power()
-        info.invalidate_atc_labels()
+        self._async_atc_power(not settings.atc_enabled())
         radar.invalidate_frame_layer()
 
     def _begin_facing_calibrate(self):
@@ -3498,6 +3518,19 @@ class RoundTouchDisplay:
                 if pos and (
                     info.atc_volume_slider_at(pos[0], pos[1], self._scroll.offset)
                     or info.lofi_volume_slider_at(pos[0], pos[1], self._scroll.offset)
+                ):
+                    self.input.consume_scroll_drag()
+                    return
+        if self.screen == SCREEN_SETTINGS and self.settings_page == info.PAGE_ATC_QUIET:
+            # Without this guard the page scrolled under a dim-slider drag,
+            # so the slider felt like it took several tries to grab.
+            if self._quiet_dim_slider_active:
+                self.input.consume_scroll_drag()
+                return
+            if self.input.is_dragging():
+                pos = self.input.drag_pos()
+                if pos and info.quiet_dim_slider_at(
+                    pos[0], pos[1], self._scroll.offset
                 ):
                     self.input.consume_scroll_drag()
                     return
@@ -5389,6 +5422,10 @@ class RoundTouchDisplay:
                 ):
                     self._aircraft_photo_redraw = False
                     self._safe_draw()
+                if self._atc_power_redraw:
+                    self._atc_power_redraw = False
+                    if self.screen == SCREEN_SETTINGS:
+                        self._safe_draw()
 
                 if self._live_map_redraw and self.screen == SCREEN_LIVE:
                     self._live_map_redraw = False
