@@ -2091,6 +2091,21 @@ class RoundTouchDisplay:
             return
         self._apply_favourite_center(float(entry["lat"]), float(entry["lon"]))
 
+    def _slider_drag_armed(self) -> bool:
+        """Any slider currently owning the finger? Others must not arm —
+        a sweep that wanders through another slider's hit band mid-drag
+        used to let that slider steal the gesture (focus jumped rows)."""
+        return bool(
+            self._brightness_slider_active
+            or self._vfr_opacity_slider_active
+            or self._atc_volume_slider_active
+            or self._lofi_volume_slider_active
+            or self._hud_opacity_slider_active
+            or self._hud_volume_slider_kind
+            or self._radar_hud_volume_drag
+            or self._rgb_slider_channel is not None
+        )
+
     def _apply_atc_volume_slider(self, x: int, *, persist: bool = True) -> bool:
         from utilities import atc_audio
 
@@ -2253,6 +2268,8 @@ class RoundTouchDisplay:
             return False
         x, y = pos
         if not self._hud_opacity_slider_active:
+            if self._slider_drag_armed():
+                return False
             if not info.hud_opacity_slider_at(x, y, self._scroll.offset):
                 return False
             self._hud_opacity_slider_active = True
@@ -2329,6 +2346,8 @@ class RoundTouchDisplay:
             return False
         x, y = pos
         if self._hud_volume_slider_kind is None:
+            if self._slider_drag_armed():
+                return False
             hit = info.hud_volume_slider_at(x, y, self._scroll.offset)
             if not hit:
                 return False
@@ -2377,6 +2396,8 @@ class RoundTouchDisplay:
             return False
         x, y = pos
         if not self._lofi_volume_slider_active:
+            if self._slider_drag_armed():
+                return False
             if not info.lofi_volume_slider_at(x, y, self._scroll.offset):
                 return False
             self._lofi_volume_slider_active = True
@@ -2407,6 +2428,8 @@ class RoundTouchDisplay:
             return False
         x, y = pos
         if not self._atc_volume_slider_active:
+            if self._slider_drag_armed():
+                return False
             if not info.atc_volume_slider_at(x, y, self._scroll.offset):
                 return False
             self._atc_volume_slider_active = True
@@ -3412,6 +3435,8 @@ class RoundTouchDisplay:
             return False
         x, y = pos
         if not self._brightness_slider_active:
+            if self._slider_drag_armed():
+                return False
             if not info.brightness_slider_at(x, y, self._scroll.offset):
                 return False
             self._brightness_slider_active = True
@@ -3452,6 +3477,8 @@ class RoundTouchDisplay:
             return False
         x, y = pos
         if not self._vfr_opacity_slider_active:
+            if self._slider_drag_armed():
+                return False
             if not info.vfr_opacity_slider_at(x, y, self._scroll.offset):
                 return False
             self._vfr_opacity_slider_active = True
@@ -3574,6 +3601,7 @@ class RoundTouchDisplay:
                 x, y, self._scroll.offset
             ):
                 self._apply_atc_volume_slider(x, persist=True)
+                return
             elif self.settings_page == info.PAGE_ATC and info.lofi_volume_slider_at(
                 x, y, self._scroll.offset
             ):

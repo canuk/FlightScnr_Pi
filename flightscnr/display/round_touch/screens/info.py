@@ -1670,7 +1670,9 @@ def _atc_volume_slider_metrics() -> tuple[int, int, int, int]:
     label_w = body_font.size("Volume")[0]
     value_w = body_font.size(f"{settings.ATC_VOLUME_MAX}%")[0]
     track_w = theme.s(100)
-    row_h = body_font.get_height() + theme.s(8)
+    # Match the settings-row pitch exactly — a taller slider row made the
+    # ATC page look unevenly spaced.
+    row_h = body_font.get_height() + theme.s(6)
     return track_w, row_h, label_w, value_w
 
 
@@ -1908,7 +1910,7 @@ def _draw_lofi_volume_slider_row(surface, ry: int, focused: bool) -> None:
         pad = theme.s(4)
         focus = pygame.Rect(left_x - pad, ry - pad, block_w + pad * 2, row_h + pad)
         pygame.draw.rect(surface, theme.GRID, focus, max(1, theme.s(1)))
-    label = body_font.render("Lofi vol", True, theme.MUTED)
+    label = body_font.render("Lofi Vol", True, theme.MUTED)
     surface.blit(label, (left_x, int(ry + (row_h - text_h) // 2)))
     track_cy = int(ry + row_h // 2)
     track_rect = pygame.Rect(track_x, track_cy - max(2, theme.s(2)), track_w, max(4, theme.s(4)))
