@@ -1223,9 +1223,8 @@ def _display_font():
     return draw.load_font(theme.s(14))
 
 def _rows_top() -> int:
-    """First settings row starts 2/5 down the screen — clear of the
-    breadcrumb's tap arc, and the list breathes like a watch app."""
-    return max(nav.content_top_y(has_dots=True), int(theme.SIZE * 2 / 5))
+    """First settings row starts at the normal content top."""
+    return nav.content_top_y(has_dots=True)
 
 
 def _row_pitch() -> int:
@@ -1357,9 +1356,9 @@ def display_row_at(x: int, y: int, page: int, scroll_offset: int = 0) -> int | N
     if not _settings_row_page(page):
         return None
     row_y, row_h, count = _display_layout(page, scroll_offset)
-    body_font = _display_font()
     top = nav.content_top_y(has_dots=True)
     bottom = nav.content_bottom_y()
+    card_h = row_h - theme.s(5)
     actions = _row_actions(page)
     for i in range(count):
         if actions[i] in (
@@ -1371,16 +1370,11 @@ def display_row_at(x: int, y: int, page: int, scroll_offset: int = 0) -> int | N
         ) or actions[i] in _HUD_VOLUME_ACTIONS:
             continue
         ry = row_y + i * row_h
-        if ry + body_font.get_height() < top or ry > bottom:
+        if ry + card_h < top or ry > bottom:
             continue
-        half = draw.circle_half_width_at_row(int(ry), body_font.get_height())
-        rect = pygame.Rect(
-            theme.CENTER_X - half,
-            ry - theme.s(2),
-            half * 2,
-            body_font.get_height() + theme.s(4),
-        )
-        if rect.collidepoint(x, y):
+        # The whole visible pill is the tap target — same rect the row
+        # is drawn with, so taps land wherever the finger sees a card.
+        if _card_rect(int(ry), card_h).collidepoint(x, y):
             return i
     return None
 
