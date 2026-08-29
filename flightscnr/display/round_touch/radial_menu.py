@@ -195,7 +195,7 @@ def _blit_curved(
 
 def _plane_glyph(size: int, flight: dict | None = None) -> pygame.Surface:
     """The radar's own type icon (heli / jet / GA / ship), upright."""
-    side = max(theme.s(30), size * 2)
+    side = theme.s(24)
     surf = pygame.Surface((side, side), pygame.SRCALPHA)
     try:
         from display.round_touch import aircraft
@@ -218,7 +218,7 @@ def _chart_glyph(size: int, chart) -> pygame.Surface:
 
         towered, fuel, beacon = chart or (False, False, False)
         ao.draw_chart_icon(
-            surf, (size // 2, size // 2), max(3, int(size * 0.28)),
+            surf, (size // 2, size // 2), max(4, int(size * 0.30)),
             towered=towered, fuel=fuel, beacon=beacon,
         )
     except Exception:
@@ -323,7 +323,7 @@ def draw(surface: pygame.Surface) -> pygame.Rect | None:
         mid = start + (i + 0.5) * step
         label = str(entry.get("label") or "?")[:9]
         size = base_size
-        icon_px = max(9, theme.s(14))
+        icon_px = theme.s(19)
         while size > 7:
             try:
                 font = draw_mod.load_font(size, bold=True)
@@ -335,7 +335,6 @@ def draw(surface: pygame.Surface) -> pygame.Rect | None:
             if arc_ui.arc_span(widths, label_r) <= wedge_span:
                 break
             size -= 1
-            icon_px = max(9, icon_px - 1)
         if entry.get("kind") == "airport":
             lead = _chart_glyph(icon_px, entry.get("chart"))
         else:
