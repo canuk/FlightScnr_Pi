@@ -585,8 +585,11 @@ def _draw_grid(surface, *, calibrate: bool = False):
     line_w = max(1, theme.s(2))
     facing = settings.effective_facing_deg()
     if settings.show_range_rings():
-        for ring in range(1, theme.RING_COUNT + 1):
-            r = theme.GRID_OUTER_RADIUS * ring // theme.RING_COUNT
+        # Rings sit at round distances (scale.ring_values), not exact thirds.
+        ring_vals = scale.ring_values(scale.active_index())
+        outer_val = float(ring_vals[-1])
+        for d in ring_vals:
+            r = int(round(theme.GRID_OUTER_RADIUS * float(d) / outer_val))
             draw.draw_dashed_circle(surface, center, r, theme.GRID, width=line_w)
 
         cx, cy = theme.CENTER_X, theme.CENTER_Y
@@ -632,12 +635,13 @@ def _draw_grid(surface, *, calibrate: bool = False):
 
     use_units = settings.distance_units()
     scale_font = draw.load_font(theme.FONT_SCALE_LABEL, bold=True)
-    outer_km = scale.active_band()["label_km"]
-    for ring in range(1, theme.RING_COUNT + 1):
-        ring_km = outer_km * ring / theme.RING_COUNT
-        label = scale.format_scale_tag(ring_km, use_units)
-        r = theme.GRID_OUTER_RADIUS * ring // theme.RING_COUNT
-        gap = theme.SCALE_GAP_OUTER_RING_KM if ring == theme.RING_COUNT and use_units == "km" else theme.SCALE_GAP_FROM_OUTER_RING
+    ring_vals = scale.ring_values(scale.active_index(), use_units)
+    outer_val = float(ring_vals[-1])
+    for i, ring_d in enumerate(ring_vals):
+        is_outer = i == len(ring_vals) - 1
+        label = f"{ring_d:g}{use_units}"
+        r = int(round(theme.GRID_OUTER_RADIUS * float(ring_d) / outer_val))
+        gap = theme.SCALE_GAP_OUTER_RING_KM if is_outer and use_units == "km" else theme.SCALE_GAP_FROM_OUTER_RING
         label_r = r - gap
         rad = math.radians(theme.SCALE_LABEL_BEARING_DEG - facing - 90)
         x = theme.CENTER_X + int(label_r * math.cos(rad))
