@@ -3430,6 +3430,18 @@ class RoundTouchDisplay:
         settings.set_custom_theme_rgb(*rgb, persist=persist)
         return True
 
+    def _apply_theme_swatch(self, group: str, rgb: tuple) -> None:
+        """Crayon-box tap: set the whole color for one group at once."""
+        r, g, b = rgb
+        if group == info.RGB_GROUP_RUNWAY:
+            settings.set_runway_darkmap_rgb(r, g, b, persist=True)
+        elif group == info.RGB_GROUP_RUNWAY_LIGHT:
+            settings.set_runway_light_rgb(r, g, b, persist=True)
+        else:
+            settings.set_custom_theme_rgb(r, g, b, persist=True)
+        self._note_activity()
+        self._safe_draw()
+
     def _apply_brightness_slider(self, x: int, *, persist: bool = True) -> bool:
         value = info.brightness_slider_value_at(x, self._scroll.offset)
         if value is None:
@@ -3688,6 +3700,16 @@ class RoundTouchDisplay:
             if row is not None:
                 self._apply_display_row(self.settings_page, row)
         elif self.settings_page == info.PAGE_COLORS and x is not None and y is not None:
+            sw = info.theme_swatch_at(x, y, self._scroll.offset)
+            if sw is not None:
+                self._apply_theme_swatch(*sw)
+                return
+            exp = info.theme_expander_at(x, y, self._scroll.offset)
+            if exp is not None:
+                info.theme_toggle_expanded(exp)
+                self._note_activity()
+                self._safe_draw()
+                return
             hit = info.theme_slider_at(x, y, self._scroll.offset)
             if hit is not None:
                 group, channel = hit

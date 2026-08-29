@@ -1098,29 +1098,133 @@ _RGB_GROUP_TITLES = {
 }
 
 
-def _theme_content_height() -> int:
+# Crayon-box palette: tap a swatch to set the whole color at once.
+# Sliders stay available behind the Custom RGB expander per group.
+THEME_SWATCHES: tuple[tuple[int, int, int], ...] = (
+    (0, 255, 0), (80, 255, 112), (0, 200, 120), (0, 220, 200), (0, 255, 255),
+    (80, 180, 255), (40, 110, 255), (150, 120, 255), (200, 80, 255), (255, 0, 255),
+    (255, 120, 190), (255, 64, 64), (255, 100, 0), (255, 150, 0), (255, 200, 0),
+    (255, 255, 64), (255, 255, 255), (180, 180, 180), (110, 110, 110), (35, 55, 95),
+)
+_SWATCH_COLS = 5
+
+# Groups whose RGB sliders are expanded (session-local).
+_theme_expanded: set = set()
+
+
+def theme_group_expanded(group: str) -> bool:
+    return group in _theme_expanded
+
+
+def theme_toggle_expanded(group: str) -> None:
+    if group in _theme_expanded:
+        _theme_expanded.discard(group)
+    else:
+        _theme_expanded.add(group)
+
+
+def _swatch_cell() -> int:
+    return theme.s(40)
+
+
+def _swatch_grid_rows() -> int:
+    return (len(THEME_SWATCHES) + _SWATCH_COLS - 1) // _SWATCH_COLS
+
+
+def _swatch_grid_h() -> int:
+    return _swatch_grid_rows() * _swatch_cell()
+
+
+def _theme_expander_h() -> int:
+    return _display_font().get_height() + theme.s(12)
+
+
+def _theme_group_h(group: str) -> int:
     _, slider_h, _, _ = _theme_slider_metrics()
-    top_pad, section_gap, heading_h = _theme_section_gaps()
+    _, _, heading_h = _theme_section_gaps()
+    h = heading_h + _swatch_grid_h() + _theme_expander_h()
+    if theme_group_expanded(group):
+        h += 3 * slider_h
+    return h
+
+
+def _theme_content_height() -> int:
+    top_pad, section_gap, _ = _theme_section_gaps()
     n = len(_RGB_GROUP_ORDER)
     return (
         top_pad
-        + n * heading_h
-        + n * 3 * slider_h
+        + sum(_theme_group_h(g) for g in _RGB_GROUP_ORDER)
         + max(0, n - 1) * section_gap
         + theme.s(4)
     )
 
 
-def _rgb_group_slider_y0(group: str, scroll_offset: int = 0) -> int:
+def _rgb_group_y0(group: str, scroll_offset: int = 0) -> int:
+    """Top y of a group's section (its heading row)."""
     top = nav.content_top_y(has_dots=True)
-    _, slider_h, _, _ = _theme_slider_metrics()
-    top_pad, section_gap, heading_h = _theme_section_gaps()
+    top_pad, section_gap, _ = _theme_section_gaps()
     y = top + top_pad - scroll_offset
     for name in _RGB_GROUP_ORDER:
         if name == group:
-            return y + heading_h
-        y += heading_h + 3 * slider_h + section_gap
+            return y
+        y += _theme_group_h(name) + section_gap
     return y
+
+
+def _rgb_group_slider_y0(group: str, scroll_offset: int = 0) -> int:
+    _, _, heading_h = _theme_section_gaps()
+    return (
+        _rgb_group_y0(group, scroll_offset)
+        + heading_h
+        + _swatch_grid_h()
+        + _theme_expander_h()
+    )
+
+
+def _swatch_grid_origin(group: str, scroll_offset: int = 0) -> tuple[int, int]:
+    _, _, heading_h = _theme_section_gaps()
+    cell = _swatch_cell()
+    x0 = theme.CENTER_X - (_SWATCH_COLS * cell) // 2
+    y0 = _rgb_group_y0(group, scroll_offset) + heading_h
+    return x0, y0
+
+
+def theme_swatch_at(
+    x: int, y: int, scroll_offset: int = 0
+) -> tuple[str, tuple[int, int, int]] | None:
+    """Return (group, rgb) when (x, y) lands on a crayon swatch."""
+    if not _in_settings_body(y):
+        return None
+    cell = _swatch_cell()
+    for group in _RGB_GROUP_ORDER:
+        x0, y0 = _swatch_grid_origin(group, scroll_offset)
+        grid = pygame.Rect(x0, y0, _SWATCH_COLS * cell, _swatch_grid_h())
+        if not grid.collidepoint(x, y):
+            continue
+        col = min(_SWATCH_COLS - 1, (x - x0) // cell)
+        row = min(_swatch_grid_rows() - 1, (y - y0) // cell)
+        idx = row * _SWATCH_COLS + col
+        if 0 <= idx < len(THEME_SWATCHES):
+            return group, THEME_SWATCHES[idx]
+        return None
+    return None
+
+
+def theme_expander_at(x: int, y: int, scroll_offset: int = 0) -> str | None:
+    """Return the group whose Custom RGB expander row was tapped."""
+    if not _in_settings_body(y):
+        return None
+    for group in _RGB_GROUP_ORDER:
+        _, y0 = _swatch_grid_origin(group, scroll_offset)
+        row = pygame.Rect(
+            theme.CENTER_X - theme.s(120),
+            y0 + _swatch_grid_h(),
+            theme.s(240),
+            _theme_expander_h(),
+        )
+        if row.collidepoint(x, y):
+            return group
+    return None
 
 
 def _theme_slider_geometry(
@@ -1152,6 +1256,8 @@ def _theme_slider_geometry(
 def theme_slider_at(x: int, y: int, scroll_offset: int = 0) -> tuple[str, int] | None:
     """Return (group, channel) if (x,y) hits an RGB slider, else None."""
     for group in _RGB_GROUP_ORDER:
+        if not theme_group_expanded(group):
+            continue
         for i, (hit, _, _) in enumerate(_theme_slider_geometry(scroll_offset, group=group)):
             if hit.collidepoint(x, y):
                 return group, i
@@ -2666,6 +2772,7 @@ def draw_info(
         for group in _RGB_GROUP_ORDER:
             rgb = group_rgbs[group]
             title = _RGB_GROUP_TITLES[group]
+            expanded = theme_group_expanded(group)
             if section_y + heading_h >= top and section_y <= bottom:
                 heading = body_font.render(title, True, theme.LABEL)
                 # Prefer centered title; if too wide, left-align within content.
@@ -2694,35 +2801,84 @@ def draw_info(
                     pygame.draw.rect(surface, rgb, preview)
                     pygame.draw.rect(surface, theme.GRID, preview, max(1, theme.s(1)))
 
-            slider_y0 = section_y + heading_h
-            for i, (ch, col) in enumerate(zip(channel_labels, channel_colors)):
-                ry = slider_y0 + i * slider_h
-                if ry + slider_h < top or ry > bottom:
+            # Crayon-box grid: tap a swatch to set this group's color.
+            cell = _swatch_cell()
+            gx0 = theme.CENTER_X - (_SWATCH_COLS * cell) // 2
+            gy0 = section_y + heading_h
+            dot_r = cell // 2 - theme.s(5)
+            for idx, swatch in enumerate(THEME_SWATCHES):
+                cxs = gx0 + (idx % _SWATCH_COLS) * cell + cell // 2
+                cys = gy0 + (idx // _SWATCH_COLS) * cell + cell // 2
+                if cys + dot_r < top or cys - dot_r > bottom:
                     continue
-                label = body_font.render(ch, True, theme.MUTED)
-                surface.blit(
-                    label,
-                    (left_x, int(ry + (slider_h - text_h) // 2)),
-                )
-                track_cy = int(ry + slider_h // 2)
-                draw.draw_slider(
-                    surface,
-                    track_x,
-                    track_cy,
-                    track_w,
-                    rgb[i] / 255.0 * 100.0,
-                    fill_color=col,
-                )
-                value = body_font.render(str(rgb[i]), True, theme.MUTED)
-                surface.blit(
-                    value,
-                    (
-                        track_x + track_w + slider_gap,
-                        int(ry + (slider_h - text_h) // 2),
-                    ),
-                )
+                pygame.draw.circle(surface, swatch, (cxs, cys), dot_r)
+                if tuple(swatch) == tuple(rgb):
+                    # Selected crayon: white ring with a breathing gap.
+                    pygame.draw.circle(
+                        surface, (255, 255, 255), (cxs, cys),
+                        dot_r + theme.s(4), max(1, theme.s(2)),
+                    )
+                else:
+                    pygame.draw.circle(
+                        surface, theme.GRID, (cxs, cys), dot_r, 1
+                    )
 
-            section_y = slider_y0 + 3 * slider_h + section_gap
+            # Custom RGB expander row.
+            exp_y = gy0 + _swatch_grid_h()
+            exp_h = _theme_expander_h()
+            if exp_y + exp_h >= top and exp_y <= bottom:
+                exp_label = body_font.render("Custom RGB", True, theme.MUTED)
+                lx = theme.CENTER_X - exp_label.get_width() // 2
+                ly = int(exp_y + (exp_h - text_h) // 2)
+                surface.blit(exp_label, (lx, ly))
+                # Chevron triangle: right when collapsed, down when expanded.
+                tri_cx = lx + exp_label.get_width() + theme.s(14)
+                tri_cy = ly + text_h // 2
+                tr = theme.s(5)
+                if expanded:
+                    pts = [
+                        (tri_cx - tr, tri_cy - tr // 2),
+                        (tri_cx + tr, tri_cy - tr // 2),
+                        (tri_cx, tri_cy + tr),
+                    ]
+                else:
+                    pts = [
+                        (tri_cx - tr // 2, tri_cy - tr),
+                        (tri_cx - tr // 2, tri_cy + tr),
+                        (tri_cx + tr, tri_cy),
+                    ]
+                pygame.draw.polygon(surface, theme.MUTED, pts)
+
+            slider_y0 = exp_y + exp_h
+            if expanded:
+                for i, (ch, col) in enumerate(zip(channel_labels, channel_colors)):
+                    ry = slider_y0 + i * slider_h
+                    if ry + slider_h < top or ry > bottom:
+                        continue
+                    label = body_font.render(ch, True, theme.MUTED)
+                    surface.blit(
+                        label,
+                        (left_x, int(ry + (slider_h - text_h) // 2)),
+                    )
+                    track_cy = int(ry + slider_h // 2)
+                    draw.draw_slider(
+                        surface,
+                        track_x,
+                        track_cy,
+                        track_w,
+                        rgb[i] / 255.0 * 100.0,
+                        fill_color=col,
+                    )
+                    value = body_font.render(str(rgb[i]), True, theme.MUTED)
+                    surface.blit(
+                        value,
+                        (
+                            track_x + track_w + slider_gap,
+                            int(ry + (slider_h - text_h) // 2),
+                        ),
+                    )
+
+            section_y = section_y + _theme_group_h(group) + section_gap
 
     elif page == PAGE_SYSTEM:
         max_scroll = _draw_system_page(surface, top, bottom)
