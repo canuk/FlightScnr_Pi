@@ -799,7 +799,8 @@ def draw_atc_picker(
     )
     _atc_picker_list_rect = list_rect.copy()
 
-    row_h = body_font.get_height() + theme.s(10)
+    row_h = body_font.get_height() + theme.s(16)
+    row_pitch = row_h + theme.s(6)
     if not items:
         if kind == "airport":
             empty_text = "None in radar range"
@@ -815,7 +816,7 @@ def draw_atc_picker(
         surface.blit(empty, empty.get_rect(center=list_rect.center))
         return 0
 
-    total_h = len(items) * row_h
+    total_h = len(items) * row_pitch - theme.s(6)
     max_scroll = max(0, total_h - list_rect.height)
     scroll = max(0, min(int(scroll_offset), max_scroll))
 
@@ -823,29 +824,28 @@ def draw_atc_picker(
     clip_prev = surface.get_clip()
     surface.set_clip(list_rect)
     y = list_rect.top - scroll
+    radius = row_h // 2
     for item in items:
         item_id = str(item.get("id") or "")
         label = str(item.get("label") or item_id)
         selected = bool(item.get("selected")) or (bool(pressed) and item_id == pressed)
         row_rect = pygame.Rect(list_rect.left, int(y), list_rect.width, row_h)
         if row_rect.bottom >= list_rect.top and row_rect.top <= list_rect.bottom:
-            if selected:
-                pygame.draw.rect(
-                    surface,
-                    (12, 52, 22),
-                    row_rect.inflate(-theme.s(2), -theme.s(2)),
-                    border_radius=theme.s(6),
-                )
-                pygame.draw.rect(
-                    surface,
-                    theme.SWEEP,
-                    row_rect.inflate(-theme.s(2), -theme.s(2)),
-                    max(1, theme.s(1)),
-                    border_radius=theme.s(6),
-                )
+            # Same pill chrome as the settings cards.
+            fill = _CARD_FILL_FOCUS if selected else _CARD_FILL
+            border = theme.SWEEP if selected else _CARD_BORDER
+            pygame.draw.rect(surface, fill, row_rect, border_radius=radius)
+            pygame.draw.rect(
+                surface,
+                border,
+                row_rect,
+                max(1, theme.s(2)) if selected else 1,
+                border_radius=radius,
+            )
             text_color = theme.LABEL if selected else theme.MUTED
+            text_x = row_rect.left + radius // 2 + theme.s(8)
+            max_text_w = row_rect.right - radius // 2 - theme.s(8) - text_x
             rendered = body_font.render(label, True, text_color)
-            max_text_w = list_rect.width - theme.s(16)
             if rendered.get_width() > max_text_w:
                 trimmed = label
                 while trimmed and body_font.size(trimmed + "…")[0] > max_text_w:
@@ -853,13 +853,18 @@ def draw_atc_picker(
                 rendered = body_font.render(trimmed + "…", True, text_color)
             surface.blit(
                 rendered,
-                rendered.get_rect(
-                    midleft=(list_rect.left + theme.s(8), row_rect.centery)
-                ),
+                rendered.get_rect(midleft=(text_x, row_rect.centery)),
             )
             _atc_picker_hits.append(("item", item_id, row_rect.copy()))
-        y += row_h
+        y += row_pitch
     surface.set_clip(clip_prev)
+    _blit_edge_fades(
+        surface,
+        list_rect.top,
+        list_rect.bottom,
+        show_top=scroll > 0,
+        show_bottom=scroll < max_scroll,
+    )
 
     if max_scroll > 0:
         # Same thin right-edge scrollbar as Display / Layers settings pages.
@@ -2299,15 +2304,28 @@ def _draw_settings_rows(
             continue
     finally:
         surface.set_clip(clip_prev)
-    _blit_edge_fades(surface, int(top), int(bottom))
+    _blit_edge_fades(
+        surface,
+        int(top),
+        int(bottom),
+        show_top=scroll_offset > 0,
+        show_bottom=scroll_offset < max_scroll,
+    )
     return max_scroll
 
 
 _edge_fade_cache: dict = {}
 
 
-def _blit_edge_fades(surface, top: int, bottom: int) -> None:
-    """Fade scrolled rows out under the header and above the footer."""
+def _blit_edge_fades(
+    surface, top: int, bottom: int,
+    *, show_top: bool = True, show_bottom: bool = True,
+) -> None:
+    """Fade scrolled rows out under the header and above the footer.
+
+    Each edge fades only while content continues past it — at rest the
+    first card sits crisp under the header instead of half-dissolved.
+    """
     h = theme.s(26)
     key = (int(top), int(bottom), h)
     strips = _edge_fade_cache.get(key)
@@ -2335,8 +2353,10 @@ def _blit_edge_fades(surface, top: int, bottom: int) -> None:
         _edge_fade_cache.clear()
         _edge_fade_cache[key] = strips
     if strips[0] is not None:
-        surface.blit(strips[0], (0, top))
-        surface.blit(strips[1], (0, bottom - h))
+        if show_top:
+            surface.blit(strips[0], (0, top))
+        if show_bottom:
+            surface.blit(strips[1], (0, bottom - h))
 
 
 def _draw_scroll_overflow_cues(
@@ -2495,8 +2515,6 @@ def draw_info(
             pressed_id=atc_picker_pressed_id,
         )
     draw.fill_background_textured(surface)
-    nav.draw_curved_breadcrumb(surface, _breadcrumb(page))
-    nav.draw_curved_page_dots(surface, page, len(nav.SETTINGS_PAGES))
 
     body_font = _display_font()
     top = nav.content_top_y(has_dots=True)
@@ -2705,6 +2723,10 @@ def draw_info(
 
     if max_scroll > 0 and page != PAGE_MAIN:
         _draw_scroll_overflow_cues(surface, top, bottom, scroll_offset, max_scroll)
+    # Chrome paints last so scrolled rows and the edge fades never cover
+    # the breadcrumb's curved side text.
+    nav.draw_curved_breadcrumb(surface, _breadcrumb(page))
+    nav.draw_curved_page_dots(surface, page, len(nav.SETTINGS_PAGES))
     nav.draw_curved_footer(surface, list(footer_kinds_for_page(page)))
     if page == PAGE_SYSTEM and system_confirm:
         draw_system_confirm_popup(surface, system_confirm)
