@@ -76,6 +76,54 @@ def clear_pinned() -> None:
     set_pinned(False)
 
 
+# "Stop Tracking" pill — same styling as the Follow pill on flight detail.
+_stop_btn_rect: pygame.Rect | None = None
+
+
+def stop_tracking_hit(x: int, y: int) -> bool:
+    """True when a tap lands on the Stop Tracking pill drawn last frame."""
+    if _stop_btn_rect is None:
+        return False
+    return _stop_btn_rect.collidepoint(int(x), int(y))
+
+
+def _stop_row_height() -> int:
+    """Vertical space the Stop Tracking row needs (pill + gaps)."""
+    try:
+        font_h = draw.load_font(theme.s(13), bold=True).get_height()
+    except Exception:
+        font_h = theme.s(18)
+    return font_h + 2 * theme.s(7) + 2 * theme.s(6)
+
+
+def _draw_stop_row(surface, y: int, *, bottom: int) -> int:
+    """Stop Tracking pill as the last content row (Follow-pill styling)."""
+    global _stop_btn_rect
+    _stop_btn_rect = None
+    try:
+        font = draw.load_font(theme.s(13), bold=True)
+        label = font.render("Stop Tracking", True, theme.MUTED)
+    except Exception:
+        return y
+    pad_x, pad_y = theme.s(16), theme.s(7)
+    gap = theme.s(6)
+    y += gap
+    rect = pygame.Rect(
+        0, 0, label.get_width() + 2 * pad_x, label.get_height() + 2 * pad_y
+    )
+    rect.midtop = (theme.CENTER_X, int(y))
+    if rect.bottom > bottom:
+        # Ran out of column: anchor the pill to the content bottom instead.
+        rect.midbottom = (theme.CENTER_X, int(bottom))
+    pygame.draw.rect(surface, (24, 27, 31), rect, border_radius=rect.height // 2)
+    pygame.draw.rect(
+        surface, theme.GRID, rect, width=1, border_radius=rect.height // 2
+    )
+    surface.blit(label, label.get_rect(center=rect.center))
+    _stop_btn_rect = pygame.Rect(rect).inflate(theme.s(8), theme.s(8))
+    return rect.bottom + gap
+
+
 # Auto-clear notice after Follow/Tracked loses the flight (OK dismisses).
 _tracking_cleared_ok_rect = None
 _tracking_cleared_panel_rect = None
@@ -776,6 +824,167 @@ def _nearest_city_label(data) -> str:
     return ""
 
 
+def _position_of(data) -> tuple[float | None, float | None]:
+    """Best current (lat, lon) fix from a tracked-data dict, else (None, None)."""
+    if not data:
+        return None, None
+    lat = data.get("plane_latitude")
+    if lat is None:
+        lat = data.get("latitude")
+    lon = data.get("plane_longitude")
+    if lon is None:
+        lon = data.get("longitude")
+    try:
+        lat_f = float(lat)
+        lon_f = float(lon)
+    except (TypeError, ValueError):
+        return None, None
+    if lat_f == 0 and lon_f == 0:
+        return None, None
+    if not (-90.0 <= lat_f <= 90.0 and -180.0 <= lon_f <= 180.0):
+        return None, None
+    return lat_f, lon_f
+
+
+def _has_destination(data) -> bool:
+    """True when the flight has a known destination (name or coordinates)."""
+    if not data:
+        return False
+    if (data.get("destination") or "").strip():
+        return True
+    try:
+        d_lat = float(data.get("dest_lat"))
+        d_lon = float(data.get("dest_lon"))
+    except (TypeError, ValueError):
+        return False
+    if d_lat == 0 and d_lon == 0:
+        return False
+    return -90.0 <= d_lat <= 90.0 and -180.0 <= d_lon <= 180.0
+
+
+def _local_stats_mode(data) -> bool:
+    """No destination but a live position — show the local-area stat panel."""
+    if not data or data.get("is_scheduled"):
+        return False
+    if _has_destination(data) or route_map.route_coords_available(data):
+        return False
+    return _position_of(data)[0] is not None
+
+
+def _no_dest_route_text(data) -> str:
+    """Route line when only the origin is known, e.g. ``From SAN · destination unknown``."""
+    origin = (data.get("origin") or "").strip()
+    if not origin:
+        return ""
+    from utilities.route_labels import route_endpoint_labels
+
+    label = route_endpoint_labels(origin, "")[0]
+    if label in ("", "—"):
+        return ""
+    return f"From {label} · destination unknown"
+
+
+def _local_stats_cells(data) -> list[tuple[str, str]]:
+    """(label, value) pairs for the local-area panel; ``—`` for unknowns."""
+    alt = aircraft.format_altitude(data.get("altitude"))
+    speed = common.format_speed(data.get("ground_speed")) or "—"
+
+    hdg = "—"
+    heading = data.get("heading")
+    try:
+        if heading is not None and int(heading) > 0:
+            from utilities.overhead import degrees_to_cardinal
+
+            hdg = f"{int(heading)}° {degrees_to_cardinal(int(heading))}"
+    except (TypeError, ValueError):
+        pass
+
+    home = "—"
+    lat, lon = _position_of(data)
+    if lat is not None and lon is not None:
+        try:
+            from utilities.overhead import (
+                LOCATION_DEFAULT,
+                degrees_to_cardinal,
+                haversine,
+            )
+
+            h_lat, h_lon = LOCATION_DEFAULT[0], LOCATION_DEFAULT[1]
+            if h_lat or h_lon:
+                dist = _format_dist_remaining(haversine(h_lat, h_lon, lat, lon))
+                lat1, lon1 = math.radians(h_lat), math.radians(h_lon)
+                lat2, lon2 = math.radians(lat), math.radians(lon)
+                b = math.atan2(
+                    math.sin(lon2 - lon1) * math.cos(lat2),
+                    math.cos(lat1) * math.sin(lat2)
+                    - math.sin(lat1) * math.cos(lat2) * math.cos(lon2 - lon1),
+                )
+                bearing = (math.degrees(b) + 360) % 360
+                if dist:
+                    home = f"{dist} {degrees_to_cardinal(bearing)}"
+        except Exception:
+            home = "—"
+
+    return [
+        ("ALTITUDE", alt),
+        ("SPEED", speed),
+        ("HEADING", hdg),
+        ("FROM HOME", home),
+    ]
+
+
+def _draw_local_stats_panel(surface, data, y: int, *, max_h: int) -> int:
+    """2×2 stat panel in the band the route map would occupy.
+
+    No-destination tracking has no arc to draw — instead of an empty
+    zero-progress bar, frame the current position: altitude, speed,
+    heading, and distance/bearing from home.
+    """
+    label_font = draw.load_font(theme.s(10), bold=True)
+    value_font = draw.load_font(theme.s(16), bold=True)
+    cells = _local_stats_cells(data)
+
+    pad = theme.s(10)
+    row_gap = theme.s(8)
+    cell_h = label_font.get_height() + theme.s(2) + value_font.get_height()
+    rows = 2
+    panel_h = pad * 2 + cell_h * rows + row_gap * (rows - 1)
+    if panel_h > max_h:
+        rows = 1
+        cells = [cells[0], cells[3]]  # altitude + from-home are the essentials
+        panel_h = pad * 2 + cell_h
+        if panel_h > max_h:
+            return y + theme.s(4)
+
+    half = draw.circle_half_width_at_row(int(y) + panel_h // 2, panel_h)
+    panel_w = max(theme.s(170), half * 2 - theme.s(12))
+    panel = pygame.Rect(0, 0, panel_w, panel_h)
+    panel.midtop = (theme.CENTER_X, int(y))
+    pygame.draw.rect(surface, (18, 20, 24), panel, border_radius=theme.s(10))
+    pygame.draw.rect(surface, theme.GRID, panel, width=1, border_radius=theme.s(10))
+
+    col_centers = (panel.left + panel_w // 4, panel.left + (panel_w * 3) // 4)
+    max_cell_w = panel_w // 2 - theme.s(12)
+    for i, (label_text, value_text) in enumerate(cells):
+        cx = col_centers[i % 2]
+        cy = panel.top + pad + (i // 2) * (cell_h + row_gap)
+        label = label_font.render(
+            draw.fit_text(label_text, label_font, max_cell_w), True, theme.HINT
+        )
+        surface.blit(label, label.get_rect(midtop=(cx, cy)))
+        value = value_font.render(
+            draw.fit_text(value_text, value_font, max_cell_w), True, theme.LABEL
+        )
+        surface.blit(
+            value,
+            value.get_rect(
+                midtop=(cx, cy + label_font.get_height() + theme.s(2))
+            ),
+        )
+
+    return panel.bottom + theme.s(4)
+
+
 def _status_label(data) -> str:
     if data.get("is_scheduled"):
         return "SCHEDULED"
@@ -793,7 +1002,7 @@ def _eta_line(data) -> str | None:
     return f"Estimated Time Remaining: {time_remaining}"
 
 
-def _ticker_parts(data) -> list[str]:
+def _ticker_parts(data, *, include_telemetry: bool = True) -> list[str]:
     parts: list[str] = []
     dist_str = _format_dist_remaining(data.get("dist_remaining"))
     if dist_str:
@@ -801,7 +1010,8 @@ def _ticker_parts(data) -> list[str]:
     landmark = _nearest_city_label(data)
     if landmark:
         parts.append(landmark)
-    parts.extend(_telemetry_parts(data))
+    if include_telemetry:
+        parts.extend(_telemetry_parts(data))
     return parts
 
 
@@ -855,8 +1065,14 @@ def _scheduled_rows(data) -> list[tuple[str, tuple[int, int, int]]]:
 
 def _build_stats_rows(
     data,
+    *,
+    include_telemetry: bool = True,
 ) -> list[tuple[str, tuple[int, int, int], bool, bool]]:
-    """Status, ETA line, then scrolling distance/telemetry ticker."""
+    """Status, ETA line, then scrolling distance/telemetry ticker.
+
+    ``include_telemetry=False`` drops alt/speed/heading from the ticker —
+    used when the local-area stat panel already shows those values.
+    """
     if data.get("is_scheduled"):
         return [(text, color, False, False) for text, color in _scheduled_rows(data)]
 
@@ -873,9 +1089,10 @@ def _build_stats_rows(
     if eta:
         rows.append((eta, theme.MUTED, False, False))
 
-    parts = _ticker_parts(data)
+    parts = _ticker_parts(data, include_telemetry=include_telemetry)
     if parts:
-        rows.append(("  ·  ".join(parts), theme.LABEL, True, False))
+        # A short landmark-only line (panel mode) should sit still, not marquee.
+        rows.append(("  ·  ".join(parts), theme.LABEL, include_telemetry, False))
     return rows
 
 
@@ -1085,6 +1302,32 @@ def _draw_two_column_header(
 
     y = y + pair_h + theme.s(4)
 
+    # No destination: say what is known instead of drawing "Route unknown"
+    # (or a broken ??? > ??? arc line).
+    if not _has_destination(data):
+        text = _no_dest_route_text(data)
+        if not text:
+            return y + theme.s(2)
+        h = body_font.get_height()
+        max_w = draw.circle_half_width_at_row(y, h) * 2
+        left, _, right = text.partition(" · ")
+        left_img = body_font.render(left, True, theme.ROUTE)
+        sep_img = body_font.render(" · ", True, theme.MUTED)
+        right_img = body_font.render(right, True, theme.HINT)
+        total_w = left_img.get_width() + sep_img.get_width() + right_img.get_width()
+        if right and total_w <= max_w:
+            x = theme.CENTER_X - total_w // 2
+            surface.blit(left_img, (x, y))
+            x += left_img.get_width()
+            surface.blit(sep_img, (x, y))
+            x += sep_img.get_width()
+            surface.blit(right_img, (x, y))
+            return y + h + theme.s(4)
+        line = draw.fit_text(text, body_font, max_w)
+        img = body_font.render(line, True, theme.MUTED)
+        surface.blit(img, img.get_rect(midtop=(theme.CENTER_X, y)))
+        return y + h + theme.s(4)
+
     # Full-width route — avoids truncating long city names in the narrow column.
     origin = data.get("origin", "???")
     destination = data.get("destination", "???")
@@ -1189,6 +1432,12 @@ def _draw_path_section(surface, data, y: int, *, content_bottom: int, stats_h: i
     if data.get("is_scheduled") and not route_map.route_coords_available(data):
         return y + theme.s(4)
 
+    # No destination at all: an arc / progress bar toward nowhere is
+    # meaningless — frame the local position stats in the map band instead.
+    if _local_stats_mode(data):
+        max_h = content_bottom - y - stats_h - theme.s(4)
+        return _draw_local_stats_panel(surface, data, y, max_h=max_h)
+
     if route_map.route_coords_available(data):
         # Prefer the map whenever coords exist — shrink rather than fall back
         # to the linear bar (photo + map is the intended Track layout).
@@ -1203,6 +1452,10 @@ def _draw_path_section(surface, data, y: int, *, content_bottom: int, stats_h: i
         return _draw_progress_bar(surface, data, y)
 
     if data.get("is_scheduled"):
+        return y + theme.s(4)
+    if not _has_destination(data):
+        # No destination and no position fix — a zero-progress bar toward
+        # nowhere reads as broken; leave the band empty.
         return y + theme.s(4)
     return _draw_progress_bar(surface, data, y)
 
@@ -1260,8 +1513,9 @@ def draw_tracked(
     callsign: str | None = None,
     scroll_offset: int = 0,
 ) -> int:
-    global _marquee_active_keys
+    global _marquee_active_keys, _stop_btn_rect
     _marquee_active_keys = set()
+    _stop_btn_rect = None
     del scroll_offset  # tracked page does not scroll vertically
 
     draw.fill_background(surface)
@@ -1294,14 +1548,19 @@ def draw_tracked(
         _finish_marquee_frame()
         return 0
 
+    stop_h = _stop_row_height()
+
     if not tracked_data:
-        _draw_pending(surface, raw_callsign, top, content_bottom)
+        _draw_pending(surface, raw_callsign, top, content_bottom - stop_h)
+        _draw_stop_row(surface, content_bottom - stop_h, bottom=content_bottom)
         nav.draw_footer_buttons(surface, footer, **footer_kw)
         _finish_marquee_frame()
         return 0
 
     # Stats under the map: drop LIVE from the ticker block when shown in header.
-    stats_rows = _build_stats_rows(tracked_data)
+    # In local (no-destination) mode the panel already shows the telemetry.
+    local_mode = _local_stats_mode(tracked_data)
+    stats_rows = _build_stats_rows(tracked_data, include_telemetry=not local_mode)
     header_has_live = _status_label(tracked_data) == "LIVE"
     if header_has_live and stats_rows and stats_rows[0][0] == "LIVE":
         stats_rows = stats_rows[1:]
@@ -1320,17 +1579,18 @@ def draw_tracked(
         tracked_data,
         y,
         content_bottom=content_bottom,
-        stats_h=stats_h,
+        stats_h=stats_h + stop_h,
     )
     if stats_rows:
-        _draw_stats_rows_at(
+        y = _draw_stats_rows_at(
             surface,
             stats_rows,
             y,
             detail_font,
             clip_top=top,
-            clip_bottom=content_bottom,
+            clip_bottom=content_bottom - stop_h,
         )
+    _draw_stop_row(surface, y, bottom=content_bottom)
     nav.draw_footer_buttons(surface, footer, **footer_kw)
     _finish_marquee_frame()
     return 0
