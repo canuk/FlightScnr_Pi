@@ -1183,6 +1183,12 @@ def _display_font():
     """Match flight-detail body size so more Display rows fit the round screen."""
     return draw.load_font(theme.s(14))
 
+def _rows_top() -> int:
+    """First settings row starts 2/5 down the screen — clear of the
+    breadcrumb's tap arc, and the list breathes like a watch app."""
+    return max(nav.content_top_y(has_dots=True), int(theme.SIZE * 2 / 5))
+
+
 def _row_pitch() -> int:
     """One row pitch for every settings page — layout, hits, and drawing."""
     return _display_font().get_height() + theme.s(35)
@@ -1201,8 +1207,8 @@ _CARD_MAX_W = None  # filled lazily from theme
 def _card_rect(ry: int, card_h: int) -> pygame.Rect:
     mid_y = ry + card_h // 2
     half = draw.circle_half_width_at_row(int(mid_y - card_h // 2), card_h)
-    w = max(theme.s(120), 2 * half - theme.s(26))
-    w = min(w, theme.s(330))
+    w = max(theme.s(120), 2 * half - theme.s(52))
+    w = min(w, theme.s(300))
     return pygame.Rect(theme.CENTER_X - w // 2, int(ry), w, int(card_h))
 
 
@@ -1281,7 +1287,7 @@ def _row_actions(page: int) -> tuple[str, ...]:
 
 
 def _display_layout(page: int, scroll_offset: int = 0) -> tuple[int, int, int]:
-    top = nav.content_top_y(has_dots=True)
+    top = _rows_top()
     body_font = _display_font()
     row_y = top + theme.s(4) - scroll_offset
     row_h = _row_pitch()
@@ -2201,6 +2207,7 @@ def _draw_settings_rows(
     draw_atc_volume_slider: bool = False,
 ) -> int:
     body_font = _display_font()
+    top = max(int(top), _rows_top())
     row_y = top + theme.s(4) - scroll_offset
     row_h = _row_pitch()
     # Slider rows draw slightly taller than the text pitch and add focus padding;
