@@ -415,6 +415,23 @@ class TestScrollStandsDownForSliders:
         assert "info.lofi_volume_slider_at(pos[0], pos[1], self._scroll.offset)" in src
 
 
+class TestAtcLabelFreeze:
+    def test_hold_serves_stale_labels_without_status_calls(self, monkeypatch):
+        import time as _t
+
+        from display.round_touch.screens import info
+        from utilities import atc_audio
+
+        calls = []
+        monkeypatch.setattr(atc_audio, "status", lambda: calls.append(1) or {})
+        info._atc_rows_cache = (_t.monotonic() - 60.0, ("stale", "rows"))
+        info.hold_atc_labels(5.0)
+        assert info._atc_row_labels() == ["stale", "rows"]
+        assert not calls  # no bluetoothctl / IPC rebuild during the hold
+        info._atc_rows_hold_until = 0.0
+        info._atc_rows_cache = None
+
+
 class TestSliderDragTolerance:
     def test_armed_drags_capture_the_finger_anywhere(self):
         import pygame

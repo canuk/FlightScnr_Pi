@@ -4953,6 +4953,10 @@ class RoundTouchDisplay:
                     # of choking on layout. The release frame always draws.
                     now_drag = time.time()
                     self._note_activity()
+                    if self.screen == SCREEN_SETTINGS:
+                        # ATC labels shell out to bluetoothctl / mpv IPC on
+                        # rebuild — freeze them while the finger drags.
+                        info.hold_atc_labels()
                     if (
                         now_drag - self._last_slider_draw >= 0.05
                         or not self.input.is_dragging()

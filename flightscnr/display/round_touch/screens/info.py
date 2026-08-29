@@ -173,6 +173,16 @@ SYSTEM_ACTIONS = (
 # Cache labels briefly so the perimeter countdown stays smooth like other pages.
 _ATC_LABEL_TTL_S = 0.4
 _atc_rows_cache: tuple[float, tuple[str, ...]] | None = None
+# While a slider drag is live, serve stale labels no matter their age —
+# the rebuild shells out to bluetoothctl and polls mpv IPC, which blocks
+# the UI thread for hundreds of ms and wrecks the drag.
+_atc_rows_hold_until = 0.0
+
+
+def hold_atc_labels(seconds: float = 1.0) -> None:
+    """Freeze ATC row labels briefly (called each frame during drags)."""
+    global _atc_rows_hold_until
+    _atc_rows_hold_until = time.monotonic() + seconds
 _atc_picker_cache: dict[str, tuple[float, tuple[tuple[str, str, bool], ...]]] = {}
 
 
@@ -1845,7 +1855,7 @@ def _atc_row_labels() -> list[str]:
     now = time.monotonic()
     if _atc_rows_cache is not None:
         ts, rows = _atc_rows_cache
-        if now - ts < _ATC_LABEL_TTL_S:
+        if now - ts < _ATC_LABEL_TTL_S or now < _atc_rows_hold_until:
             return list(rows)
 
     st: dict | None = None
