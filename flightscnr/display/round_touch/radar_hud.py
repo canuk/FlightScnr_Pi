@@ -1364,7 +1364,7 @@ def volume_slider_drag_band(x: int, y: int) -> bool:
     """True while a sticky HUD volume drag should keep mapping screen X."""
     if not _volume_popover or _slider_track.width <= 0:
         return False
-    pad_y = theme.s(28)
+    pad_y = theme.s(64)  # forgive arced thumbs on the round glass
     return (_slider_track.top - pad_y) <= y <= (_slider_track.bottom + pad_y)
 
 

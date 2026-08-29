@@ -1260,7 +1260,9 @@ def slider_drag_band_contains(
     the value (ATC volume / brightness sticky-X bug).
     """
     if pad_y is None:
-        pad_y = theme.s(28)
+        # Generous: a thumb sweeping a slider on the round glass arcs well
+        # off the row. Only a far wander (another region entirely) cancels.
+        pad_y = theme.s(64)
     return (hit.top - pad_y) <= y <= (hit.bottom + pad_y)
 
 
