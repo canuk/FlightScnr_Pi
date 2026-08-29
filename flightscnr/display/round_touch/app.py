@@ -51,6 +51,7 @@ from display.round_touch import (
     touch_debug,
     follow_zoom,
     lofi_controls,
+    radial_menu,
     video,
     wildfire_overlay,
     earthquake_overlay,
@@ -3875,6 +3876,14 @@ class RoundTouchDisplay:
                     radar_hud.handle_layout_drag_end(persist=False)
                     self._note_activity()
                     self._safe_draw()
+                elif radial_menu.is_open():
+                    kind, idx = radial_menu.hit(tap[0], tap[1])
+                    if kind == "select":
+                        self._radial_menu_select(radial_menu.entries()[idx])
+                    radial_menu.close()
+                    radar.invalidate_frame_layer()
+                    self._note_activity()
+                    self._safe_draw()
                 else:
                     bubble_action = update_bubble.handle_tap(tap[0], tap[1])
                     if bubble_action == "dismiss":
@@ -4672,6 +4681,37 @@ class RoundTouchDisplay:
             if airport is None or quake_d2 is None or airport_d2 is None or quake_d2 <= airport_d2:
                 airport_overlay.clear_callout()
                 return self._open_picked_quake(quake)
+        # Several targets under the finger? Open the radial menu instead of
+        # guessing (aircraft + airports only; a winning fire/quake was
+        # handled above).
+        pick_r = max(theme.TAP_PICK_RADIUS, theme.s(36))
+        near_flights = radar.flights_near(self._radar_flights(), x, y, pick_r)
+        near_airports = airport_overlay.airports_near(x, y, pick_r)
+        if len(near_flights) + len(near_airports) >= 2:
+            from utilities.airline_branding import display_flight_id_for_flight
+
+            cands = [
+                (d2, {
+                    "kind": "flight",
+                    "label": display_flight_id_for_flight(f)
+                    or (f.get("callsign") or "?"),
+                    "flight": f,
+                })
+                for f, d2 in near_flights
+            ] + [
+                (d2, {
+                    "kind": "airport",
+                    "label": str(a.get("ident") or "?"),
+                    "airport": a,
+                })
+                for a, d2 in near_airports
+            ]
+            cands.sort(key=lambda item: item[0])
+            airport_overlay.clear_callout()
+            radial_menu.open_menu(x, y, [c[1] for c in cands])
+            radar.invalidate_frame_layer()
+            self._note_activity()
+            return True
         # Prefer aircraft over airports when distances are close.
         flight_bias = theme.s(12) ** 2
         if flight is not None and (
@@ -4698,6 +4738,23 @@ class RoundTouchDisplay:
             self._note_activity()
             return True
         return False
+
+    def _radial_menu_select(self, entry: dict) -> None:
+        """Open the target picked from the radial menu."""
+        if entry.get("kind") == "flight" and entry.get("flight") is not None:
+            self._open_picked_flight(entry["flight"])
+            return
+        airport = entry.get("airport")
+        if airport is None:
+            return
+        try:
+            from display.round_touch import airport_tile
+
+            airport_tile.open_tile(airport)
+        except ImportError:
+            # METAR tile not merged here — fall back to the callout toast.
+            airport_overlay.show_callout(airport)
+        radar.invalidate_frame_layer()
 
     def _tick_ais(self):
         if self._radar_modal_active():
@@ -5242,6 +5299,9 @@ class RoundTouchDisplay:
                     from display.round_touch import airport_tile
 
                     if airport_tile.tick():
+                        radar.invalidate_frame_layer()
+                        self._safe_draw()
+                    if radial_menu.tick():
                         radar.invalidate_frame_layer()
                         self._safe_draw()
                     try:
