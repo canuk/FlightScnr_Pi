@@ -3210,6 +3210,15 @@ class RoundTouchDisplay:
         else:
             self._scroll.step(delta)
         self._note_activity()
+        if self.screen == SCREEN_SETTINGS:
+            # Scrolling repaints the whole page; cap it at ~25 fps so touch
+            # events don't queue behind draws, and freeze the ATC labels so
+            # their bluetoothctl/IPC rebuild can't stall mid-gesture.
+            info.hold_atc_labels()
+            now_scroll = time.time()
+            if now_scroll - self._last_slider_draw < 0.04:
+                return
+            self._last_slider_draw = now_scroll
         self._safe_draw()
 
     def _handle_scroll_drag(self):
@@ -3321,6 +3330,11 @@ class RoundTouchDisplay:
                             self._apply_scroll_delta(-dy)
                     self._settings_drag_y = pos[1]
                     return
+            if self._settings_drag_y is not None:
+                # Drag just ended — paint the resting position immediately.
+                self._settings_drag_y = None
+                self._safe_draw()
+                return
             self._settings_drag_y = None
             return
         dy = self.input.consume_scroll_drag()
