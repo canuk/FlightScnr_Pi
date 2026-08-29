@@ -2298,20 +2298,33 @@ def _draw_quiet_dim_slider_row(surface, ry: int, focused: bool) -> None:
     text_h = body_font.get_height()
     row_h = _row_pitch() - theme.s(5)
     _draw_card(surface, ry, focused=focused)
-    # Screen-off button: power glyph; lit SWEEP while the dim level is 0.
+    # Screen-off button: slashed monitor; lit SWEEP while the level is 0.
     off_active = enabled and pct == 0
     icon_color = theme.SWEEP if off_active else (
         theme.MUTED if enabled else theme.HINT
     )
-    r_icon = icon.width // 2 - theme.s(2)
-    pygame.draw.circle(
-        surface, icon_color, icon.center, r_icon, max(1, theme.s(2))
+    lw = max(2, theme.s(2))
+    screen_rect = pygame.Rect(
+        icon.left, icon.top + theme.s(1), icon.width, int(icon.height * 0.62)
+    )
+    pygame.draw.rect(surface, icon_color, screen_rect, lw, border_radius=theme.s(3))
+    pygame.draw.line(
+        surface, icon_color,
+        (icon.centerx, screen_rect.bottom),
+        (icon.centerx, icon.bottom - theme.s(2)),
+        lw,
     )
     pygame.draw.line(
         surface, icon_color,
-        (icon.centerx, icon.top + theme.s(1)),
-        (icon.centerx, icon.centery),
-        max(2, theme.s(2)),
+        (icon.centerx - theme.s(4), icon.bottom - theme.s(1)),
+        (icon.centerx + theme.s(4), icon.bottom - theme.s(1)),
+        lw,
+    )
+    pygame.draw.line(
+        surface, icon_color,
+        (icon.left - theme.s(2), icon.bottom + theme.s(1)),
+        (icon.right + theme.s(2), icon.top - theme.s(1)),
+        lw,
     )
     label = body_font.render(
         "Dim", True, theme.LABEL if enabled else theme.HINT
