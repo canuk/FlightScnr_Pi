@@ -102,6 +102,22 @@ class TestCardHitBand:
         assert hit is None
 
 
+class TestPressedRowHighlight:
+    def test_pressed_row_changes_the_paint(self):
+        """draw_info with pressed_row must highlight that card at once."""
+        import pygame as pg
+
+        if not pg.font.get_init():
+            return
+        base = pg.Surface((theme.SIZE, theme.SIZE))
+        pressed = pg.Surface((theme.SIZE, theme.SIZE))
+        info.draw_info(base, info.PAGE_LAYERS, 0, 0)
+        info.draw_info(pressed, info.PAGE_LAYERS, 0, 0, pressed_row=1)
+        assert (
+            pg.image.tostring(base, "RGB") != pg.image.tostring(pressed, "RGB")
+        )
+
+
 class TestRowsStartAtContentTop:
     def test_rows_top_is_content_top(self):
         """Rows start at the normal content top again (2/5 was reverted)."""

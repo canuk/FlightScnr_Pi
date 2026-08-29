@@ -226,6 +226,8 @@ class RoundTouchDisplay:
         # Same for settings pages, plus whether that drag already scrolled.
         self._settings_drag_y: int | None = None
         self._settings_drag_scrolled = False
+        # Card under the finger right now — instant pressed highlight.
+        self._settings_pressed_row: int | None = None
         self._fatal_error = None
         self._scroll = nav.ScrollState()
         self._last_grab_seq = 0
@@ -946,6 +948,7 @@ class RoundTouchDisplay:
                 self.settings_page,
                 self._scroll.offset,
                 self._display_focus,
+                pressed_row=self._settings_pressed_row,
                 system_confirm=self._system_confirm,
                 atc_picker=self._atc_picker,
                 atc_picker_scroll=self._atc_picker_scroll.offset,
@@ -1579,6 +1582,7 @@ class RoundTouchDisplay:
         self._hud_volume_slider_kind = None
         self._settings_drag_y = None
         self._settings_drag_scrolled = False
+        self._settings_pressed_row = None
         self._system_confirm = None
         self._close_atc_picker()
         self._invalidate_timeout_content_cache()
@@ -1618,6 +1622,7 @@ class RoundTouchDisplay:
             self._scroll.reset()
             self._settings_drag_y = None
             self._settings_drag_scrolled = False
+            self._settings_pressed_row = None
         if screen == SCREEN_LIVE and previous != SCREEN_LIVE:
             # Fresh entry into live tracking — force an immediate position fetch.
             self._live_map_last_fetch = 0.0
@@ -3343,6 +3348,20 @@ class RoundTouchDisplay:
             if self.input.is_dragging():
                 pos = self.input.drag_pos()
                 if pos is not None:
+                    if self.screen == SCREEN_SETTINGS:
+                        # Highlight the card on finger-down; drop it as
+                        # soon as the drag turns into a scroll.
+                        threshold = float(input_handler.gesture_threshold_px())
+                        row = None
+                        if self.input.max_travel() < threshold:
+                            row = info.display_row_at(
+                                pos[0], pos[1],
+                                self.settings_page, self._scroll.offset,
+                            )
+                        if row != self._settings_pressed_row:
+                            self._settings_pressed_row = row
+                            self._note_activity()
+                            self._safe_draw()
                     now_t = time.time()
                     if self._settings_drag_y is None:
                         self._settings_drag_scrolled = False
@@ -3361,6 +3380,7 @@ class RoundTouchDisplay:
             if self._settings_drag_y is not None:
                 # Drag ended — hand off to inertial scrolling (Apple-style).
                 self._settings_drag_y = None
+                self._settings_pressed_row = None
                 v = 0.0
                 if len(self._scroll_samples) >= 2:
                     t0, y0 = self._scroll_samples[0]

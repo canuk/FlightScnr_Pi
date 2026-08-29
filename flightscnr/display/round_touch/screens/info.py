@@ -2502,6 +2502,7 @@ def draw_info(
     scroll_offset: int = 0,
     display_focus: int = 0,
     *,
+    pressed_row: int | None = None,
     system_confirm: str | None = None,
     atc_picker: str | None = None,
     atc_picker_scroll: int = 0,
@@ -2515,6 +2516,11 @@ def draw_info(
             pressed_id=atc_picker_pressed_id,
         )
     draw.fill_background_textured(surface)
+
+    # A finger resting on a card takes the highlight instantly — same
+    # style as the focus ring, applied before the tap ever lands.
+    if pressed_row is not None:
+        display_focus = pressed_row
 
     body_font = _display_font()
     top = nav.content_top_y(has_dots=True)
