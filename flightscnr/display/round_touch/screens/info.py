@@ -51,9 +51,10 @@ PAGE_DISPLAY = 3
 PAGE_HUD = 4
 PAGE_OPTIONS = 5
 PAGE_LAYERS = 6
-PAGE_COLORS = 7  # Theme — immediately before System
-PAGE_SYSTEM = 8
-PAGE_COUNT = 9
+PAGE_COLORS = 7  # Theme — immediately before Targets
+PAGE_TARGETS = 8  # Target visibility (colors, sizes, symbols)
+PAGE_SYSTEM = 9
+PAGE_COUNT = 10
 
 FOOTER_BUTTONS = ("prev", "next", "radar")
 
@@ -355,6 +356,8 @@ def _breadcrumb(page: int) -> list[str]:
         trail.append("Quiet")
     elif page == PAGE_COLORS:
         trail.append("Theme")
+    elif page == PAGE_TARGETS:
+        trail.append("Targets")
     elif page == PAGE_SYSTEM:
         trail.append("System")
     return trail
@@ -718,6 +721,315 @@ def _atc_output_picker_items() -> list[dict]:
     return out
 
 
+# --- Targets page: per-category visibility editors -------------------------
+
+TARGETS_ACTIONS = (
+    "tgt_plane",
+    "tgt_heli",
+    "tgt_drone",
+    "tgt_vessel",
+    "tgt_compass",
+    "tgt_blip",
+)
+TARGETS_EDITOR_KINDS = frozenset(TARGETS_ACTIONS)
+_TARGETS_TITLES = {
+    "tgt_plane": "Planes",
+    "tgt_heli": "Helicopters",
+    "tgt_drone": "Drones",
+    "tgt_vessel": "Vessels",
+    "tgt_compass": "Compass Rose",
+    "tgt_blip": "Blips",
+}
+_TARGETS_CATEGORY = {
+    "tgt_plane": "plane",
+    "tgt_heli": "heli",
+    "tgt_drone": "drone",
+    "tgt_vessel": "vessel",
+}
+_TGT_FORM_LABELS = (("icon", "Icon"), ("triangle", "Triangle"), ("dot", "Dot"))
+_TGT_MODE_LABELS = (("letters", "Letters"), ("degrees", "Degrees"), ("both", "Both"))
+
+
+def _targets_row_labels() -> list[str]:
+    return [f"{_TARGETS_TITLES[a]} ›" for a in TARGETS_ACTIONS]
+
+
+def _tgt_editor_color(kind: str) -> tuple | None:
+    if kind == "tgt_compass":
+        return settings.compass_color()
+    if kind == "tgt_blip":
+        return settings.blip_color()
+    return settings.target_color(_TARGETS_CATEGORY[kind])
+
+
+def _tgt_grid_origin() -> tuple[int, int, int]:
+    """(x0, y0, cell) for the editor's 3x7 swatch grid (Auto + 20 colors)."""
+    cell = theme.s(34)
+    cols = 7
+    x0 = theme.CENTER_X - (cols * cell) // 2
+    y0 = theme.CENTER_Y - int(theme.VISIBLE_RADIUS * 0.52)
+    return x0, y0, cell
+
+
+def _tgt_slider_rows(kind: str) -> list[str]:
+    if kind == "tgt_compass":
+        return ["opacity"]
+    if kind == "tgt_blip":
+        return ["size", "opacity"]
+    return ["size"]
+
+
+def _tgt_slider_geometry(kind: str, which: str) -> tuple[pygame.Rect, int, int] | None:
+    rows = _tgt_slider_rows(kind)
+    if which not in rows:
+        return None
+    x0, y0, cell = _tgt_grid_origin()
+    body_font = _display_font()
+    label_w = max(body_font.size(t)[0] for t in ("Size", "Opacity"))
+    value_w = body_font.size("150%")[0]
+    gap = theme.s(8)
+    row_h = body_font.get_height() + theme.s(16)
+    base_y = y0 + 3 * cell + theme.s(12)
+    ry = base_y + rows.index(which) * row_h
+    half = draw.circle_half_width_at_row(int(ry), row_h)
+    left = theme.CENTER_X - half + theme.s(16)
+    right = theme.CENTER_X + half - theme.s(16)
+    track_x = left + label_w + gap
+    track_w = right - value_w - gap - track_x
+    if track_w < theme.s(60):
+        return None
+    hit_pad = theme.s(10)
+    hit = pygame.Rect(
+        track_x - hit_pad, int(ry) - theme.s(4),
+        track_w + 2 * hit_pad, row_h + theme.s(8),
+    )
+    return hit, track_x, track_w
+
+
+def _tgt_segment_rects(kind: str) -> list[tuple[str, pygame.Rect]]:
+    """Segmented pill row (symbol / label-mode) under the sliders."""
+    if kind == "tgt_compass":
+        options = _TGT_MODE_LABELS
+    elif kind in _TARGETS_CATEGORY:
+        options = _TGT_FORM_LABELS
+    else:
+        return []
+    x0, y0, cell = _tgt_grid_origin()
+    body_font = _display_font()
+    row_h = body_font.get_height() + theme.s(16)
+    base_y = y0 + 3 * cell + theme.s(12) + len(_tgt_slider_rows(kind)) * row_h + theme.s(6)
+    seg_h = theme.s(30)
+    seg_w = theme.s(86)
+    gap = theme.s(6)
+    total = len(options) * seg_w + (len(options) - 1) * gap
+    x = theme.CENTER_X - total // 2
+    out = []
+    for value, _label in options:
+        out.append((value, pygame.Rect(x, int(base_y), seg_w, seg_h)))
+        x += seg_w + gap
+    return out
+
+
+def targets_editor_slider_at(kind: str, x: int, y: int) -> str | None:
+    for which in _tgt_slider_rows(kind):
+        geom = _tgt_slider_geometry(kind, which)
+        if geom and geom[0].collidepoint(x, y):
+            return which
+    return None
+
+
+def targets_editor_slider_value_at(kind: str, which: str, x: int) -> int | None:
+    geom = _tgt_slider_geometry(kind, which)
+    if geom is None:
+        return None
+    _, track_x, track_w = geom
+    t = (x - track_x) / max(1, track_w)
+    if which == "size":
+        lo, hi = settings.TARGET_SIZE_MIN, settings.TARGET_SIZE_MAX
+        return _snap5(lo + t * (hi - lo), lo, hi)
+    return _snap5(20 + t * 80, 20, 100)
+
+
+def targets_editor_slider_drag_band(kind: str, which: str, x: int, y: int) -> bool:
+    geom = _tgt_slider_geometry(kind, which)
+    if geom is None:
+        return False
+    return slider_drag_band_contains(geom[0], y)
+
+
+def _draw_targets_editor(surface, kind: str) -> int:
+    """Modal editor for one Targets section; registers picker-style hits."""
+    global _atc_picker_hits, _atc_picker_list_rect
+    _atc_picker_hits = []
+    _atc_picker_list_rect = None
+
+    import math as _math
+
+    from display.round_touch import arc_ui, radar_hud
+
+    draw.fill_background_textured(surface)
+    title_font = draw.load_font(theme.s(15), bold=True)
+    body_font = _display_font()
+    small_font = draw.load_font(theme.s(11), bold=True)
+
+    # Curved title.
+    arc_r = int(theme.VISIBLE_RADIUS * 0.84)
+    title_items = [
+        title_font.render(ch, True, theme.LABEL)
+        for ch in _TARGETS_TITLES.get(kind, "Targets")
+    ]
+    arc_ui.blit_arc_items(
+        surface, title_items, r=arc_r, mid=-_math.pi / 2, bottom=False,
+        cx=theme.CENTER_X, cy=theme.CENTER_Y,
+    )
+
+    # Swatch grid: Auto cell + the crayon palette.
+    current = _tgt_editor_color(kind)
+    x0, y0, cell = _tgt_grid_origin()
+    dot_r = cell // 2 - theme.s(5)
+    cells: list[tuple[str, tuple | None]] = [("auto", None)]
+    cells += [(_rgb_key(c), c) for c in THEME_SWATCHES]
+    for idx, (key, rgb) in enumerate(cells):
+        cxs = x0 + (idx % 7) * cell + cell // 2
+        cys = y0 + (idx // 7) * cell + cell // 2
+        if rgb is None:
+            pygame.draw.circle(surface, (30, 38, 32), (cxs, cys), dot_r)
+            pygame.draw.circle(surface, theme.MUTED, (cxs, cys), dot_r, 1)
+            a_img = small_font.render("A", True, theme.LABEL)
+            surface.blit(a_img, a_img.get_rect(center=(cxs, cys)))
+            selected = current is None
+        else:
+            pygame.draw.circle(surface, rgb, (cxs, cys), dot_r)
+            selected = current is not None and tuple(rgb) == tuple(current)
+        if selected:
+            pygame.draw.circle(
+                surface, (255, 255, 255), (cxs, cys),
+                dot_r + theme.s(3), max(1, theme.s(2)),
+            )
+        else:
+            pygame.draw.circle(surface, theme.GRID, (cxs, cys), dot_r, 1)
+        hit = pygame.Rect(0, 0, cell, cell)
+        hit.center = (cxs, cys)
+        _atc_picker_hits.append(("tgt_swatch", key, hit))
+
+    # Sliders.
+    for which in _tgt_slider_rows(kind):
+        geom = _tgt_slider_geometry(kind, which)
+        if geom is None:
+            continue
+        hit, track_x, track_w = geom
+        if which == "size":
+            if kind == "tgt_blip":
+                pct = settings.blip_size_pct()
+            else:
+                pct = settings.target_size_pct(_TARGETS_CATEGORY.get(kind, "plane"))
+            lo, hi = settings.TARGET_SIZE_MIN, settings.TARGET_SIZE_MAX
+            frac = (pct - lo) / float(hi - lo)
+            label_text = "Size"
+        else:
+            pct = (
+                settings.compass_opacity()
+                if kind == "tgt_compass"
+                else settings.blip_opacity()
+            )
+            frac = (pct - 20) / 80.0
+            label_text = "Opacity"
+        text_h = body_font.get_height()
+        row_cy = hit.centery
+        label = body_font.render(label_text, True, theme.LABEL)
+        surface.blit(
+            label,
+            (track_x - theme.s(8) - label.get_width(), row_cy - text_h // 2),
+        )
+        draw.draw_slider(surface, track_x, row_cy, track_w, frac * 100.0)
+        value = body_font.render(f"{pct}%", True, theme.MUTED)
+        surface.blit(value, (track_x + track_w + theme.s(8), row_cy - text_h // 2))
+
+    # Segmented pills (symbol / label mode).
+    if kind == "tgt_compass":
+        active_value = settings.compass_labels()
+        options = _TGT_MODE_LABELS
+    elif kind in _TARGETS_CATEGORY:
+        active_value = settings.target_form(_TARGETS_CATEGORY[kind])
+        options = _TGT_FORM_LABELS
+    else:
+        active_value, options = None, []
+    labels = dict(options)
+    for value, rect in _tgt_segment_rects(kind):
+        active = value == active_value
+        fill = _CARD_FILL_FOCUS if active else _CARD_FILL
+        border = theme.SWEEP if active else _CARD_BORDER
+        pygame.draw.rect(surface, fill, rect, border_radius=rect.height // 2)
+        pygame.draw.rect(
+            surface, border, rect,
+            max(1, theme.s(2)) if active else 1,
+            border_radius=rect.height // 2,
+        )
+        img = small_font.render(
+            labels[value], True, theme.LABEL if active else theme.MUTED
+        )
+        surface.blit(img, img.get_rect(center=rect.center))
+        _atc_picker_hits.append(("tgt_segment", value, rect.inflate(theme.s(6), theme.s(10))))
+
+    # Curved Done pill on the bottom arc.
+    band = theme.s(30)
+    half = float(theme.s(40)) / float(max(1, arc_r))
+    mid = _math.pi / 2
+    radar_hud._draw_curved_white_pill(
+        surface, theme.CENTER_X, theme.CENTER_Y, arc_r, mid,
+        band, (14, 58, 24, 240), arc_a0=mid - half, arc_a1=mid + half,
+    )
+    pill_font = draw.load_font(theme.s(12), bold=True)
+    items = [pill_font.render(ch, True, theme.SWEEP) for ch in "Done"]
+    arc_ui.blit_arc_items(
+        surface, items, r=arc_r, mid=mid, bottom=True,
+        cx=theme.CENTER_X, cy=theme.CENTER_Y,
+    )
+    px = theme.CENTER_X + int(arc_r * _math.cos(mid))
+    py = theme.CENTER_Y + int(arc_r * _math.sin(mid))
+    hit = pygame.Rect(0, 0, int(2 * half * arc_r) + theme.s(16), band + theme.s(16))
+    hit.center = (px, py)
+    _atc_picker_hits.append(("close", "", hit))
+    return 0
+
+
+def _rgb_key(rgb) -> str:
+    r, g, b = rgb
+    return f"{int(r)},{int(g)},{int(b)}"
+
+
+def targets_apply_swatch(kind: str, key: str) -> None:
+    rgb = None if key == "auto" else tuple(int(p) for p in key.split(","))
+    if kind == "tgt_compass":
+        settings.set_compass_color(rgb)
+    elif kind == "tgt_blip":
+        settings.set_blip_color(rgb)
+    elif kind in _TARGETS_CATEGORY:
+        settings.set_target_color(_TARGETS_CATEGORY[kind], rgb)
+
+
+def targets_apply_segment(kind: str, value: str) -> None:
+    if kind == "tgt_compass":
+        settings.set_compass_labels(value)
+    elif kind in _TARGETS_CATEGORY:
+        settings.set_target_form(_TARGETS_CATEGORY[kind], value)
+
+
+def targets_apply_slider(kind: str, which: str, value: int, *, persist: bool) -> None:
+    if which == "size":
+        if kind == "tgt_blip":
+            settings.set_blip_size_pct(value, persist=persist)
+        elif kind in _TARGETS_CATEGORY:
+            settings.set_target_size_pct(
+                _TARGETS_CATEGORY[kind], value, persist=persist
+            )
+    else:
+        if kind == "tgt_compass":
+            settings.set_compass_opacity(value, persist=persist)
+        elif kind == "tgt_blip":
+            settings.set_blip_opacity(value, persist=persist)
+
+
 # --- Dial time picker (Quiet start / end) ---------------------------------
 # Material-style dial for the round screen: tap the hour on the ring, the
 # picker advances to minutes, AM/PM pills, Set confirms.
@@ -916,6 +1228,8 @@ def draw_atc_picker(
     kind = str(kind or "").strip().lower()
     if kind in TIME_PICKER_KINDS:
         return _draw_time_picker(surface, kind)
+    if kind in TARGETS_EDITOR_KINDS:
+        return _draw_targets_editor(surface, kind)
     title_text = _LIST_PICKER_TITLES.get(kind, "Select")
     items = atc_picker_items(kind)
     pressed = str(pressed_id or "").strip()
@@ -1569,6 +1883,7 @@ def _settings_row_page(page: int) -> bool:
         PAGE_LAYERS,
         PAGE_ATC,
         PAGE_ATC_QUIET,
+        PAGE_TARGETS,
     )
 
 
@@ -1585,6 +1900,8 @@ def _row_actions(page: int) -> tuple[str, ...]:
         return atc_actions()
     if page == PAGE_ATC_QUIET:
         return ATC_QUIET_ACTIONS
+    if page == PAGE_TARGETS:
+        return TARGETS_ACTIONS
     return ()
 
 
@@ -3224,6 +3541,17 @@ def draw_info(
             int(bottom),
             show_top=scroll_offset > 0,
             show_bottom=scroll_offset < max_scroll,
+        )
+
+    elif page == PAGE_TARGETS:
+        max_scroll = _draw_settings_rows(
+            surface,
+            _targets_row_labels(),
+            scroll_offset,
+            display_focus,
+            top,
+            bottom,
+            actions=TARGETS_ACTIONS,
         )
 
     elif page == PAGE_SYSTEM:

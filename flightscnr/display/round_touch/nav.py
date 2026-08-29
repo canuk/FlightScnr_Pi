@@ -35,6 +35,7 @@ SETTINGS_PAGES = (
     "Options",
     "Layers",
     "Theme",
+    "Targets",
     "System",
 )
 

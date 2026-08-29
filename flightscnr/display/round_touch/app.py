@@ -288,6 +288,8 @@ class RoundTouchDisplay:
         self._atc_volume_slider_active = False
         self._lofi_volume_slider_active = False
         self._quiet_dim_slider_active = False
+        self._targets_slider_which: str | None = None
+        self._targets_slider_last_value: int | None = None
         # Live dim preview while the quiet-dim slider is held.
         self._quiet_dim_preview: int | None = None
         self._radar_hud_volume_drag = False
@@ -2150,6 +2152,7 @@ class RoundTouchDisplay:
             or self._atc_volume_slider_active
             or self._lofi_volume_slider_active
             or self._quiet_dim_slider_active
+            or self._targets_slider_which
             or self._hud_opacity_slider_active
             or self._hud_volume_slider_kind
             or self._radar_hud_volume_drag
@@ -2462,6 +2465,52 @@ class RoundTouchDisplay:
             # Held — the panel shows the dim level live.
             self._quiet_dim_preview = value
             backlight.apply_percent(value)
+        return changed
+
+    def _update_targets_slider_drag(self) -> bool:
+        kind = self._atc_picker
+        if (
+            self.screen != SCREEN_SETTINGS
+            or kind not in info.TARGETS_EDITOR_KINDS
+        ):
+            self._targets_slider_which = None
+            return False
+        if not self.input.is_dragging():
+            if self._targets_slider_which:
+                which = self._targets_slider_which
+                self._targets_slider_which = None
+                if self._targets_slider_last_value is not None:
+                    info.targets_apply_slider(
+                        kind, which, self._targets_slider_last_value,
+                        persist=True,
+                    )
+                self._targets_slider_last_value = None
+                radar.invalidate_frame_layer()
+                self.input.consume_scroll_drag()
+                return True
+            return False
+        pos = self.input.drag_pos()
+        if pos is None:
+            return False
+        x, y = pos
+        if not self._targets_slider_which:
+            if self._slider_drag_armed():
+                return False
+            which = info.targets_editor_slider_at(kind, x, y)
+            if which is None:
+                return False
+            self._targets_slider_which = which
+        v = info.targets_editor_slider_value_at(
+            kind, self._targets_slider_which, x
+        )
+        changed = False
+        if v is not None and v != self._targets_slider_last_value:
+            self._targets_slider_last_value = v
+            info.targets_apply_slider(
+                kind, self._targets_slider_which, v, persist=False
+            )
+            changed = True
+        self.input.consume_scroll_drag()
         return changed
 
     def _update_quiet_dim_slider_drag(self) -> bool:
@@ -5281,6 +5330,7 @@ class RoundTouchDisplay:
                     or self._update_vfr_opacity_slider_drag()
                     or self._update_lofi_volume_slider_drag()
                     or self._update_quiet_dim_slider_drag()
+                    or self._update_targets_slider_drag()
                     or self._update_atc_volume_slider_drag()
                     or self._update_radar_hud_volume_drag()
                 ):
