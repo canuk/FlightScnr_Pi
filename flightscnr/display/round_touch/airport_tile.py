@@ -254,7 +254,7 @@ def draw(surface: pygame.Surface) -> pygame.Rect | None:
     row_h = value_font.get_height() + gap
     width = max(
         theme.s(120),
-        ident_font.size(ident)[0] + theme.s(60),
+        ident_font.size(ident)[0] + theme.s(84),
         name_font.size(name[:34])[0] + pad * 2,
         max((label_w + value_font.size(v)[0] for _, v in rows), default=0) + pad * 2,
     )
@@ -278,6 +278,28 @@ def draw(surface: pygame.Surface) -> pygame.Rect | None:
     y = pad
     ident_img = ident_font.render(ident, True, accent_rgb)
     panel.blit(ident_img, (pad, y))
+    # Sectional chart symbol just right of the identifier.
+    try:
+        from display.round_touch.airport_overlay import (
+            chart_icon_flags,
+            draw_chart_icon,
+        )
+
+        towered, fuel, beacon = chart_icon_flags(ident)
+        icon_r = max(4, ident_img.get_height() // 4)
+        draw_chart_icon(
+            panel,
+            (
+                pad + ident_img.get_width() + theme.s(8) + icon_r,
+                y + ident_img.get_height() // 2,
+            ),
+            icon_r,
+            towered=towered,
+            fuel=fuel,
+            beacon=beacon,
+        )
+    except Exception:
+        pass
     # Flight-category badge, AeroWatch style.
     cat = (m or {}).get("flt_cat") if m else None
     if cat:
