@@ -785,28 +785,17 @@ def _draw_time_picker(surface, kind: str) -> int:
     minute = _time_picker["minute"]
     pm = _time_picker["pm"]
 
-    title_text = "Quiet Start" if kind == "quiet_start" else "Quiet End"
-    title = title_font.render(title_text, True, theme.LABEL)
-    title_y = theme.CENTER_Y - int(theme.VISIBLE_RADIUS * 0.86)
-    surface.blit(title, title.get_rect(midtop=(theme.CENTER_X, title_y)))
+    # Title curved along the top rim, matching the breadcrumb language.
+    from display.round_touch import arc_ui
 
-    # Close X, mirrored from the list picker (geometric — Pi fonts lack ✕).
-    close_size = theme.s(28)
-    close_rect = pygame.Rect(0, 0, close_size, close_size)
-    close_rect.center = (
-        theme.CENTER_X + int(theme.VISIBLE_RADIUS * 0.62),
-        title_y + close_size // 2,
+    title_text = "Quiet Start" if kind == "quiet_start" else "Quiet End"
+    arc_r = int(theme.VISIBLE_RADIUS * 0.84)
+    title_items = [title_font.render(ch, True, theme.LABEL) for ch in title_text]
+    arc_ui.blit_arc_items(
+        surface, title_items,
+        r=arc_r, mid=-_math.pi / 2, bottom=False,
+        cx=theme.CENTER_X, cy=theme.CENTER_Y,
     )
-    inset = max(6, theme.s(7))
-    x_w = max(2, theme.s(2))
-    for (x0, y0), (x1, y1) in (
-        ((close_rect.left + inset, close_rect.top + inset),
-         (close_rect.right - inset, close_rect.bottom - inset)),
-        ((close_rect.right - inset, close_rect.top + inset),
-         (close_rect.left + inset, close_rect.bottom - inset)),
-    ):
-        pygame.draw.line(surface, theme.LABEL, (x0, y0), (x1, y1), x_w)
-    _atc_picker_hits.append(("close", "", close_rect.inflate(theme.s(10), theme.s(10))))
 
     # Center preview: 10:30 PM — tap hour or minutes to edit that part.
     hour_img = big_font.render(f"{hour12}", True,
@@ -878,16 +867,51 @@ def _draw_time_picker(surface, kind: str) -> int:
         surface.blit(img, img.get_rect(center=rect.center))
         _atc_picker_hits.append(("time_ampm", label, rect.inflate(theme.s(8), theme.s(8))))
 
-    # Set pill at the bottom of the dial.
-    set_w, set_h = theme.s(96), theme.s(30)
-    set_rect = pygame.Rect(0, 0, set_w, set_h)
-    set_rect.center = (theme.CENTER_X, theme.CENTER_Y + int(theme.VISIBLE_RADIUS * 0.84))
-    pygame.draw.rect(surface, (12, 52, 22), set_rect, border_radius=set_h // 2)
-    pygame.draw.rect(surface, theme.SWEEP, set_rect, max(1, theme.s(2)),
-                     border_radius=set_h // 2)
-    img = title_font.render("Set", True, theme.LABEL)
-    surface.blit(img, img.get_rect(center=set_rect.center))
-    _atc_picker_hits.append(("time_set", "", set_rect.inflate(theme.s(10), theme.s(8))))
+    # Curved Cancel / Set pills on the bottom arc — same shape as Prev/Next.
+    from display.round_touch import radar_hud
+
+    glyph_color, frost_rgba = radar_hud._hud_chrome()
+    band = theme.s(30)
+    bottom_mid = _math.pi / 2
+    half = float(theme.s(34)) / float(max(1, arc_r))
+    gap = float(theme.s(14)) / float(max(1, arc_r))
+    pill_font = draw.load_font(theme.s(12), bold=True)
+    for action, label, mid, accent in (
+        ("close", "Cancel", bottom_mid + half + gap / 2, False),
+        ("time_set", "Set", bottom_mid - half - gap / 2, True),
+    ):
+        if accent:
+            # Outlined accent pill: SWEEP band under a slightly thinner fill.
+            radar_hud._draw_curved_white_pill(
+                surface, theme.CENTER_X, theme.CENTER_Y, arc_r, mid,
+                band + theme.s(4), (*theme.SWEEP, 255),
+                arc_a0=mid - half, arc_a1=mid + half,
+            )
+            radar_hud._draw_curved_white_pill(
+                surface, theme.CENTER_X, theme.CENTER_Y, arc_r, mid,
+                band, (12, 52, 22, 255),
+                arc_a0=mid - half + theme.s(2) / max(1, arc_r),
+                arc_a1=mid + half - theme.s(2) / max(1, arc_r),
+            )
+            color = theme.LABEL
+        else:
+            radar_hud._draw_curved_white_pill(
+                surface, theme.CENTER_X, theme.CENTER_Y, arc_r, mid,
+                band, frost_rgba,
+                arc_a0=mid - half, arc_a1=mid + half,
+            )
+            color = glyph_color
+        items = [pill_font.render(ch, True, color) for ch in label]
+        arc_ui.blit_arc_items(
+            surface, items,
+            r=arc_r, mid=mid, bottom=True,
+            cx=theme.CENTER_X, cy=theme.CENTER_Y,
+        )
+        px = theme.CENTER_X + int(arc_r * _math.cos(mid))
+        py = theme.CENTER_Y + int(arc_r * _math.sin(mid))
+        hit = pygame.Rect(0, 0, int(2 * half * arc_r) + theme.s(16), band + theme.s(16))
+        hit.center = (px, py)
+        _atc_picker_hits.append((action, "", hit))
     return 0
 
 
