@@ -350,7 +350,7 @@ def draw(surface: pygame.Surface) -> pygame.Rect | None:
     # Crowded menus (5-6 wedges): smaller icons buy room so the text can
     # run bigger — names matter more than glyphs when space is tight.
     crowded = len(_entries) >= 5
-    base_size = max(8, theme.s(11)) + (theme.s(4) if crowded else 0)
+    base_size = max(8, theme.s(11)) + (theme.s(2) if crowded else 0)
     min_size = max(9, base_size - theme.s(2)) if crowded else 7
     icon_default = theme.s(14) if crowded else theme.s(19)
     for i, entry in enumerate(_entries):
