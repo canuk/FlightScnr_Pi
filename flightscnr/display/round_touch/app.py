@@ -4949,6 +4949,7 @@ class RoundTouchDisplay:
                     # redraws so the loop keeps sampling the finger instead
                     # of choking on layout. The release frame always draws.
                     now_drag = time.time()
+                    self._note_activity()
                     if (
                         now_drag - self._last_slider_draw >= 0.05
                         or not self.input.is_dragging()
@@ -5226,7 +5227,9 @@ class RoundTouchDisplay:
                             != self._timeout_content_cache_key()
                         )
                         ring_iv = theme.SWEEP_FRAME_MS / 1000.0
-                        if need_content:
+                        if need_content and (
+                            now - self._last_timeout_content_draw >= 0.20
+                        ):
                             self._last_timeout_content_draw = now
                             self._last_static_draw = now
                             self._safe_draw()
