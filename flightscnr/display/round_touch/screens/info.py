@@ -1072,7 +1072,7 @@ def _theme_slider_metrics() -> tuple[int, int, int, int]:
     label_w = max(body_font.size(ch)[0] for ch in ("R", "G", "B"))
     value_w = body_font.size("255")[0]
     track_w = theme.s(140)
-    row_h = body_font.get_height() + theme.s(6)
+    row_h = _row_pitch()
     return track_w, row_h, label_w, value_w
 
 
@@ -1125,9 +1125,12 @@ def _theme_slider_geometry(
     track_w, slider_h, label_w, value_w = _theme_slider_metrics()
     gap = theme.s(8)
     y0 = _rgb_group_slider_y0(group, scroll_offset)
-    block_w = label_w + gap + track_w + gap + value_w
-    track_x = theme.CENTER_X - block_w // 2 + label_w + gap
     hit_pad = theme.s(8)
+    # Uniform width (widest chord) — the Colors page draws its sliders in
+    # grouped sections, so draw and hit share this fixed layout.
+    inner = _card_inner_row(theme.CENTER_Y)
+    track_w = inner.width - label_w - value_w - 2 * gap
+    track_x = inner.left + label_w + gap
     out: list[tuple[pygame.Rect, int, int]] = []
     for i in range(3):
         ry = y0 + i * slider_h
@@ -1180,6 +1183,57 @@ def _display_font():
     """Match flight-detail body size so more Display rows fit the round screen."""
     return draw.load_font(theme.s(14))
 
+def _row_pitch() -> int:
+    """One row pitch for every settings page — layout, hits, and drawing."""
+    return _display_font().get_height() + theme.s(12)
+
+
+# Card chrome (watch-style list): every row is a rounded chip whose width
+# follows the chord of the round screen at its height.
+_CARD_FILL = (18, 24, 20)
+_CARD_FILL_FOCUS = (24, 34, 27)
+_CARD_BORDER = (44, 58, 48)
+_CARD_FILL_DANGER = (38, 20, 18)
+_CARD_BORDER_DANGER = (110, 52, 44)
+_CARD_MAX_W = None  # filled lazily from theme
+
+
+def _card_rect(ry: int, card_h: int) -> pygame.Rect:
+    mid_y = ry + card_h // 2
+    half = draw.circle_half_width_at_row(int(mid_y - card_h // 2), card_h)
+    w = max(theme.s(120), 2 * half - theme.s(26))
+    w = min(w, theme.s(330))
+    return pygame.Rect(theme.CENTER_X - w // 2, int(ry), w, int(card_h))
+
+
+def _card_inner_row(ry: int) -> pygame.Rect:
+    """Content rect of the card that occupies the row starting at ry."""
+    return _card_rect(int(ry), _row_pitch() - theme.s(5)).inflate(-theme.s(24), 0)
+
+
+def _draw_card(
+    surface, ry: int, *, focused: bool = False, tone: str = "normal",
+    card_h: int | None = None,
+) -> pygame.Rect:
+    """Draw the row chip; returns the padded content rect."""
+    if card_h is None:
+        card_h = _row_pitch() - theme.s(5)
+    rect = _card_rect(ry, card_h)
+    radius = theme.s(9)
+    if tone == "danger":
+        fill, border = _CARD_FILL_DANGER, _CARD_BORDER_DANGER
+    else:
+        fill = _CARD_FILL_FOCUS if focused else _CARD_FILL
+        border = theme.GRID if focused else _CARD_BORDER
+    pygame.draw.rect(surface, fill, rect, border_radius=radius)
+    pygame.draw.rect(
+        surface, border, rect,
+        width=max(1, theme.s(2)) if focused else 1, border_radius=radius,
+    )
+    return rect.inflate(-theme.s(24), 0)
+
+
+
 
 def _settings_row_page(page: int) -> bool:
     return page in (
@@ -1212,7 +1266,7 @@ def _display_layout(page: int, scroll_offset: int = 0) -> tuple[int, int, int]:
     top = nav.content_top_y(has_dots=True)
     body_font = _display_font()
     row_y = top + theme.s(4) - scroll_offset
-    row_h = body_font.get_height() + theme.s(6)
+    row_h = _row_pitch()
     return row_y, row_h, len(_row_actions(page))
 
 
@@ -1274,7 +1328,7 @@ def _brightness_slider_metrics() -> tuple[int, int, int, int]:
     label_w = body_font.size("Brightness")[0]
     value_w = body_font.size("100%")[0]
     track_w = theme.s(120)
-    row_h = body_font.get_height() + theme.s(8)
+    row_h = _row_pitch()
     return track_w, row_h, label_w, value_w
 
 
@@ -1295,8 +1349,9 @@ def _brightness_slider_geometry(scroll_offset: int = 0) -> tuple[pygame.Rect, in
     idx = brightness_row_index()
     # Align slider with the brightness slot; allow a slightly taller hit target.
     ry = row_y + idx * row_h
-    block_w = label_w + gap + track_w + gap + value_w
-    left_x = theme.CENTER_X - block_w // 2
+    inner = _card_inner_row(ry)
+    left_x = inner.left
+    track_w = inner.width - label_w - value_w - 2 * gap
     track_x = left_x + label_w + gap
     hit_pad = theme.s(8)
     hit = pygame.Rect(
@@ -1341,7 +1396,7 @@ def _hud_opacity_slider_metrics() -> tuple[int, int, int, int]:
     label_w = body_font.size("HUD Opacity")[0]
     value_w = body_font.size("100%")[0]
     track_w = theme.s(120)
-    row_h = body_font.get_height() + theme.s(8)
+    row_h = _row_pitch()
     return track_w, row_h, label_w, value_w
 
 
@@ -1360,10 +1415,11 @@ def _hud_opacity_slider_geometry(scroll_offset: int = 0) -> tuple[pygame.Rect, i
     idx = hud_opacity_row_index()
     row_y, row_h, _ = _display_layout(PAGE_HUD, scroll_offset)
     ry = row_y + idx * row_h
-    block_w = label_w + gap + track_w + gap + value_w
-    left_x = theme.CENTER_X - block_w // 2
+    inner = _card_inner_row(ry)
+    left_x = inner.left
+    track_w = inner.width - label_w - value_w - 2 * gap
     track_x = left_x + label_w + gap
-    hit = pygame.Rect(left_x, ry - theme.s(4), block_w, max(slider_h, row_h) + theme.s(8))
+    hit = _card_rect(int(ry), _row_pitch() - theme.s(5)).inflate(0, theme.s(8))
     return hit, track_x, track_w
 
 
@@ -1403,7 +1459,7 @@ def _chime_volume_slider_metrics() -> tuple[int, int, int, int]:
     value_w = body_font.size("100%")[0]
     # Shorter than the other sliders — each row also carries an on/off switch.
     track_w = theme.s(68)
-    row_h = body_font.get_height() + theme.s(8)
+    row_h = _row_pitch()
     return track_w, row_h, label_w, value_w
 
 
@@ -1483,19 +1539,25 @@ def _hud_switch_size() -> tuple[int, int]:
     return draw.toggle_switch_size(_display_font())
 
 
-def _hud_volume_row_columns() -> tuple[int, int, int, int, int]:
-    """x of the switch, label, track and value columns, plus the row height."""
-    body_font = _display_font()
-    track_w, slider_h, label_w, value_w = _chime_volume_slider_metrics()
+def _hud_volume_row_columns(ry: int = None) -> tuple[int, int, int, int, int, int]:
+    """(switch_x, label_x, track_x, value_x, track_w, row_h) for a row at ry.
+
+    Card-based: switch left, value right-aligned, track fills the middle.
+    The card width follows the circle chord, so columns depend on ry.
+    """
+    _t, slider_h, label_w, value_w = _chime_volume_slider_metrics()
     switch_w, _switch_h = _hud_switch_size()
     gap = theme.s(8)
-    height = max(slider_h, body_font.get_height() + theme.s(6))
-    block_w = switch_w + gap + label_w + gap + track_w + gap + value_w
-    switch_x = theme.CENTER_X - block_w // 2
+    height = _row_pitch()
+    if ry is None:
+        ry = theme.CENTER_Y  # widest chord (legacy callers)
+    inner = _card_inner_row(int(ry))
+    switch_x = inner.left
     label_x = switch_x + switch_w + gap
+    value_x = inner.right - value_w
     track_x = label_x + label_w + gap
-    value_x = track_x + track_w + gap
-    return switch_x, label_x, track_x, value_x, height
+    track_w = max(theme.s(40), value_x - gap - track_x)
+    return switch_x, label_x, track_x, value_x, track_w, height
 
 
 def _hud_volume_row_y(action: str, scroll_offset: int = 0) -> int | None:
@@ -1509,7 +1571,7 @@ def _hud_volume_row_y(action: str, scroll_offset: int = 0) -> int | None:
 
 
 def _hud_switch_rect(action: str, ry: int) -> pygame.Rect:
-    switch_x, _label_x, _track_x, _value_x, height = _hud_volume_row_columns()
+    switch_x, _label_x, _track_x, _value_x, _tw, height = _hud_volume_row_columns(ry)
     switch_w, switch_h = _hud_switch_size()
     return pygame.Rect(switch_x, int(ry + (height - switch_h) // 2), switch_w, switch_h)
 
@@ -1520,8 +1582,7 @@ def _hud_volume_slider_geometry(
     ry = _hud_volume_row_y(action, scroll_offset)
     if ry is None:
         return None
-    track_w, _slider_h, _label_w, _value_w = _chime_volume_slider_metrics()
-    _switch_x, _label_x, track_x, _value_x, height = _hud_volume_row_columns()
+    _switch_x, _label_x, track_x, _value_x, track_w, height = _hud_volume_row_columns(ry)
     # Track only (plus knob overhang): the switch and label share this row.
     knob_r = _hud_slider_knob_radius()
     hit = pygame.Rect(
@@ -1602,7 +1663,7 @@ def _vfr_opacity_slider_metrics() -> tuple[int, int, int, int]:
     label_w = body_font.size("VFR opacity")[0]
     value_w = body_font.size("100%")[0]
     track_w = theme.s(100)
-    row_h = body_font.get_height() + theme.s(8)
+    row_h = _row_pitch()
     return track_w, row_h, label_w, value_w
 
 
@@ -1624,8 +1685,9 @@ def _vfr_opacity_slider_geometry(scroll_offset: int = 0) -> tuple[pygame.Rect, i
     if idx < 0:
         return None
     ry = row_y + idx * row_h
-    block_w = label_w + gap + track_w + gap + value_w
-    left_x = theme.CENTER_X - block_w // 2
+    inner = _card_inner_row(ry)
+    left_x = inner.left
+    track_w = inner.width - label_w - value_w - 2 * gap
     track_x = left_x + label_w + gap
     hit_pad = theme.s(8)
     hit = pygame.Rect(
@@ -1670,9 +1732,7 @@ def _atc_volume_slider_metrics() -> tuple[int, int, int, int]:
     label_w = body_font.size("Volume")[0]
     value_w = body_font.size(f"{settings.ATC_VOLUME_MAX}%")[0]
     track_w = theme.s(100)
-    # Match the settings-row pitch exactly — a taller slider row made the
-    # ATC page look unevenly spaced.
-    row_h = body_font.get_height() + theme.s(6)
+    row_h = _row_pitch()
     return track_w, row_h, label_w, value_w
 
 
@@ -1693,8 +1753,9 @@ def _atc_volume_slider_geometry(scroll_offset: int = 0) -> tuple[pygame.Rect, in
     if idx < 0:
         return None
     ry = row_y + idx * row_h
-    block_w = label_w + gap + track_w + gap + value_w
-    left_x = theme.CENTER_X - block_w // 2
+    inner = _card_inner_row(ry)
+    left_x = inner.left
+    track_w = inner.width - label_w - value_w - 2 * gap
     track_x = left_x + label_w + gap
     hit_pad = theme.s(8)
     hit = pygame.Rect(
@@ -1748,8 +1809,9 @@ def _lofi_volume_slider_geometry(scroll_offset: int = 0) -> tuple[pygame.Rect, i
     if idx < 0:
         return None
     ry = row_y + idx * row_h
-    block_w = label_w + gap + track_w + gap + value_w
-    left_x = theme.CENTER_X - block_w // 2
+    inner = _card_inner_row(ry)
+    left_x = inner.left
+    track_w = inner.width - label_w - value_w - 2 * gap
     track_x = left_x + label_w + gap
     hit_pad = theme.s(8)
     hit = pygame.Rect(
@@ -1901,16 +1963,14 @@ def _draw_lofi_volume_slider_row(surface, ry: int, focused: bool) -> None:
     track_w, slider_h, label_w, value_w = _atc_volume_slider_metrics()
     gap = theme.s(8)
     pct = settings.lofi_volume()
-    block_w = label_w + gap + track_w + gap + value_w
-    left_x = theme.CENTER_X - block_w // 2
+    inner = _card_inner_row(ry)
+    left_x = inner.left
+    track_w = inner.width - label_w - value_w - 2 * gap
     track_x = left_x + label_w + gap
     text_h = body_font.get_height()
     row_h = max(slider_h, text_h + theme.s(6))
-    if focused:
-        pad = theme.s(4)
-        focus = pygame.Rect(left_x - pad, ry - pad, block_w + pad * 2, row_h + pad)
-        pygame.draw.rect(surface, theme.GRID, focus, max(1, theme.s(1)))
-    label = body_font.render("Lofi Vol", True, theme.MUTED)
+    _draw_card(surface, ry, focused=focused)
+    label = body_font.render("Lofi Vol", True, theme.LABEL)
     surface.blit(label, (left_x, int(ry + (row_h - text_h) // 2)))
     track_cy = int(ry + row_h // 2)
     track_rect = pygame.Rect(track_x, track_cy - max(2, theme.s(2)), track_w, max(4, theme.s(4)))
@@ -1936,21 +1996,14 @@ def _draw_atc_volume_slider_row(surface, ry: int, focused: bool) -> None:
     gap = theme.s(8)
     pct = settings.atc_volume()
     hi = float(settings.ATC_VOLUME_MAX)
-    block_w = label_w + gap + track_w + gap + value_w
-    left_x = theme.CENTER_X - block_w // 2
+    inner = _card_inner_row(ry)
+    left_x = inner.left
+    track_w = inner.width - label_w - value_w - 2 * gap
     track_x = left_x + label_w + gap
     text_h = body_font.get_height()
     row_h = max(slider_h, text_h + theme.s(6))
-    if focused:
-        pad = theme.s(4)
-        focus = pygame.Rect(
-            left_x - pad,
-            ry - pad,
-            block_w + pad * 2,
-            row_h + pad,
-        )
-        pygame.draw.rect(surface, theme.GRID, focus, max(1, theme.s(1)))
-    label = body_font.render("Volume", True, theme.MUTED)
+    _draw_card(surface, ry, focused=focused)
+    label = body_font.render("Volume", True, theme.LABEL)
     surface.blit(label, (left_x, int(ry + (row_h - text_h) // 2)))
     track_cy = int(ry + row_h // 2)
     track_rect = pygame.Rect(track_x, track_cy - max(2, theme.s(2)), track_w, max(4, theme.s(4)))
@@ -2099,28 +2152,15 @@ _TOGGLE_ROW_STATE = {
 
 def _draw_toggle_row(surface, label: str, ry: int, focused: bool, on: bool) -> None:
     body_font = _display_font()
-    gap = theme.s(10)
+    inner = _draw_card(surface, ry, focused=focused)
     switch_w, switch_h = draw.toggle_switch_size(body_font)
     text_h = body_font.get_height()
-    max_w = draw.circle_half_width_at_row(ry, text_h) * 2 - switch_w - gap
-    text = draw.fit_text(label, body_font, max_w)
-    text_w = body_font.size(text)[0]
-    block_w = text_w + gap + switch_w
-    left_x = theme.CENTER_X - block_w // 2
-    if focused:
-        pad_x = theme.s(10)
-        pad_y = theme.s(3)
-        rect = pygame.Rect(
-            left_x - pad_x,
-            ry - pad_y,
-            block_w + pad_x * 2,
-            text_h + pad_y * 2,
-        )
-        pygame.draw.rect(surface, theme.GRID, rect, max(1, theme.s(1)))
-    surface.blit(body_font.render(text, True, theme.MUTED), (left_x, ry))
+    text = draw.fit_text(label, body_font, inner.width - switch_w - theme.s(10))
+    ty = inner.centery - text_h // 2
+    surface.blit(body_font.render(text, True, theme.LABEL), (inner.left, ty))
     switch = pygame.Rect(
-        left_x + text_w + gap,
-        int(ry + (text_h - switch_h) // 2),
+        inner.right - switch_w,
+        inner.centery - switch_h // 2,
         switch_w,
         switch_h,
     )
@@ -2144,7 +2184,7 @@ def _draw_settings_rows(
 ) -> int:
     body_font = _display_font()
     row_y = top + theme.s(4) - scroll_offset
-    row_h = body_font.get_height() + theme.s(6)
+    row_h = _row_pitch()
     # Slider rows draw slightly taller than the text pitch and add focus padding;
     # reserve that so the last row can scroll clear of the footer buttons.
     total_h = theme.s(4) + len(rows) * row_h + theme.s(8)
@@ -2213,19 +2253,49 @@ def _draw_settings_rows(
                     surface, line, int(ry), display_focus == i, bool(state())
                 )
                 continue
-            text_w, text_h = body_font.size(line)
-            pad_x = theme.s(10)
-            pad_y = theme.s(3)
-            # Hug the label — full-circle width looked like a weird tall bar.
-            rect = pygame.Rect(
-                theme.CENTER_X - text_w // 2 - pad_x,
-                ry - pad_y,
-                text_w + pad_x * 2,
-                text_h + pad_y * 2,
+            inner = _draw_card(surface, int(ry), focused=display_focus == i)
+            text_h = body_font.get_height()
+            ty = inner.centery - text_h // 2
+            if " › " not in line and ": " in line and not line.endswith(":"):
+                # "Label: value" rows read as label left, value right.
+                lab, val = line.split(": ", 1)
+                surface.blit(
+                    body_font.render(lab, True, theme.LABEL), (inner.left, ty))
+                val_img = body_font.render(
+                    draw.fit_text(
+                        val, body_font,
+                        inner.width - body_font.size(lab)[0] - theme.s(12)),
+                    True, theme.MUTED)
+                surface.blit(
+                    val_img, (inner.right - val_img.get_width(), ty))
+                continue
+            if " › " in line:
+                # Picker rows: label left, value + chevron right.
+                lab, val = line.split(" › ", 1)
+                surface.blit(
+                    body_font.render(lab, True, theme.LABEL), (inner.left, ty))
+                chev = body_font.render("›", True, theme.HINT)
+                val_img = body_font.render(
+                    draw.fit_text(
+                        val, body_font,
+                        inner.width - body_font.size(lab)[0]
+                        - chev.get_width() - theme.s(18),
+                    ),
+                    True, theme.MUTED,
+                )
+                vx = inner.right - chev.get_width()
+                surface.blit(chev, (vx, ty))
+                surface.blit(
+                    val_img, (vx - theme.s(6) - val_img.get_width(), ty))
+                continue
+            surface.blit(
+                body_font.render(
+                    draw.fit_text(line, body_font, inner.width),
+                    True, theme.LABEL,
+                ),
+                (inner.left, ty),
             )
-            if i == display_focus:
-                pygame.draw.rect(surface, theme.GRID, rect, max(1, theme.s(1)))
-            draw.draw_center_line(surface, line, int(ry), body_font, theme.MUTED)
+            continue
     finally:
         surface.set_clip(clip_prev)
     return max_scroll
@@ -2251,21 +2321,14 @@ def _draw_brightness_slider_row(surface, ry: int, focused: bool) -> None:
     pct = settings.brightness_percent()
     lo = settings.BRIGHTNESS_MIN_PERCENT
     hi = settings.BRIGHTNESS_MAX_PERCENT
-    block_w = label_w + gap + track_w + gap + value_w
-    left_x = theme.CENTER_X - block_w // 2
+    inner = _card_inner_row(ry)
+    left_x = inner.left
+    track_w = inner.width - label_w - value_w - 2 * gap
     track_x = left_x + label_w + gap
     text_h = body_font.get_height()
     row_h = max(slider_h, text_h + theme.s(6))
-    if focused:
-        pad = theme.s(4)
-        focus = pygame.Rect(
-            left_x - pad,
-            ry - pad,
-            block_w + pad * 2,
-            row_h + pad,
-        )
-        pygame.draw.rect(surface, theme.GRID, focus, max(1, theme.s(1)))
-    label = body_font.render("Brightness", True, theme.MUTED)
+    _draw_card(surface, ry, focused=focused)
+    label = body_font.render("Brightness", True, theme.LABEL)
     surface.blit(label, (left_x, int(ry + (row_h - text_h) // 2)))
     track_cy = int(ry + row_h // 2)
     track_rect = pygame.Rect(track_x, track_cy - max(2, theme.s(2)), track_w, max(4, theme.s(4)))
@@ -2296,20 +2359,13 @@ def _draw_hud_opacity_slider_row(surface, ry: int, focused: bool) -> None:
     pct = settings.radar_hud_opacity()
     lo = settings.RADAR_HUD_OPACITY_MIN
     hi = settings.RADAR_HUD_OPACITY_MAX
-    block_w = label_w + gap + track_w + gap + value_w
-    left_x = theme.CENTER_X - block_w // 2
+    inner = _card_inner_row(ry)
+    left_x = inner.left
+    track_w = inner.width - label_w - value_w - 2 * gap
     track_x = left_x + label_w + gap
     text_h = body_font.get_height()
     row_h = max(slider_h, text_h + theme.s(6))
-    if focused:
-        pad = theme.s(4)
-        focus = pygame.Rect(
-            left_x - pad,
-            ry - pad,
-            block_w + pad * 2,
-            row_h + pad,
-        )
-        pygame.draw.rect(surface, theme.GRID, focus, max(1, theme.s(1)))
+    _draw_card(surface, ry, focused=focused)
     label = body_font.render("HUD Opacity", True, theme.MUTED)
     surface.blit(label, (left_x, int(ry + (row_h - text_h) // 2)))
     track_cy = int(ry + row_h // 2)
@@ -2342,8 +2398,8 @@ def _draw_hud_volume_slider_row(
         return
     label_text, getter, _setter = meta
     body_font = _display_font()
-    track_w, _slider_h, _label_w, value_w = _chime_volume_slider_metrics()
-    switch_x, label_x, track_x, value_x, row_h = _hud_volume_row_columns()
+    _tw, _slider_h, _label_w, value_w = _chime_volume_slider_metrics()
+    switch_x, label_x, track_x, value_x, track_w, row_h = _hud_volume_row_columns(ry)
     pct = int(getter())
     lo = settings.SFX_VOLUME_MIN
     hi = settings.SFX_VOLUME_MAX
@@ -2352,17 +2408,9 @@ def _draw_hud_volume_slider_row(
         hi = settings.HOURLY_CHIME_VOLUME_MAX
     enabled = hud_sound_enabled(action)
     text_h = body_font.get_height()
-    if focused:
-        pad = theme.s(4)
-        focus = pygame.Rect(
-            switch_x - pad,
-            ry - pad,
-            (value_x + value_w) - switch_x + pad * 2,
-            row_h + pad,
-        )
-        pygame.draw.rect(surface, theme.GRID, focus, max(1, theme.s(1)))
+    _draw_card(surface, ry, focused=focused)
     draw.draw_toggle_switch(surface, _hud_switch_rect(action, ry), enabled)
-    label = body_font.render(label_text, True, theme.MUTED if enabled else theme.HINT)
+    label = body_font.render(label_text, True, theme.LABEL if enabled else theme.HINT)
     surface.blit(label, (label_x, int(ry + (row_h - text_h) // 2)))
     track_cy = int(ry + row_h // 2)
     track_rect = pygame.Rect(track_x, track_cy - max(2, theme.s(2)), track_w, max(4, theme.s(4)))
@@ -2399,20 +2447,13 @@ def _draw_vfr_opacity_slider_row(surface, ry: int, focused: bool) -> None:
     pct = settings.vfr_map_opacity()
     lo = settings.VFR_OPACITY_MIN_PERCENT
     hi = settings.VFR_OPACITY_MAX_PERCENT
-    block_w = label_w + gap + track_w + gap + value_w
-    left_x = theme.CENTER_X - block_w // 2
+    inner = _card_inner_row(ry)
+    left_x = inner.left
+    track_w = inner.width - label_w - value_w - 2 * gap
     track_x = left_x + label_w + gap
     text_h = body_font.get_height()
     row_h = max(slider_h, text_h + theme.s(6))
-    if focused:
-        pad = theme.s(4)
-        focus = pygame.Rect(
-            left_x - pad,
-            ry - pad,
-            block_w + pad * 2,
-            row_h + pad,
-        )
-        pygame.draw.rect(surface, theme.GRID, focus, max(1, theme.s(1)))
+    _draw_card(surface, ry, focused=focused)
     label = body_font.render("VFR opacity", True, theme.MUTED)
     surface.blit(label, (left_x, int(ry + (row_h - text_h) // 2)))
     track_cy = int(ry + row_h // 2)
@@ -2495,26 +2536,50 @@ def draw_info(
             ]
 
         lines = _main_lines(sys_lines)
-        # Compact CPU+Temp onto one line only when the full list won't fit.
-        if len(lines) * line_pitch > avail:
-            try:
-                from utilities.system_stats import format_lines as _system_stat_lines
-
-                sys_lines = _system_stat_lines(compact=True)
-            except Exception:
-                sys_lines = ["CPU: —   Temp: —", "RAM: —"]
-            lines = _main_lines(sys_lines)
-        max_scroll = nav.draw_lines_scrolled(
-            surface,
-            lines,
-            detail_font,
-            theme.MUTED,
-            scroll_offset,
-            start_y=body_top,
-            top=body_top,
-            bottom=bottom,
-            gap=gap,
+        # Diagnostics as compact label/value cards (denser pitch than the
+        # interactive pages — these rows are read, not tapped).
+        card_pitch = detail_font.get_height() + theme.s(9)
+        card_h = card_pitch - theme.s(3)
+        total_h = theme.s(4) + len(lines) * card_pitch + theme.s(8)
+        max_scroll = max(0, total_h - (bottom - body_top))
+        clip_prev = surface.get_clip()
+        surface.set_clip(
+            pygame.Rect(0, int(top), surface.get_width(), max(0, int(bottom - top)))
         )
+        try:
+            ry = body_top - scroll_offset
+            for line in lines:
+                if ry + card_h >= top and ry <= bottom:
+                    rect = _card_rect(int(ry), card_h)
+                    pygame.draw.rect(
+                        surface, _CARD_FILL, rect, border_radius=theme.s(8))
+                    pygame.draw.rect(
+                        surface, _CARD_BORDER, rect, width=1,
+                        border_radius=theme.s(8))
+                    inner = rect.inflate(-theme.s(22), 0)
+                    ty = inner.centery - detail_font.get_height() // 2
+                    if ": " in line:
+                        lab, val = line.split(": ", 1)
+                        surface.blit(
+                            detail_font.render(lab, True, theme.LABEL),
+                            (inner.left, ty))
+                        val_img = detail_font.render(
+                            draw.fit_text(
+                                val, detail_font,
+                                inner.width - detail_font.size(lab)[0] - theme.s(10),
+                            ),
+                            True, theme.MUTED)
+                        surface.blit(
+                            val_img, (inner.right - val_img.get_width(), ty))
+                    else:
+                        surface.blit(
+                            detail_font.render(
+                                draw.fit_text(line, detail_font, inner.width),
+                                True, theme.MUTED),
+                            (inner.left, ty))
+                ry += card_pitch
+        finally:
+            surface.set_clip(clip_prev)
 
     elif page == PAGE_DISPLAY:
         max_scroll = _draw_settings_rows(
@@ -2599,8 +2664,9 @@ def draw_info(
         text_h = body_font.get_height()
         channel_colors = ((220, 64, 64), (64, 180, 64), (64, 120, 220))
         channel_labels = ("R", "G", "B")
-        block_w_s = label_w + slider_gap + track_w + slider_gap + value_w
-        left_x = theme.CENTER_X - block_w_s // 2
+        inner_cols = _card_inner_row(theme.CENTER_Y)
+        left_x = inner_cols.left
+        track_w = inner_cols.width - label_w - value_w - 2 * slider_gap
         track_x = left_x + label_w + slider_gap
 
         section_y = top + top_pad - scroll_offset
