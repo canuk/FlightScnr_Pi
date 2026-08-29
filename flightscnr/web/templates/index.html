@@ -145,6 +145,22 @@
         .btn-sm{padding:.4rem .65rem;font-size:.8rem}
         .system-card .body{padding-top:.75rem}
         .hidden{display:none}
+        .search-wrap{position:relative;margin:0 0 1rem}
+        .search-wrap input{width:100%;padding:.6rem .8rem;background:var(--field);
+        border:1px solid var(--fline);border-radius:10px;color:var(--text);font-size:.95rem}
+        .search-wrap input:focus{outline:none;border-color:var(--accent)}
+        .search-results{position:absolute;left:0;right:0;top:calc(100% + .3rem);
+        background:var(--card2);border:1px solid var(--line);border-radius:10px;z-index:50;
+        max-height:16rem;overflow:auto;box-shadow:0 8px 24px rgba(0,0,0,.5)}
+        .search-results button{display:block;width:100%;text-align:left;background:none;border:0;
+        border-bottom:1px solid var(--line);color:var(--text);padding:.55rem .8rem;cursor:pointer;font-size:.88rem}
+        .search-results button:last-child{border-bottom:0}
+        .search-results button:hover,.search-results button.sel{background:var(--card)}
+        .search-results .sec{display:block;color:var(--muted);font-size:.72rem;margin-top:.1rem}
+        .search-empty{padding:.55rem .8rem;color:var(--muted);font-size:.85rem}
+        .search-hit{animation:searchflash 2s ease-out;border-radius:6px}
+        @keyframes searchflash{0%,55%{background:rgba(34,194,76,.28);box-shadow:0 0 0 2px var(--accent2)}
+        100%{background:transparent;box-shadow:none}}
     </style>
 </head>
 <body>
@@ -154,6 +170,11 @@
         <h1>FlightScnrPi</h1>
     </div>
     <p class="subtitle">Portal settings for radar, local ADS-B, display, alerts, tracking, and API keys.</p>
+
+    <div class="search-wrap">
+        <input id="setting_search" type="search" placeholder="Search settings…" autocomplete="off">
+        <div id="setting_search_results" class="search-results hidden"></div>
+    </div>
 
     <details class="card">
         <summary><span class="ico">&#9678;</span>Radar<span class="sum">center, range, units</span><span class="chev">&#9656;</span></summary>
@@ -3538,6 +3559,87 @@ document.addEventListener("DOMContentLoaded", () => {
             if (r.ok) { input.value = ""; loadLofiTracks(); }
         } catch (_) { if (msg) msg.textContent = "Upload failed."; }
     });
+
+    // --- Settings search: keyword match on labels, jump + flash ---
+    (function () {
+        const inp = $("setting_search"), box = $("setting_search_results");
+        if (!inp || !box) return;
+        let index = null;
+        let current = [];
+        function sectionTitle(det) {
+            const sum = det.querySelector(":scope > summary");
+            if (!sum) return "";
+            let t = "";
+            for (const n of sum.childNodes) if (n.nodeType === 3) t += n.textContent;
+            return t.replace(/\s+/g, " ").trim();
+        }
+        function buildIndex() {
+            index = [];
+            document.querySelectorAll("details.card").forEach((det) => {
+                const sec = sectionTitle(det) || "Settings";
+                const sum = det.querySelector(":scope > summary");
+                const sumHint = sum && sum.querySelector(".sum") ? sum.querySelector(".sum").textContent : "";
+                if (sum) index.push({
+                    text: (sec + " " + sumHint).toLowerCase(),
+                    label: sec, sec: "Section", el: sum,
+                });
+                det.querySelectorAll("label").forEach((lab) => {
+                    const t = lab.textContent.replace(/\s+/g, " ").trim();
+                    if (t) index.push({
+                        text: (t + " " + sec).toLowerCase(),
+                        label: t, sec, el: lab,
+                    });
+                });
+            });
+        }
+        function go(entry) {
+            box.classList.add("hidden");
+            inp.blur();
+            for (let n = entry.el; n; n = n.parentElement)
+                if (n.tagName === "DETAILS") n.open = true;
+            entry.el.scrollIntoView({ behavior: "smooth", block: "center" });
+            entry.el.classList.remove("search-hit");
+            void entry.el.offsetWidth;
+            entry.el.classList.add("search-hit");
+            setTimeout(() => entry.el.classList.remove("search-hit"), 2100);
+        }
+        function render(q) {
+            if (index === null) buildIndex();
+            const words = q.toLowerCase().split(/\s+/).filter(Boolean);
+            if (!words.length) { box.classList.add("hidden"); current = []; return; }
+            current = index.filter((e) => words.every((w) => e.text.includes(w))).slice(0, 12);
+            box.innerHTML = "";
+            if (!current.length) {
+                const d = document.createElement("div");
+                d.className = "search-empty";
+                d.textContent = "No settings match";
+                box.appendChild(d);
+            } else current.forEach((e, i) => {
+                const b = document.createElement("button");
+                b.type = "button";
+                const name = document.createElement("span");
+                name.textContent = e.label;
+                const sec = document.createElement("span");
+                sec.className = "sec";
+                sec.textContent = e.sec;
+                b.appendChild(name);
+                b.appendChild(sec);
+                if (i === 0) b.classList.add("sel");
+                b.addEventListener("mousedown", (ev) => { ev.preventDefault(); go(e); });
+                box.appendChild(b);
+            });
+            box.classList.remove("hidden");
+        }
+        inp.addEventListener("input", () => render(inp.value));
+        inp.addEventListener("keydown", (ev) => {
+            if (ev.key === "Enter" && current.length) { ev.preventDefault(); go(current[0]); }
+            else if (ev.key === "Escape") { box.classList.add("hidden"); inp.blur(); }
+        });
+        inp.addEventListener("focus", () => { if (inp.value.trim()) render(inp.value); });
+        document.addEventListener("click", (ev) => {
+            if (!ev.target.closest(".search-wrap")) box.classList.add("hidden");
+        });
+    })();
 </script>
 </body>
 </html>
