@@ -3264,12 +3264,15 @@ class RoundTouchDisplay:
                     self.input.consume_scroll_drag()
                     return
         if self.screen == SCREEN_SETTINGS and self.settings_page == info.PAGE_ATC:
-            if self._atc_volume_slider_active:
+            if self._atc_volume_slider_active or self._lofi_volume_slider_active:
                 self.input.consume_scroll_drag()
                 return
             if self.input.is_dragging():
                 pos = self.input.drag_pos()
-                if pos and info.atc_volume_slider_at(pos[0], pos[1], self._scroll.offset):
+                if pos and (
+                    info.atc_volume_slider_at(pos[0], pos[1], self._scroll.offset)
+                    or info.lofi_volume_slider_at(pos[0], pos[1], self._scroll.offset)
+                ):
                     self.input.consume_scroll_drag()
                     return
         if self.screen in (
