@@ -186,22 +186,19 @@ def draw(surface: pygame.Surface) -> pygame.Rect | None:
     cx, cy = _center
     r_hole, r_mid, r_out = _r_hole(), _r_mid(), _r_out()
 
-    # White readout band (annulus) — stamped arc for smooth edges.
+    # Both annuli drawn as clean circle strokes on one alpha overlay.
     band_r = (r_hole + r_mid) // 2
-    arc_ui.draw_arc_bar(
-        surface, cx=cx, cy=cy, r=band_r, a0=0.0, a1=2 * math.pi,
-        width=r_mid - r_hole, color_rgba=_BAND_WHITE,
-    )
-
-    # Dark wedge ring with hairline dividers.
     n = len(_entries)
     step = 2 * math.pi / n
     wedge_r = (r_mid + r_out) // 2
     start = -math.pi / 2
-    arc_ui.draw_arc_bar(
-        surface, cx=cx, cy=cy, r=wedge_r, a0=0.0, a1=2 * math.pi,
-        width=r_out - r_mid, color_rgba=_BAND_DARK,
-    )
+    pad = theme.s(4)
+    side = 2 * (r_out + pad)
+    rings = pygame.Surface((side, side), pygame.SRCALPHA)
+    rc = side // 2
+    pygame.draw.circle(rings, _BAND_WHITE, (rc, rc), r_mid, r_mid - r_hole)
+    pygame.draw.circle(rings, _BAND_DARK, (rc, rc), r_out, r_out - r_mid)
+    surface.blit(rings, rings.get_rect(center=(cx, cy)))
     for i in range(n):
         a = start + i * step
         x0 = cx + int(round(r_mid * math.cos(a)))
