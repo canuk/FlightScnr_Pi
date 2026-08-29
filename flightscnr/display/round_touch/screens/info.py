@@ -2768,6 +2768,8 @@ def draw_info(
         track_w = inner_cols.width - label_w - value_w - 2 * slider_gap
         track_x = left_x + label_w + slider_gap
 
+        clip_prev = surface.get_clip()
+        surface.set_clip(pygame.Rect(0, int(top), theme.SIZE, int(bottom - top)))
         section_y = top + top_pad - scroll_offset
         for group in _RGB_GROUP_ORDER:
             rgb = group_rgbs[group]
@@ -2879,6 +2881,14 @@ def draw_info(
                     )
 
             section_y = section_y + _theme_group_h(group) + section_gap
+        surface.set_clip(clip_prev)
+        _blit_edge_fades(
+            surface,
+            int(top),
+            int(bottom),
+            show_top=scroll_offset > 0,
+            show_bottom=scroll_offset < max_scroll,
+        )
 
     elif page == PAGE_SYSTEM:
         max_scroll = _draw_system_page(surface, top, bottom)
