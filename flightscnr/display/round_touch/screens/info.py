@@ -1516,6 +1516,11 @@ def theme_row_at(x: int, y: int, scroll_offset: int = 0) -> int | None:
     return None
 
 
+def _snap5(value: float, lo: int = 0, hi: int = 100) -> int:
+    """Volume sliders land on 5% detents — easier to hit a repeatable level."""
+    return max(lo, min(hi, int(round(value / 5.0)) * 5))
+
+
 def _display_font():
     """Match flight-detail body size so more Display rows fit the round screen."""
     return draw.load_font(theme.s(14))
@@ -2012,7 +2017,7 @@ def hud_volume_slider_value_at(
         hi = settings.HOURLY_CHIME_VOLUME_MAX
     t = (x - track_x) / max(1, track_w)
     span = hi - lo
-    return max(lo, min(hi, int(round(lo + t * span))))
+    return _snap5(lo + t * span, lo, hi)
 
 
 def chime_volume_slider_value_at(x: int, scroll_offset: int = 0) -> int | None:
@@ -2151,7 +2156,7 @@ def atc_volume_slider_value_at(x: int, scroll_offset: int = 0) -> int | None:
     _, track_x, track_w = geom
     t = (x - track_x) / max(1, track_w)
     hi = settings.ATC_VOLUME_MAX
-    return max(0, min(hi, int(round(t * hi))))
+    return _snap5(t * hi, 0, hi)
 
 
 def lofi_volume_row_index() -> int:
@@ -2205,7 +2210,7 @@ def lofi_volume_slider_value_at(x: int, scroll_offset: int = 0) -> int | None:
         return None
     _, track_x, track_w = geom
     t = (x - track_x) / max(1, track_w)
-    return max(0, min(100, int(round(t * 100))))
+    return _snap5(t * 100)
 
 
 def quiet_dim_row_index() -> int:
@@ -2281,7 +2286,7 @@ def quiet_dim_slider_value_at(x: int, scroll_offset: int = 0) -> int | None:
         return None
     _, track_x, track_w = geom
     t = (x - track_x) / max(1, track_w)
-    return max(0, min(100, int(round(t * 100))))
+    return _snap5(t * 100)
 
 
 def _draw_quiet_dim_slider_row(surface, ry: int, focused: bool) -> None:
@@ -2298,41 +2303,26 @@ def _draw_quiet_dim_slider_row(surface, ry: int, focused: bool) -> None:
     text_h = body_font.get_height()
     row_h = _row_pitch() - theme.s(5)
     _draw_card(surface, ry, focused=focused)
-    # Screen on/off toggle art: the colored radar icon while the screen
-    # stays on at the dim level; a slashed dark circle once it is off.
+    # Screen on/off toggle art: a lit (white-filled) circle while the
+    # screen stays on at the dim level; a dark slashed circle once off.
     off_active = enabled and pct == 0
     lw = max(2, theme.s(2))
+    ring = (theme.SWEEP if enabled else theme.HINT)
+    r_icon = icon.width // 2 - theme.s(1)
     if off_active:
-        icon_color = theme.SWEEP if enabled else theme.HINT
-        r_icon = icon.width // 2 - theme.s(1)
         pygame.draw.circle(surface, (6, 8, 6), icon.center, r_icon)
-        pygame.draw.circle(surface, icon_color, icon.center, r_icon, lw)
+        pygame.draw.circle(surface, ring, icon.center, r_icon, lw)
         off = int(r_icon * 0.7071)
         pygame.draw.line(
-            surface, icon_color,
+            surface, ring,
             (icon.centerx - off, icon.centery + off),
             (icon.centerx + off, icon.centery - off),
             lw,
         )
     else:
-        radar_img = None
-        try:
-            from display.round_touch import buttons
-
-            radar_img = buttons.load_button_surface(
-                "radar", icon.width, icon.height
-            )
-        except Exception:
-            radar_img = None
-        if radar_img is not None:
-            if not enabled:
-                radar_img = radar_img.copy()
-                radar_img.set_alpha(110)
-            surface.blit(radar_img, radar_img.get_rect(center=icon.center))
-        else:
-            icon_color = theme.MUTED if enabled else theme.HINT
-            r_icon = icon.width // 2 - theme.s(1)
-            pygame.draw.circle(surface, icon_color, icon.center, r_icon, lw)
+        fill = (255, 255, 255) if enabled else (150, 165, 180)
+        pygame.draw.circle(surface, fill, icon.center, r_icon - theme.s(2))
+        pygame.draw.circle(surface, ring, icon.center, r_icon, lw)
     label = body_font.render(
         "Dim", True, theme.LABEL if enabled else theme.HINT
     )
