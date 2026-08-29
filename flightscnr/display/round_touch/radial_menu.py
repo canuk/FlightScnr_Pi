@@ -48,15 +48,15 @@ _last_rect: pygame.Rect | None = None
 
 
 def _r_hole() -> int:
-    return theme.s(26)
+    return theme.s(22)
 
 
 def _r_mid() -> int:
-    return theme.s(52)
+    return theme.s(42)
 
 
 def _r_out() -> int:
-    return theme.s(96)
+    return theme.s(76)
 
 
 def _reset_for_tests() -> None:
