@@ -68,7 +68,7 @@ def _draw_follow_button(surface, flight) -> None:
     rect = pygame.Rect(0, 0, label.get_width() + 2 * pad_x, label.get_height() + 2 * pad_y)
     rect.center = (
         theme.CENTER_X,
-        nav.content_bottom_y() - rect.height // 2 - theme.s(2),
+        nav.content_bottom_y() - rect.height // 2 + theme.s(4),
     )
     pygame.draw.rect(surface, (24, 27, 31), rect, border_radius=rect.height // 2)
     pygame.draw.rect(surface, theme.GRID, rect, width=1, border_radius=rect.height // 2)
