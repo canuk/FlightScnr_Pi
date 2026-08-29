@@ -161,13 +161,11 @@ class TestQuietDimRows:
         assert settings.quiet_dim_restore() == 1
         settings.set_quiet_dim_restore(20)
 
-    def test_toggle_row_is_tappable(self):
+    def test_toggle_row_switch_is_tappable(self):
         idx = info.ATC_QUIET_ACTIONS.index("quiet_dim")
         row_y, row_h, _ = info._display_layout(info.PAGE_ATC_QUIET, 0)
-        from display.round_touch import theme
-
         ry = row_y + idx * row_h
-        card = info._card_rect(int(ry), row_h - theme.s(5))
-        if card.centery <= info.nav.content_bottom_y():
-            hit = info.display_row_at(card.centerx, card.centery, info.PAGE_ATC_QUIET, 0)
-            assert hit == idx
+        scroll = max(0, int(ry + row_h - info.nav.content_bottom_y()))
+        sw = info._toggle_switch_rect(int(ry - scroll))
+        hit = info.display_row_at(sw.centerx, sw.centery, info.PAGE_ATC_QUIET, scroll)
+        assert hit == idx
