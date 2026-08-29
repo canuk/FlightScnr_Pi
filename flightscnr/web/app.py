@@ -888,6 +888,10 @@ def display_json():
             "military_sfx_volume": settings.military_sfx_volume(),
             "earthquake_voice_enabled": settings.earthquake_voice_enabled(),
             "earthquake_voice_volume": settings.earthquake_voice_volume(),
+            "lofi_enabled": settings.lofi_enabled(),
+            "lofi_volume": settings.lofi_volume(),
+            "lofi_controls_enabled": settings.lofi_controls_enabled(),
+            "lofi_title_scroll": settings.lofi_title_scroll(),
         }
     )
 
@@ -971,6 +975,17 @@ def display_save():
             settings.set_earthquake_voice_volume(int(data.get("earthquake_voice_volume")))
         except (TypeError, ValueError):
             return jsonify({"message": "earthquake_voice_volume must be a number"}), 400
+    if "lofi_enabled" in data:
+        settings.set_lofi_enabled(bool(data.get("lofi_enabled")))
+    if "lofi_volume" in data:
+        try:
+            settings.set_lofi_volume(int(data.get("lofi_volume")))
+        except (TypeError, ValueError):
+            return jsonify({"message": "lofi_volume must be a number"}), 400
+    if "lofi_controls_enabled" in data:
+        settings.set_lofi_controls_enabled(bool(data.get("lofi_controls_enabled")))
+    if "lofi_title_scroll" in data:
+        settings.set_lofi_title_scroll(bool(data.get("lofi_title_scroll")))
     return jsonify(
         {
             "ok": True,
@@ -998,9 +1013,221 @@ def display_save():
             "military_sfx_volume": settings.military_sfx_volume(),
             "earthquake_voice_enabled": settings.earthquake_voice_enabled(),
             "earthquake_voice_volume": settings.earthquake_voice_volume(),
+            "lofi_enabled": settings.lofi_enabled(),
+            "lofi_volume": settings.lofi_volume(),
+            "lofi_controls_enabled": settings.lofi_controls_enabled(),
+            "lofi_title_scroll": settings.lofi_title_scroll(),
             "message": "Display settings saved.",
         }
     )
+
+
+@app.get("/lofi/tracks")
+def lofi_tracks():
+    from display.round_touch import settings
+    from utilities import lofi_audio
+
+    bundled_set: set[str] = set()
+    for folder in (lofi_audio.BUNDLED_DIR, lofi_audio.PACK_DIR):
+        try:
+            bundled_set.update(
+                n for n in os.listdir(folder) if n.lower().endswith(".mp3")
+            )
+        except OSError:
+            continue
+    bundled = sorted(bundled_set)
+    return jsonify({
+        "bundled": bundled,
+        "user": lofi_audio.user_tracks(),
+        "disabled": settings.lofi_disabled_tracks(),
+    })
+
+
+@app.get("/lofi/stream/<path:name>")
+def lofi_stream(name):
+    from utilities import lofi_audio
+
+    path = lofi_audio.track_path(name)
+    if path is None:
+        return jsonify({"message": "Unknown track."}), 404
+    from flask import send_file
+
+    return send_file(path, mimetype="audio/mpeg", conditional=True)
+
+
+# Starter-pack download — MP3s live on a GitHub Release, not in git, so the
+# OTA `git pull` stays light. Catalog: assets/lofi/pack.json; override URL
+# with LOFI_PACK_URL in the environment.
+_pack_progress = {"state": "idle", "received": 0, "total": 0, "message": ""}
+
+
+def _lofi_pack_url() -> str:
+    from utilities import lofi_audio
+
+    return lofi_audio.default_pack_url()
+
+
+def _pack_tmp_path() -> str:
+    from utilities import lofi_audio
+
+    return lofi_audio.PACK_DIR + ".zip.part"
+
+
+def _pack_download_worker(url: str) -> None:
+    import requests
+
+    from utilities import lofi_audio
+
+    tmp = _pack_tmp_path()
+    lofi_audio.clear_pack_install()
+    _pack_progress.update(
+        {"state": "downloading", "received": 0, "total": 0, "message": ""})
+    try:
+        os.makedirs(os.path.dirname(tmp), exist_ok=True)
+        with requests.get(url, stream=True, timeout=60,
+                          allow_redirects=True) as r:
+            r.raise_for_status()
+            _pack_progress["total"] = int(r.headers.get("Content-Length") or 0)
+            with open(tmp, "wb") as fh:
+                for chunk in r.iter_content(chunk_size=1024 * 1024):
+                    if chunk:
+                        fh.write(chunk)
+                        _pack_progress["received"] += len(chunk)
+        _pack_progress["state"] = "installing"
+        count = lofi_audio.install_pack_zip(tmp)
+        if count > 0:
+            lofi_audio.mark_pack_installed(track_count=count)
+            _pack_progress.update(
+                {"state": "done", "message": f"Installed {count} tracks."})
+        else:
+            _pack_progress.update(
+                {"state": "error", "message": "Pack contained no tracks."})
+    except Exception as exc:
+        _pack_progress.update({"state": "error", "message": str(exc)})
+    finally:
+        try:
+            if os.path.exists(tmp):
+                os.unlink(tmp)
+        except OSError:
+            pass
+
+
+@app.get("/lofi/pack/status")
+def lofi_pack_status():
+    from utilities import lofi_audio
+
+    pack = lofi_audio.default_pack() or {}
+    count = lofi_audio.pack_track_count()
+    return jsonify({
+        "installed": lofi_audio.is_pack_installed(),
+        "count": count,
+        "pack_id": pack.get("id"),
+        "label": pack.get("label"),
+        "description": pack.get("description"),
+        "size_mb": pack.get("size_mb"),
+        "tracks": pack.get("tracks"),
+        "url": lofi_audio.default_pack_url(),
+        "state": _pack_progress["state"],
+        "received": _pack_progress["received"],
+        "total": _pack_progress["total"],
+        "message": _pack_progress["message"],
+    })
+
+
+@app.post("/lofi/pack/download")
+def lofi_pack_download():
+    import threading
+
+    if _pack_progress["state"] in ("downloading", "installing"):
+        return jsonify({"message": "Download already running."}), 409
+    url = _lofi_pack_url()
+    threading.Thread(
+        target=_pack_download_worker, args=(url,), daemon=True
+    ).start()
+    return jsonify({"ok": True, "url": url})
+
+
+@app.get("/lofi/cover/<path:name>")
+def lofi_cover(name):
+    """Embedded album art (ID3 APIC) for a playlist track."""
+    from utilities import lofi_audio
+
+    path = lofi_audio.track_path(name)
+    if path is None:
+        return jsonify({"message": "Unknown track."}), 404
+    try:
+        from mutagen.id3 import ID3
+
+        pics = ID3(path).getall("APIC")
+    except Exception:
+        pics = []
+    if not pics:
+        return jsonify({"message": "No cover art."}), 404
+    pic = pics[0]
+    # The ID3 mime field is attacker-controlled (uploads); never echo it.
+    allowed = {
+        "image/png": "image/png",
+        "image/jpeg": "image/jpeg",
+        "image/jpg": "image/jpeg",
+        "image/gif": "image/gif",
+        "image/webp": "image/webp",
+    }
+    mime = allowed.get((pic.mime or "").lower())
+    if mime is None:
+        return jsonify({"message": "Unsupported cover type."}), 415
+    resp = app.response_class(pic.data, mimetype=mime)
+    resp.headers["Cache-Control"] = "public, max-age=86400"
+    resp.headers["Content-Disposition"] = "inline; filename=cover"
+    resp.headers["X-Content-Type-Options"] = "nosniff"
+    resp.headers["Content-Security-Policy"] = "default-src 'none'; img-src 'self'"
+    return resp
+
+
+@app.post("/lofi/toggle_disabled")
+def lofi_toggle_disabled():
+    from display.round_touch import settings
+    from utilities import lofi_audio
+
+    data = request.get_json(silent=True) or {}
+    name = lofi_audio.safe_track_name(str(data.get("name") or ""))
+    if name is None:
+        return jsonify({"message": "Bad track name."}), 400
+    disabled = set(settings.lofi_disabled_tracks())
+    if name in disabled:
+        disabled.discard(name)
+    else:
+        disabled.add(name)
+    settings.set_lofi_disabled_tracks(sorted(disabled))
+    return jsonify({"ok": True, "disabled": settings.lofi_disabled_tracks()})
+
+
+@app.post("/lofi/upload")
+def lofi_upload():
+    from utilities import lofi_audio
+
+    file = request.files.get("track")
+    if file is None or not file.filename:
+        return jsonify({"message": "Choose an MP3 file first."}), 400
+    data = file.read()
+    if len(data) > 30 * 1024 * 1024:
+        return jsonify({"message": "MP3 too large (30 MB max)."}), 400
+    path = lofi_audio.save_user_track(file.filename, data)
+    if path is None:
+        return jsonify({"message": "Only .mp3 files are accepted."}), 400
+    return jsonify({"ok": True, "user": lofi_audio.user_tracks(),
+                    "message": f"Added {os.path.basename(path)} to the playlist."})
+
+
+@app.post("/lofi/delete")
+def lofi_delete():
+    from utilities import lofi_audio
+
+    data = request.get_json(silent=True) or {}
+    name = str(data.get("name") or "")
+    if not lofi_audio.delete_user_track(name):
+        return jsonify({"message": "Track not found."}), 404
+    return jsonify({"ok": True, "user": lofi_audio.user_tracks(),
+                    "message": f"Removed {name}."})
 
 
 @app.post("/display/chime-preview")
@@ -1077,11 +1304,26 @@ def display_earthquake_voice_preview():
             settings.set_earthquake_voice_volume(int(data.get("earthquake_voice_volume")))
         except (TypeError, ValueError):
             return jsonify({"message": "earthquake_voice_volume must be a number"}), 400
+    if "lofi_enabled" in data:
+        settings.set_lofi_enabled(bool(data.get("lofi_enabled")))
+    if "lofi_volume" in data:
+        try:
+            settings.set_lofi_volume(int(data.get("lofi_volume")))
+        except (TypeError, ValueError):
+            return jsonify({"message": "lofi_volume must be a number"}), 400
+    if "lofi_controls_enabled" in data:
+        settings.set_lofi_controls_enabled(bool(data.get("lofi_controls_enabled")))
+    if "lofi_title_scroll" in data:
+        settings.set_lofi_title_scroll(bool(data.get("lofi_title_scroll")))
     earthquake_overlay.play_voice_preview()
     return jsonify(
         {
             "ok": True,
             "earthquake_voice_volume": settings.earthquake_voice_volume(),
+            "lofi_enabled": settings.lofi_enabled(),
+            "lofi_volume": settings.lofi_volume(),
+            "lofi_controls_enabled": settings.lofi_controls_enabled(),
+            "lofi_title_scroll": settings.lofi_title_scroll(),
             "message": "Playing earthquake alert preview.",
         }
     )
@@ -1121,6 +1363,7 @@ def radar_json():
             "scale_index": idx,
             "range_value": scale.format_display_value(idx, units),
             "range_presets_mi": list(scale.PRESET_STATUTE_MILES),
+            "range_presets": {u: list(v) for u, v in scale.UNIT_BANDS.items()},
             "min_height_ft": settings.min_height_ft(),
             "max_height_ft": settings.max_height_ft(),
             "theme_rgb": list(settings.theme_rgb()),
@@ -1211,11 +1454,26 @@ def radar_save():
     from display.round_touch import map_bg, rainviewer_overlay, scale, settings
 
     data = request.get_json(silent=True) or {}
+    units_before = settings.distance_units()
     if "unit_preset" in data:
         settings.set_unit_preset(str(data.get("unit_preset") or ""))
     elif "distance_units" in data:
         settings.set_distance_units(data.get("distance_units"))
     units = settings.distance_units()
+    if units != units_before:
+        # Round-number bands are per-unit, so a unit switch moves the real
+        # coverage a few percent — refetch the basemap and overlays.
+        map_bg.request_background()
+        rainviewer_overlay.request_overlay()
+        try:
+            from display.round_touch import earthquake_overlay, wildfire_overlay
+
+            wildfire_overlay.invalidate()
+            wildfire_overlay.request_refresh(force=True)
+            earthquake_overlay.invalidate()
+            earthquake_overlay.request_refresh(force=True)
+        except Exception:
+            pass
     if "range_value" in data:
         raw = str(data.get("range_value", "")).strip()
         try:

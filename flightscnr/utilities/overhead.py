@@ -157,6 +157,8 @@ os.makedirs(DATA_DIR, exist_ok=True)
 LOG_FILE = os.path.join(DATA_DIR, "close.txt")
 LOG_FILE_FARTHEST = os.path.join(DATA_DIR, "farthest.txt")
 TRACKED_FILE = os.path.join(DATA_DIR, "tracked_flight.json")
+# Shown once on the kiosk after auto-clearing a vanished Follow / Tracked flight.
+TRACKING_CLEARED_NOTICE = "Flight no longer available."
 COUNTER_FILE = os.path.join(DATA_DIR, "flight_counter.json")
 MAPS_DIR = os.path.join(DATA_DIR, "maps")
 os.makedirs(MAPS_DIR, exist_ok=True)
@@ -635,6 +637,25 @@ def load_tracked_callsign():
     return _tracked_cache["value"]
 
 
+def set_tracked_callsign(callsign: str) -> None:
+    """Write tracked_flight.json (same file the portal writes) and reset
+    the mtime cache so the change is visible immediately."""
+    cs = (callsign or "").strip().upper()[:12]
+    try:
+        with open(TRACKED_FILE, "w", encoding="utf-8") as f:
+            json.dump({"callsign": cs}, f)
+        try:
+            os.chmod(TRACKED_FILE, 0o666)
+        except OSError:
+            pass
+    except OSError:
+        logging.getLogger("flightscnr").warning(
+            "Could not write tracked flight file", exc_info=True
+        )
+        return
+    _tracked_cache.update({"at": 0.0, "mtime": None, "value": cs})
+
+
 def _load_counter_log() -> dict:
     try:
         with open(COUNTER_FILE, "r", encoding="utf-8") as f:
@@ -863,6 +884,8 @@ class Overhead:
         self._tracked_last_eta = None        # last known estimated arrival (unix ts)
         self._tracked_last_data = None       # last known good tracked data
         self._tracked_schedule_cache = {}    # callsign -> AirLabs schedule result (or None)
+        # One-shot message for the UI after auto-clear (Follow / Tracked popup).
+        self._tracking_cleared_notice: str | None = None
         self._first_flight_logged = False    # log first flight details as JSON
         self._cycle_count = 0               # total grab_data cycles
         self._total_flights_seen = 0        # lifetime flight count
@@ -1672,6 +1695,7 @@ class Overhead:
                             if sched:
                                 self._tracked_schedule_cache[tracked_callsign] = sched
                         if sched:
+                            self._tracked_miss_count = 0
                             sched_cs = tracked_callsign
                             if len(sched_cs) >= 3 and sched_cs[:2] in IATA_TO_ICAO and sched_cs[2:3].isdigit():
                                 icao_pfx = IATA_TO_ICAO.get(sched_cs[:2])
@@ -1718,6 +1742,12 @@ class Overhead:
                                 "dest_lat": dest_coords.get("lat") or 0,
                                 "dest_lon": dest_coords.get("lon") or 0,
                             }
+                        else:
+                            # Never located on FR24 and no schedule — stop
+                            # hammering LiveFeed (esp. Follow bypass_cache).
+                            self._tracked_miss_count += 1
+                            if self._tracked_miss_count >= self._TRACKED_MISS_THRESHOLD:
+                                self._do_auto_wipe()
 
             # Keep schedule cache even after flight goes live — arr_time_utc
             # is used as reality check to prevent premature auto-wipe when
@@ -1798,6 +1828,16 @@ class Overhead:
         self._tracked_last_data = None
         self._tracked_last_callsign = ""
         self._tracked_schedule_cache.clear()
+        with self._lock:
+            self._tracked_data = None
+            self._tracking_cleared_notice = TRACKING_CLEARED_NOTICE
+
+    def take_tracking_cleared_notice(self) -> str | None:
+        """Return and clear the one-shot auto-clear popup message, if any."""
+        with self._lock:
+            notice = self._tracking_cleared_notice
+            self._tracking_cleared_notice = None
+            return notice
 
     def _grab_tracked(self, flight_input, zone_flights=None):
         from utilities.aircraft_alert import looks_like_registration

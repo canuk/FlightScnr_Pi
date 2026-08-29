@@ -49,6 +49,7 @@ from display.round_touch import (
     settings,
     theme,
     touch_debug,
+    lofi_controls,
     video,
     wildfire_overlay,
     earthquake_overlay,
@@ -173,6 +174,11 @@ class RoundTouchDisplay:
         self._last_firms_poll = 0.0
         self._last_quake_poll = 0.0
         self.flight_index = 0
+        # Pending "Follow this Flight" confirmation: {"callsign", "display",
+        # "current"} while the replace-follow popup is up.
+        self._follow_confirm = None
+        # Auto-clear notice after Follow/Tracked loses the flight.
+        self._tracking_cleared_popup = False
         # Stable identity for the open detail page (index alone drifts as traffic changes).
         self._selected_flight_id: str | None = None
         self.fire_index = 0
@@ -271,6 +277,7 @@ class RoundTouchDisplay:
         self._brightness_slider_active = False
         self._vfr_opacity_slider_active = False
         self._atc_volume_slider_active = False
+        self._lofi_volume_slider_active = False
         self._radar_hud_volume_drag = False
         self._radar_hud_layout_drag = False
         self._hud_opacity_slider_active = False
@@ -908,6 +915,14 @@ class RoundTouchDisplay:
                 self.flight_index,
                 self._scroll.offset,
             )
+            if self._follow_confirm is not None:
+                flight_detail.draw_follow_confirm(
+                    self.surface,
+                    self._follow_confirm["display"],
+                    self._follow_confirm["current"],
+                )
+            else:
+                flight_detail.clear_follow_confirm()
         elif self.screen == SCREEN_FIRE:
             self._scroll.max_offset = fire_detail.draw_fire_detail(
                 self.surface,
@@ -987,9 +1002,14 @@ class RoundTouchDisplay:
             else:
                 draw.fill_background(self.surface)
                 tracked.draw_footer(self.surface, None)
-                nav.draw_breadcrumb(
+                nav.draw_curved_breadcrumb(
                     self.surface, ["Radar", "Follow"], with_scrim=True
                 )
+                from utilities.overhead import load_tracked_callsign as _ltc
+
+                pending = _ltc()
+                if pending:
+                    tracked.draw_follow_loading(self.surface, pending)
             self._scroll.max_offset = 0
         self._scroll.clamp()
         remaining = self._timeout_remaining_fraction()
@@ -1003,6 +1023,10 @@ class RoundTouchDisplay:
             self._invalidate_timeout_content_cache()
         # Reboot/shutdown progress sits above all screens (install auto-reboot,
         # System → Reboot, portal X11 switch).
+        if self._tracking_cleared_popup:
+            tracked.draw_tracking_cleared_popup(self.surface)
+        else:
+            tracked.clear_tracking_cleared_popup()
         self._draw_reboot_progress_overlay()
         _t = time.perf_counter()
         if not bezel_applied:
@@ -1151,7 +1175,7 @@ class RoundTouchDisplay:
             if self._follow_photo_open:
                 tracked.draw_follow_photo_popup(self.surface, overlay)
             tracked.draw_footer(self.surface, display_data)
-            nav.draw_breadcrumb(self.surface, trail, with_scrim=True)
+            nav.draw_curved_breadcrumb(self.surface, trail, with_scrim=True)
             return
 
         # Full-panel pygame.transform.rotate of satellite (and large vector)
@@ -1179,7 +1203,7 @@ class RoundTouchDisplay:
         if self._follow_photo_open:
             tracked.draw_follow_photo_popup(self.surface, overlay)
         tracked.draw_footer(self.surface, display_data)
-        nav.draw_breadcrumb(self.surface, trail, with_scrim=True)
+        nav.draw_curved_breadcrumb(self.surface, trail, with_scrim=True)
 
     def _timeout_duration_s(self) -> float | None:
         """Active secondary-screen timeout in seconds, or None if no countdown."""
@@ -1771,6 +1795,15 @@ class RoundTouchDisplay:
             info.invalidate_atc_labels()
         elif action == "volume":
             return
+        elif action == "lofi":
+            settings.toggle_lofi_enabled()
+        elif action == "lofi_volume":
+            return
+        elif action == "lofi_controls":
+            settings.toggle_lofi_controls_enabled()
+            radar.invalidate_frame_layer()
+        elif action == "lofi_title_scroll":
+            settings.toggle_lofi_title_scroll()
         elif action == "quiet":
             settings.set_atc_quiet_hours_enabled(not settings.atc_quiet_hours_enabled())
         elif action == "quiet_start":
@@ -2320,6 +2353,45 @@ class RoundTouchDisplay:
         self.input.consume_scroll_drag()
         return changed
 
+    def _apply_lofi_volume_slider(self, x: int, *, persist: bool = True) -> bool:
+        value = info.lofi_volume_slider_value_at(x, self._scroll.offset)
+        if value is None:
+            return False
+        if value == settings.lofi_volume():
+            self._display_focus = info.lofi_volume_row_index()
+            return False
+        settings.set_lofi_volume(value, persist=persist)
+        self._display_focus = info.lofi_volume_row_index()
+        return True
+
+    def _update_lofi_volume_slider_drag(self) -> bool:
+        if self.screen != SCREEN_SETTINGS or self.settings_page != info.PAGE_ATC:
+            self._lofi_volume_slider_active = False
+            return False
+        if not self.input.is_dragging():
+            if self._lofi_volume_slider_active:
+                self._lofi_volume_slider_active = False
+                settings.set_lofi_volume(settings.lofi_volume(), persist=True)
+                self.input.consume_scroll_drag()
+                return True
+            return False
+        pos = self.input.drag_pos()
+        if pos is None:
+            return False
+        x, y = pos
+        if not self._lofi_volume_slider_active:
+            if not info.lofi_volume_slider_at(x, y, self._scroll.offset):
+                return False
+            self._lofi_volume_slider_active = True
+        elif not info.lofi_volume_slider_drag_band(x, y, self._scroll.offset):
+            self._lofi_volume_slider_active = False
+            settings.set_lofi_volume(settings.lofi_volume(), persist=True)
+            self.input.consume_scroll_drag()
+            return True
+        changed = self._apply_lofi_volume_slider(x, persist=False)
+        self.input.consume_scroll_drag()
+        return changed
+
     def _update_atc_volume_slider_drag(self) -> bool:
         if self.screen != SCREEN_SETTINGS or self.settings_page != info.PAGE_ATC:
             self._atc_volume_slider_active = False
@@ -2816,6 +2888,18 @@ class RoundTouchDisplay:
         # Temporary wake override is only for "turn off display" mode.
         if off_hours.effective_brightness_percent(settings.brightness_percent()) == 0:
             self._off_hours_wake_until = time.time() + OFF_HOURS_TOUCH_WAKE_S
+
+    def _apply_lofi_skip(self, action: str) -> None:
+        """Prev/next pill on the radar: skip the lofi track."""
+        from utilities import lofi_audio
+
+        if action == "next":
+            lofi_audio.next_track()
+        else:
+            lofi_audio.prev_track()
+        self._note_activity()
+        radar.invalidate_frame_layer()
+        self._safe_draw()
 
     def _apply_zoom_button(self, action: str) -> None:
         """Tap on the radar − / + pill: flash it and step the range like pinch."""
@@ -3380,11 +3464,72 @@ class RoundTouchDisplay:
         self.input.consume_scroll_drag()
         return changed
 
+    def _request_follow_current_flight(self) -> None:
+        """Follow the flight on the detail page, confirming a replacement."""
+        from utilities.airline_branding import display_flight_id_for_flight
+        from utilities.overhead import load_tracked_callsign
+
+        ordered = self._ordered_flights()
+        if not ordered:
+            return
+        idx = max(0, min(self.flight_index, len(ordered) - 1))
+        flight = ordered[idx]
+        callsign = str(flight.get("callsign") or "").strip().upper()
+        if not callsign:
+            return
+        current = load_tracked_callsign()
+        if current and current != callsign:
+            self._follow_confirm = {
+                "callsign": callsign,
+                "display": display_flight_id_for_flight(flight) or callsign,
+                "current": current,
+            }
+            self._safe_draw()
+            return
+        self._start_following(callsign)
+
+    def _start_following(self, callsign: str) -> None:
+        from utilities.overhead import set_tracked_callsign
+
+        set_tracked_callsign(callsign)
+        self._open_screen(SCREEN_LIVE)
+        self._safe_draw()
+
+    def _maybe_handle_tracking_cleared(self) -> bool:
+        """Leave Follow/Tracked and show popup when overhead auto-cleared the pin.
+
+        Returns True when a notice was consumed (caller should redraw).
+        """
+        try:
+            notice = self.overhead.take_tracking_cleared_notice()
+        except Exception:
+            return False
+        if not notice:
+            return False
+        try:
+            self.overhead.set_follow_pin_polling(False)
+        except Exception:
+            pass
+        tracked.clear_pinned()
+        self._follow_photo_open = False
+        if self.screen in (SCREEN_LIVE, SCREEN_TRACKED):
+            self._return_to_radar()
+        self._tracking_cleared_popup = True
+        self._note_activity()
+        return True
+
+    def _dismiss_tracking_cleared_popup(self) -> None:
+        self._tracking_cleared_popup = False
+        tracked.clear_tracking_cleared_popup()
+        self._note_activity()
+        self._safe_draw()
+
     def _breadcrumb_tapped(self, x: int, y: int) -> bool:
         """Screen-aware breadcrumb hit: curved band on curved-chrome screens."""
         if self.screen in (
             SCREEN_SETTINGS, SCREEN_DETAILS, SCREEN_FLIGHT, SCREEN_FIRE, SCREEN_QUAKE,
-            SCREEN_CLOCK, SCREEN_COVERAGE,
+            SCREEN_CLOCK, SCREEN_COVERAGE, SCREEN_FORECAST, SCREEN_UPDATE_NOTES,
+            SCREEN_TRACKED,
         ):
             return nav.tap_breadcrumb_curved(x, y)
         return nav.tap_breadcrumb(x, y)
@@ -3439,6 +3584,10 @@ class RoundTouchDisplay:
                 x, y, self._scroll.offset
             ):
                 self._apply_atc_volume_slider(x, persist=True)
+            elif self.settings_page == info.PAGE_ATC and info.lofi_volume_slider_at(
+                x, y, self._scroll.offset
+            ):
+                self._apply_lofi_volume_slider(x, persist=True)
                 return
             if self.settings_page == info.PAGE_ATC:
                 btn = info.atc_action_at(x, y)
@@ -3716,6 +3865,12 @@ class RoundTouchDisplay:
                 self._apply_scroll_delta(delta)
         if tap and not theme.in_visible_circle(tap[0], tap[1]):
             tap = None
+        if tap and self._tracking_cleared_popup:
+            if tracked.tracking_cleared_ok_hit(tap[0], tap[1]):
+                self._dismiss_tracking_cleared_popup()
+            else:
+                self._note_activity()
+            return
         if tap and self._breadcrumb_tapped(tap[0], tap[1]) and self.screen != SCREEN_RADAR:
             if self.screen in (SCREEN_TRACKED, SCREEN_LIVE):
                 self._return_to_radar()
@@ -3781,11 +3936,27 @@ class RoundTouchDisplay:
                             zoom_action := zoom_buttons.hit_button(tap[0], tap[1])
                         ) is not None:
                             self._apply_zoom_button(zoom_action)
+                        elif (
+                            lofi_action := lofi_controls.hit_button(tap[0], tap[1])
+                        ) is not None:
+                            self._apply_lofi_skip(lofi_action)
                         elif self._open_flight_or_fire_at(tap[0], tap[1]):
                             self._safe_draw()
         elif tap and self.screen == SCREEN_FLIGHT:
             # Any tap (content or footer) restarts the idle countdown.
             self._note_activity()
+            if self._follow_confirm is not None:
+                choice = flight_detail.follow_confirm_hit(tap[0], tap[1])
+                pending, self._follow_confirm = self._follow_confirm, None
+                flight_detail.clear_follow_confirm()
+                if choice == "follow":
+                    self._start_following(pending["callsign"])
+                else:
+                    self._safe_draw()
+                return
+            if flight_detail.follow_button_hit(tap[0], tap[1]):
+                self._request_follow_current_flight()
+                return
             self._sync_selected_flight_index()
             ordered = self._ordered_flights()
             action = flight_detail.tap_footer_action(tap[0], tap[1], ordered)
@@ -3879,7 +4050,8 @@ class RoundTouchDisplay:
                 self._safe_draw()
                 return
             action = tracked.tap_footer_action(
-                tap[0], tap[1], self.overhead.tracked_data
+                tap[0], tap[1],
+                tracked.resolve_display_data(self.overhead.tracked_data, self.flights),
             )
             if action == "pin":
                 tracked.toggle_pinned()
@@ -3893,7 +4065,8 @@ class RoundTouchDisplay:
                 self._safe_draw()
         elif tap and self.screen == SCREEN_TRACKED:
             action = tracked.tap_footer_action(
-                tap[0], tap[1], self.overhead.tracked_data
+                tap[0], tap[1],
+                tracked.resolve_display_data(self.overhead.tracked_data, self.flights),
             )
             if action == "pin":
                 tracked.toggle_pinned()
@@ -4490,6 +4663,14 @@ class RoundTouchDisplay:
         and never beat a fire that already wins the fire-vs-flight bias.
         Earthquakes use the same bias as fires; a fire still wins when both hit.
         """
+        from display.round_touch import airport_tile
+
+        if airport_tile.hit(x, y):
+            # Tap on the METAR tile itself dismisses it.
+            airport_tile.dismiss()
+            radar.invalidate_frame_layer()
+            self._note_activity()
+            return True
         flight, flight_d2 = radar.pick_flight_at(self._radar_flights(), x, y, alt_x, alt_y)
         fire, fire_d2 = wildfire_overlay.pick_fire_at(x, y, alt_x, alt_y)
         quake, quake_d2 = earthquake_overlay.pick_quake_at(x, y, alt_x, alt_y)
@@ -4520,11 +4701,20 @@ class RoundTouchDisplay:
             airport_overlay.clear_callout()
             return self._open_picked_flight(flight)
         if airport is not None:
-            airport_overlay.show_callout(airport)
+            from display.round_touch import airport_tile
+
+            airport_tile.open_tile(airport)
             radar.invalidate_frame_layer()
             self._note_activity()
             return True
         airport_overlay.clear_callout()
+        from display.round_touch import airport_tile
+
+        if airport_tile.is_open():
+            airport_tile.dismiss()
+            radar.invalidate_frame_layer()
+            self._note_activity()
+            return True
         return False
 
     def _tick_ais(self):
@@ -4772,6 +4962,7 @@ class RoundTouchDisplay:
                     or self._update_hud_opacity_slider_drag()
                     or self._update_chime_volume_slider_drag()
                     or self._update_vfr_opacity_slider_drag()
+                    or self._update_lofi_volume_slider_drag()
                     or self._update_atc_volume_slider_drag()
                     or self._update_radar_hud_volume_drag()
                 ):
@@ -4841,7 +5032,11 @@ class RoundTouchDisplay:
                 grab_seq = self.overhead.grab_seq
                 if grab_seq != self._last_grab_seq:
                     self._last_grab_seq = grab_seq
-                    if not self._radar_modal_active():
+                    cleared = self._maybe_handle_tracking_cleared()
+                    if cleared:
+                        self._safe_draw()
+                        self._last_static_draw = now
+                    elif not self._radar_modal_active():
                         self._refresh_flights()
                         # Radar already redraws on the sweep cadence — forcing a
                         # draw here stacked on the just-finished grab and read as
@@ -5066,6 +5261,18 @@ class RoundTouchDisplay:
                     if zoom_buttons.tick():
                         radar.invalidate_frame_layer()
                         self._safe_draw()
+                    from display.round_touch import airport_tile
+
+                    if airport_tile.tick():
+                        radar.invalidate_frame_layer()
+                        self._safe_draw()
+                    try:
+                        from utilities import atc_audio, lofi_audio
+
+                        atc_audio.enforce_quiet_hours()
+                        lofi_audio.app_tick()
+                    except Exception:
+                        logger.debug("Audio tick failed", exc_info=True)
                     hourly_chime.tick()
                     self._tick_hourly_weather_refresh()
                     self._tick_manual_weather_refresh()

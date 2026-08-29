@@ -78,6 +78,30 @@ class TestFavouriteCycle(unittest.TestCase):
         idx, _lat, _lon, label = self._cycle()
         self.assertEqual((idx, label), (0, "KSNA"))
 
+    def test_cycle_skips_favourite_that_duplicates_home(self):
+        # Home was set from the first favourite (identical coords) — the
+        # cycle must not visit the same place twice.
+        self.fav._state["home"] = {"lat": 33.68, "lon": -117.87}
+        idx, _lat, _lon, label = self._cycle()
+        self.assertEqual((idx, label), (1, "KLAX"))
+        idx, _lat, _lon, label = self._cycle()
+        self.assertEqual(label, "Home")
+
+    def test_cycle_skips_dup_mid_list(self):
+        self.fav._state["home"] = {"lat": 33.94, "lon": -118.41}  # == KLAX
+        idx, _lat, _lon, label = self._cycle()
+        self.assertEqual((idx, label), (0, "KSNA"))
+        idx, _lat, _lon, label = self._cycle()
+        self.assertEqual(label, "Home")
+
+    def test_all_favourites_dup_home_goes_straight_home(self):
+        self.fav._state["locations"] = [
+            {"id": "a", "name": "KSNA", "icao": "KSNA", "lat": 37.0, "lon": -122.0},
+        ]
+        idx, lat, _lon, label = self._cycle()
+        self.assertEqual(label, "Home")
+        self.assertAlmostEqual(lat, 37.0)
+
     def test_cycle_with_no_favorites_stays_home(self):
         self.fav._state["locations"] = []
         idx, lat, _lon, label = self._cycle()

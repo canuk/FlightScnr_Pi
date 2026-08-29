@@ -76,6 +76,56 @@ def clear_pinned() -> None:
     set_pinned(False)
 
 
+# Auto-clear notice after Follow/Tracked loses the flight (OK dismisses).
+_tracking_cleared_ok_rect = None
+_tracking_cleared_panel_rect = None
+
+
+def draw_tracking_cleared_popup(surface: pygame.Surface) -> None:
+    """Modal: tracking was auto-cleared because the flight vanished."""
+    global _tracking_cleared_ok_rect, _tracking_cleared_panel_rect
+    title_font = draw.load_font(theme.s(15), bold=True)
+    body_font = draw.load_font(theme.s(13))
+    btn_font = draw.load_font(theme.s(13), bold=True)
+    lines = [
+        title_font.render("Tracking cleared", True, theme.MUTED),
+        body_font.render("Flight no longer available.", True, theme.HINT),
+    ]
+    w = max(l.get_width() for l in lines) + theme.s(44)
+    panel = pygame.Rect(0, 0, max(w, theme.s(230)), theme.s(118))
+    panel.center = (theme.CENTER_X, theme.CENTER_Y)
+    pygame.draw.rect(surface, (18, 20, 24), panel, border_radius=theme.s(14))
+    pygame.draw.rect(surface, theme.GRID, panel, width=1, border_radius=theme.s(14))
+    y = panel.top + theme.s(14)
+    for line in lines:
+        surface.blit(line, line.get_rect(midtop=(panel.centerx, y)))
+        y += line.get_height() + theme.s(4)
+
+    label = btn_font.render("OK", True, (240, 244, 248))
+    r = pygame.Rect(0, 0, label.get_width() + theme.s(28), label.get_height() + theme.s(12))
+    r.center = (panel.centerx, panel.bottom - theme.s(24))
+    pygame.draw.rect(surface, (26, 120, 52), r, border_radius=r.height // 2)
+    pygame.draw.rect(surface, theme.GRID, r, width=1, border_radius=r.height // 2)
+    surface.blit(label, label.get_rect(center=r.center))
+    _tracking_cleared_ok_rect = pygame.Rect(r).inflate(theme.s(6), theme.s(6))
+    _tracking_cleared_panel_rect = pygame.Rect(panel)
+
+
+def tracking_cleared_ok_hit(x: int, y: int) -> bool:
+    """True when OK is tapped (or tap outside the panel = dismiss)."""
+    if _tracking_cleared_ok_rect is not None and _tracking_cleared_ok_rect.collidepoint(x, y):
+        return True
+    if _tracking_cleared_panel_rect is not None and not _tracking_cleared_panel_rect.collidepoint(x, y):
+        return True
+    return False
+
+
+def clear_tracking_cleared_popup() -> None:
+    global _tracking_cleared_ok_rect, _tracking_cleared_panel_rect
+    _tracking_cleared_ok_rect = None
+    _tracking_cleared_panel_rect = None
+
+
 def footer_button_kinds(tracked_data) -> tuple[str, ...]:
     return FOOTER_BUTTONS if tracked_data else ("radar",)
 
@@ -93,6 +143,18 @@ def tap_footer_action(x: int, y: int, tracked_data=None) -> str | None:
     if idx is None:
         return None
     return buttons[idx]
+
+def draw_follow_loading(surface: pygame.Surface, callsign: str) -> None:
+    """Immediate feedback after Follow starts, before live data resolves."""
+    title_font = draw.load_font(theme.s(20), bold=True)
+    hint_font = draw.load_font(theme.s(13))
+    title = title_font.render(f"Following {callsign}", True, theme.MUTED)
+    hint = hint_font.render("Locating flight\u2026", True, theme.HINT)
+    surface.blit(title, title.get_rect(
+        center=(theme.CENTER_X, theme.CENTER_Y - theme.s(12))))
+    surface.blit(hint, hint.get_rect(
+        center=(theme.CENTER_X, theme.CENTER_Y + theme.s(16))))
+
 
 def draw_footer(surface: pygame.Surface, tracked_data=None) -> None:
     """Draw the shared Tracked footer, including the pin state."""
@@ -1210,7 +1272,7 @@ def draw_tracked(
     trail = ["Radar", "Track"]
     if display_id and display_id != "—":
         trail.append(display_id)
-    nav.draw_breadcrumb(surface, trail)
+    nav.draw_curved_breadcrumb(surface, trail)
 
     top = nav.content_top_y()
     # Compact title — two-column header should not dominate the round face.
