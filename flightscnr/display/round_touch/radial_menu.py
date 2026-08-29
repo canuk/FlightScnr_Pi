@@ -56,7 +56,7 @@ def _r_mid() -> int:
 
 
 def _r_out() -> int:
-    return theme.s(58)
+    return theme.s(53)
 
 
 def _reset_for_tests() -> None:
@@ -264,18 +264,26 @@ def draw(surface: pygame.Surface) -> pygame.Rect | None:
             a0=-math.pi / 2, a1=-math.pi / 2 + 2 * math.pi * band_p,
             width=r_mid - r_hole, color_rgba=_BAND_WHITE,
         )
-    wedge_ps = [_p(0.09 + i * 0.022, 0.11) for i in range(n)]
+    wedge_ps = [_p(0.09 + i * 0.022, 0.14) for i in range(n)]
+
+    def _ease_back(p: float) -> float:
+        # Ease-out-back: overshoots slightly past 1 then settles — the pop.
+        k = 1.70158
+        q = p - 1.0
+        return 1.0 + (k + 1.0) * q * q * q + k * q * q
+
     if all(wp >= 1.0 for wp in wedge_ps):
         pygame.draw.circle(rings, _BAND_DARK, (rc, rc), r_out, r_out - r_mid)
     else:
         for i, wp in enumerate(wedge_ps):
             if wp <= 0.0:
                 continue
+            sc = 0.55 + 0.45 * _ease_back(wp)
             a0 = start + i * step
             arc_ui.draw_arc_bar(
-                rings, cx=rc, cy=rc, r=wedge_r, a0=a0, a1=a0 + step,
-                width=r_out - r_mid,
-                color_rgba=(*_BAND_DARK[:3], int(_BAND_DARK[3] * wp)),
+                rings, cx=rc, cy=rc, r=wedge_r * sc, a0=a0, a1=a0 + step,
+                width=max(2, int((r_out - r_mid) * min(1.0, sc))),
+                color_rgba=(*_BAND_DARK[:3], int(_BAND_DARK[3] * min(1.0, wp * 1.6))),
             )
     surface.blit(rings, rings.get_rect(center=(cx, cy)))
     if band_p >= 1.0:
@@ -334,7 +342,7 @@ def draw(surface: pygame.Surface) -> pygame.Rect | None:
             lead = _chart_glyph(icon_px, entry.get("chart"))
         else:
             lead = _plane_glyph(icon_px)
-        label_a = int(255 * wedge_ps[i])
+        label_a = int(255 * max(0.0, wedge_ps[i] - 0.55) / 0.45)
         if label_a <= 0:
             continue
         _blit_curved(
