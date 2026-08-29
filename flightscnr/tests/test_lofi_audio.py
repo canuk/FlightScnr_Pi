@@ -404,6 +404,17 @@ class TestAtcPageVolume:
         assert len(info._atc_row_labels()) == len(info.ATC_ACTIONS)
 
 
+class TestScrollStandsDownForSliders:
+    def test_lofi_slider_gates_the_page_scroll(self):
+        import inspect
+
+        from display.round_touch import app as app_mod
+
+        src = inspect.getsource(app_mod)
+        assert "self._atc_volume_slider_active or self._lofi_volume_slider_active" in src
+        assert "info.lofi_volume_slider_at(pos[0], pos[1], self._scroll.offset)" in src
+
+
 class TestSliderDragTolerance:
     def test_armed_drags_capture_the_finger_anywhere(self):
         import pygame
