@@ -1991,19 +1991,7 @@ def _draw_lofi_volume_slider_row(surface, ry: int, focused: bool) -> None:
     label = body_font.render("Lofi Vol", True, theme.LABEL)
     surface.blit(label, (left_x, int(ry + (row_h - text_h) // 2)))
     track_cy = int(ry + row_h // 2)
-    track_rect = pygame.Rect(track_x, track_cy - max(2, theme.s(2)), track_w, max(4, theme.s(4)))
-    pygame.draw.rect(surface, theme.HINT, track_rect, border_radius=theme.s(2))
-    fill_w = int(round((pct / 100.0) * track_w))
-    if fill_w > 0:
-        pygame.draw.rect(
-            surface, theme.SWEEP,
-            pygame.Rect(track_x, track_rect.y, fill_w, track_rect.height),
-            border_radius=theme.s(2),
-        )
-    knob_x = track_x + fill_w
-    knob_r = max(5, theme.s(6))
-    pygame.draw.circle(surface, theme.SWEEP, (knob_x, track_cy), knob_r)
-    pygame.draw.circle(surface, theme.LABEL, (knob_x, track_cy), knob_r, max(1, theme.s(1)))
+    draw.draw_slider(surface, track_x, track_cy, track_w, (pct / 100.0) * 100.0)
     value = body_font.render(f"{pct}%", True, theme.MUTED)
     surface.blit(value, (track_x + track_w + gap, int(ry + (row_h - text_h) // 2)))
 
@@ -2024,16 +2012,7 @@ def _draw_atc_volume_slider_row(surface, ry: int, focused: bool) -> None:
     label = body_font.render("Volume", True, theme.LABEL)
     surface.blit(label, (left_x, int(ry + (row_h - text_h) // 2)))
     track_cy = int(ry + row_h // 2)
-    track_rect = pygame.Rect(track_x, track_cy - max(2, theme.s(2)), track_w, max(4, theme.s(4)))
-    pygame.draw.rect(surface, theme.HINT, track_rect, border_radius=theme.s(2))
-    fill_w = int(round((pct / hi) * track_w))
-    if fill_w > 0:
-        fill_rect = pygame.Rect(track_x, track_rect.y, fill_w, track_rect.height)
-        pygame.draw.rect(surface, theme.SWEEP, fill_rect, border_radius=theme.s(2))
-    knob_x = track_x + fill_w
-    knob_r = max(5, theme.s(6))
-    pygame.draw.circle(surface, theme.SWEEP, (knob_x, track_cy), knob_r)
-    pygame.draw.circle(surface, theme.LABEL, (knob_x, track_cy), knob_r, max(1, theme.s(1)))
+    draw.draw_slider(surface, track_x, track_cy, track_w, (pct / hi) * 100.0)
     value = body_font.render(f"{pct}%", True, theme.MUTED)
     surface.blit(
         value,
@@ -2390,17 +2369,7 @@ def _draw_brightness_slider_row(surface, ry: int, focused: bool) -> None:
     label = body_font.render("Brightness", True, theme.LABEL)
     surface.blit(label, (left_x, int(ry + (row_h - text_h) // 2)))
     track_cy = int(ry + row_h // 2)
-    track_rect = pygame.Rect(track_x, track_cy - max(2, theme.s(2)), track_w, max(4, theme.s(4)))
-    pygame.draw.rect(surface, theme.HINT, track_rect, border_radius=theme.s(2))
-    t = (pct - lo) / max(1, hi - lo)
-    fill_w = int(round(t * track_w))
-    if fill_w > 0:
-        fill_rect = pygame.Rect(track_x, track_rect.y, fill_w, track_rect.height)
-        pygame.draw.rect(surface, theme.SWEEP, fill_rect, border_radius=theme.s(2))
-    knob_x = track_x + fill_w
-    knob_r = max(5, theme.s(6))
-    pygame.draw.circle(surface, theme.SWEEP, (knob_x, track_cy), knob_r)
-    pygame.draw.circle(surface, theme.LABEL, (knob_x, track_cy), knob_r, max(1, theme.s(1)))
+    draw.draw_slider(surface, track_x, track_cy, track_w, (pct - lo) / max(1, hi - lo) * 100.0)
     value = body_font.render(f"{pct}%", True, theme.MUTED)
     surface.blit(
         value,
@@ -2428,17 +2397,7 @@ def _draw_hud_opacity_slider_row(surface, ry: int, focused: bool) -> None:
     label = body_font.render("HUD Opacity", True, theme.MUTED)
     surface.blit(label, (left_x, int(ry + (row_h - text_h) // 2)))
     track_cy = int(ry + row_h // 2)
-    track_rect = pygame.Rect(track_x, track_cy - max(2, theme.s(2)), track_w, max(4, theme.s(4)))
-    pygame.draw.rect(surface, theme.HINT, track_rect, border_radius=theme.s(2))
-    t = (pct - lo) / max(1, hi - lo)
-    fill_w = int(round(t * track_w))
-    if fill_w > 0:
-        fill_rect = pygame.Rect(track_x, track_rect.y, fill_w, track_rect.height)
-        pygame.draw.rect(surface, theme.SWEEP, fill_rect, border_radius=theme.s(2))
-    knob_x = track_x + fill_w
-    knob_r = max(5, theme.s(6))
-    pygame.draw.circle(surface, theme.SWEEP, (knob_x, track_cy), knob_r)
-    pygame.draw.circle(surface, theme.LABEL, (knob_x, track_cy), knob_r, max(1, theme.s(1)))
+    draw.draw_slider(surface, track_x, track_cy, track_w, (pct - lo) / max(1, hi - lo) * 100.0)
     value = body_font.render(f"{pct}%", True, theme.MUTED)
     surface.blit(
         value,
@@ -2472,24 +2431,14 @@ def _draw_hud_volume_slider_row(
     label = body_font.render(label_text, True, theme.LABEL if enabled else theme.HINT)
     surface.blit(label, (label_x, int(ry + (row_h - text_h) // 2)))
     track_cy = int(ry + row_h // 2)
-    track_rect = pygame.Rect(track_x, track_cy - max(2, theme.s(2)), track_w, max(4, theme.s(4)))
-    pygame.draw.rect(surface, theme.HINT, track_rect, border_radius=theme.s(2))
-    t = (pct - lo) / max(1, hi - lo)
-    fill_w = int(round(t * track_w))
     # A muted sound keeps its level, but the slider says it is not being heard.
-    fill_color = theme.SWEEP if enabled else theme.SWEEP_TRAIL
-    if fill_w > 0:
-        fill_rect = pygame.Rect(track_x, track_rect.y, fill_w, track_rect.height)
-        pygame.draw.rect(surface, fill_color, fill_rect, border_radius=theme.s(2))
-    knob_x = track_x + fill_w
-    knob_r = _hud_slider_knob_radius()
-    pygame.draw.circle(surface, fill_color, (knob_x, track_cy), knob_r)
-    pygame.draw.circle(
+    draw.draw_slider(
         surface,
-        theme.LABEL if enabled else theme.HINT,
-        (knob_x, track_cy),
-        knob_r,
-        max(1, theme.s(1)),
+        track_x,
+        track_cy,
+        track_w,
+        (pct - lo) / max(1, hi - lo) * 100.0,
+        enabled=enabled,
     )
     value = body_font.render(f"{pct}%", True, theme.MUTED if enabled else theme.HINT)
     surface.blit(value, (value_x, int(ry + (row_h - text_h) // 2)))
@@ -2516,17 +2465,7 @@ def _draw_vfr_opacity_slider_row(surface, ry: int, focused: bool) -> None:
     label = body_font.render("VFR opacity", True, theme.MUTED)
     surface.blit(label, (left_x, int(ry + (row_h - text_h) // 2)))
     track_cy = int(ry + row_h // 2)
-    track_rect = pygame.Rect(track_x, track_cy - max(2, theme.s(2)), track_w, max(4, theme.s(4)))
-    pygame.draw.rect(surface, theme.HINT, track_rect, border_radius=theme.s(2))
-    t = (pct - lo) / max(1, hi - lo)
-    fill_w = int(round(t * track_w))
-    if fill_w > 0:
-        fill_rect = pygame.Rect(track_x, track_rect.y, fill_w, track_rect.height)
-        pygame.draw.rect(surface, theme.SWEEP, fill_rect, border_radius=theme.s(2))
-    knob_x = track_x + fill_w
-    knob_r = max(5, theme.s(6))
-    pygame.draw.circle(surface, theme.SWEEP, (knob_x, track_cy), knob_r)
-    pygame.draw.circle(surface, theme.LABEL, (knob_x, track_cy), knob_r, max(1, theme.s(1)))
+    draw.draw_slider(surface, track_x, track_cy, track_w, (pct - lo) / max(1, hi - lo) * 100.0)
     value = body_font.render(f"{pct}%", True, theme.MUTED)
     surface.blit(
         value,
@@ -2742,19 +2681,13 @@ def draw_info(
                     (left_x, int(ry + (slider_h - text_h) // 2)),
                 )
                 track_cy = int(ry + slider_h // 2)
-                track_rect = pygame.Rect(
-                    track_x, track_cy - max(2, theme.s(2)), track_w, max(4, theme.s(4))
-                )
-                pygame.draw.rect(surface, theme.HINT, track_rect, border_radius=theme.s(2))
-                fill_w = int(round((rgb[i] / 255.0) * track_w))
-                if fill_w > 0:
-                    fill_rect = pygame.Rect(track_x, track_rect.y, fill_w, track_rect.height)
-                    pygame.draw.rect(surface, col, fill_rect, border_radius=theme.s(2))
-                knob_x = track_x + fill_w
-                knob_r = max(5, theme.s(6))
-                pygame.draw.circle(surface, col, (knob_x, track_cy), knob_r)
-                pygame.draw.circle(
-                    surface, theme.LABEL, (knob_x, track_cy), knob_r, max(1, theme.s(1))
+                draw.draw_slider(
+                    surface,
+                    track_x,
+                    track_cy,
+                    track_w,
+                    rgb[i] / 255.0 * 100.0,
+                    fill_color=col,
                 )
                 value = body_font.render(str(rgb[i]), True, theme.MUTED)
                 surface.blit(

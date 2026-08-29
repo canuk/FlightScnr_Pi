@@ -92,6 +92,43 @@ def toggle_switch_size(font: pygame.font.Font) -> tuple[int, int]:
     return int(height * 1.63), height
 
 
+# Same look as the radar HUD volume popover slider: pill track, SWEEP
+# fill, solid round knob riding the fill edge.
+SLIDER_TRACK = (70, 74, 80)
+
+
+def draw_slider(
+    surface: pygame.Surface,
+    track_x: int,
+    track_cy: int,
+    track_w: int,
+    pct: float,
+    *,
+    enabled: bool = True,
+    fill_color: tuple | None = None,
+) -> pygame.Rect:
+    """Draw a horizontal 0–100 slider; returns the track rect."""
+    track_h = max(6, theme.s(10))
+    rect = pygame.Rect(int(track_x), int(track_cy) - track_h // 2, int(track_w), track_h)
+    pygame.draw.rect(surface, SLIDER_TRACK, rect, border_radius=track_h // 2)
+    frac = max(0.0, min(100.0, float(pct))) / 100.0
+    fill_w = int(round(frac * track_w))
+    if fill_w > 0:
+        if fill_color is None:
+            fill_color = theme.SWEEP if enabled else theme.SWEEP_TRAIL
+        pygame.draw.rect(
+            surface,
+            fill_color,
+            pygame.Rect(rect.x, rect.y, fill_w, track_h),
+            border_radius=track_h // 2,
+        )
+    knob_r = max(6, theme.s(7))
+    pygame.draw.circle(
+        surface, SWITCH_KNOB_ON, (rect.x + fill_w, int(track_cy)), knob_r
+    )
+    return rect
+
+
 def draw_toggle_switch(surface: pygame.Surface, rect: pygame.Rect, on: bool) -> None:
     """Material 3 style switch: filled track + big thumb when on,
     outlined track + small thumb when off."""
