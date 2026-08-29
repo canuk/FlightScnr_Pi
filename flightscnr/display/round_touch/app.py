@@ -3913,7 +3913,8 @@ class RoundTouchDisplay:
             self._auto_idle_clock = False
             self._safe_draw()
         elif swipe == input_handler.SWIPE_LEFT and self.screen == SCREEN_CLOCK:
-            self._open_screen(SCREEN_ANALOG_CLOCK)
+            # Fork: hide the analog dials; time goes straight to Moon.
+            self._open_screen(SCREEN_MOON)
             self._safe_draw()
         elif swipe == input_handler.SWIPE_LEFT and self.screen == SCREEN_ANALOG_CLOCK:
             self._open_screen(SCREEN_ANALOG_NIGHT)
@@ -3925,7 +3926,7 @@ class RoundTouchDisplay:
             self._open_screen(SCREEN_MOON)
             self._safe_draw()
         elif swipe == input_handler.SWIPE_RIGHT and self.screen == SCREEN_MOON:
-            self._open_screen(SCREEN_FLIEGER_CLOCK)
+            self._open_screen(SCREEN_CLOCK)
             self._safe_draw()
         elif swipe == input_handler.SWIPE_RIGHT and self.screen == SCREEN_FLIEGER_CLOCK:
             self._open_screen(SCREEN_ANALOG_NIGHT)
@@ -3954,7 +3955,9 @@ class RoundTouchDisplay:
             self._return_to_radar()
             self._safe_draw()
         elif swipe == input_handler.SWIPE_UP and self.screen == SCREEN_RADAR:
-            self._open_screen(SCREEN_DETAILS)
+            # Fork: skip the About screen; radar goes straight to Settings.
+            self._open_screen(SCREEN_SETTINGS)
+            self.settings_page = info.PAGE_MAIN
             self._note_activity()
             self._safe_draw()
         elif swipe == input_handler.SWIPE_DOWN and self.screen == SCREEN_DETAILS:
@@ -3971,7 +3974,7 @@ class RoundTouchDisplay:
             and self.screen == SCREEN_SETTINGS
             and self.settings_page == info.PAGE_MAIN
         ):
-            self._open_screen(SCREEN_DETAILS)
+            self._return_to_radar()
             self._note_activity()
             self._safe_draw()
         elif swipe == input_handler.SWIPE_UP and self.screen == SCREEN_CLOCK:
@@ -4030,7 +4033,7 @@ class RoundTouchDisplay:
                 if prev is not None:
                     self._set_settings_page(prev)
                 else:
-                    self._open_screen(SCREEN_DETAILS)
+                    self._return_to_radar()
             elif self.screen == SCREEN_COVERAGE:
                 self._open_screen(SCREEN_SETTINGS)
             else:
@@ -4370,8 +4373,8 @@ class RoundTouchDisplay:
                     if prev is not None:
                         self._set_settings_page(prev)
                     else:
-                        # First settings page — back to About.
-                        self._open_screen(SCREEN_DETAILS)
+                        # First settings page — back to radar (About hidden).
+                        self._return_to_radar()
                 elif action == "next":
                     nxt = info.next_page(self.settings_page)
                     if nxt is not None:

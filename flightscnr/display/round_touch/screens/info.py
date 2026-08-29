@@ -377,7 +377,7 @@ def _firms_api_line() -> str:
 
 
 def _breadcrumb(page: int) -> list[str]:
-    trail = ["Radar", "About", "Settings"]
+    trail = ["Radar", "Settings"]  # fork: About screen hidden
     if page == PAGE_DISPLAY:
         trail.append("Display")
     elif page == PAGE_HUD:
