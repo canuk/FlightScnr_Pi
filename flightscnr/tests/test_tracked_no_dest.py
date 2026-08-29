@@ -110,6 +110,18 @@ class TestNoDestinationHelpers:
         assert home != "—"
         assert home.split()[-1] in _CARDINALS
 
+    def test_local_stats_cells_from_departure_when_origin_resolves(self, monkeypatch):
+        from utilities import airports
+
+        monkeypatch.setattr(
+            airports, "get_airport_coords",
+            lambda code: {"lat": 32.7336, "lon": -117.1897},
+        )
+        cells = dict(tracked._local_stats_cells(_no_dest_data(origin="SAN")))
+        assert "FROM DEPARTURE" in cells
+        assert cells["FROM DEPARTURE"] != "—"
+        assert cells["FROM DEPARTURE"].split()[-1] in _CARDINALS
+
     def test_local_stats_cells_missing_values(self):
         data = _no_dest_data(
             altitude=None, ground_speed=None, heading=None,

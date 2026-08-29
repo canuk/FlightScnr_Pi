@@ -899,20 +899,38 @@ def _local_stats_cells(data) -> list[tuple[str, str]]:
     except (TypeError, ValueError):
         pass
 
-    home = "—"
+    # Fourth cell: distance flown from the departure airport when the
+    # origin resolves to coordinates; otherwise distance from home.
+    anchor_label = "FROM HOME"
+    anchor = "—"
     lat, lon = _position_of(data)
     if lat is not None and lon is not None:
-        try:
-            from utilities.overhead import (
-                LOCATION_DEFAULT,
-                degrees_to_cardinal,
-                haversine,
-            )
+        a_lat = a_lon = None
+        origin = (data.get("origin") or "").strip()
+        if origin:
+            try:
+                from utilities.airports import get_airport_coords
 
-            h_lat, h_lon = LOCATION_DEFAULT[0], LOCATION_DEFAULT[1]
-            if h_lat or h_lon:
-                dist = _format_dist_remaining(haversine(h_lat, h_lon, lat, lon))
-                lat1, lon1 = math.radians(h_lat), math.radians(h_lon)
+                coords = get_airport_coords(origin)
+                if coords:
+                    a_lat, a_lon = float(coords["lat"]), float(coords["lon"])
+                    anchor_label = "FROM DEPARTURE"
+            except Exception:
+                a_lat = a_lon = None
+        if a_lat is None:
+            try:
+                from utilities.overhead import LOCATION_DEFAULT
+
+                if LOCATION_DEFAULT[0] or LOCATION_DEFAULT[1]:
+                    a_lat, a_lon = LOCATION_DEFAULT[0], LOCATION_DEFAULT[1]
+            except Exception:
+                a_lat = a_lon = None
+        if a_lat is not None:
+            try:
+                from utilities.overhead import degrees_to_cardinal, haversine
+
+                dist = _format_dist_remaining(haversine(a_lat, a_lon, lat, lon))
+                lat1, lon1 = math.radians(a_lat), math.radians(a_lon)
                 lat2, lon2 = math.radians(lat), math.radians(lon)
                 b = math.atan2(
                     math.sin(lon2 - lon1) * math.cos(lat2),
@@ -921,15 +939,15 @@ def _local_stats_cells(data) -> list[tuple[str, str]]:
                 )
                 bearing = (math.degrees(b) + 360) % 360
                 if dist:
-                    home = f"{dist} {degrees_to_cardinal(bearing)}"
-        except Exception:
-            home = "—"
+                    anchor = f"{dist} {degrees_to_cardinal(bearing)}"
+            except Exception:
+                anchor = "—"
 
     return [
         ("ALTITUDE", alt),
         ("SPEED", speed),
         ("HEADING", hdg),
-        ("FROM HOME", home),
+        (anchor_label, anchor),
     ]
 
 
