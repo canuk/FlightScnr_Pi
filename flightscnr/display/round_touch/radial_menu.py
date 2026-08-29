@@ -356,6 +356,10 @@ def draw(surface: pygame.Surface) -> pygame.Rect | None:
     for i, entry in enumerate(_entries):
         mid = start + (i + 0.5) * step
         label = str(entry.get("label") or "?")[:9]
+        if crowded and entry.get("kind") != "airport" and len(label) > 3:
+            # Radio shorthand: crowded rings abbreviate callsigns to the
+            # last three characters — airports always keep their ident.
+            label = label[-3:]
         size = base_size
         icon_px = icon_default
         font = None
@@ -381,8 +385,10 @@ def draw(surface: pygame.Surface) -> pygame.Rect | None:
 
             if not _fits() and crowded:
                 icon_px = theme.s(11)
-            while len(label) > 3 and not _fits():
-                label = label[:-1]
+            # Airports keep their full ident; anything else trims.
+            if entry.get("kind") != "airport":
+                while len(label) > 3 and not _fits():
+                    label = label[:-1]
         if entry.get("kind") == "airport":
             lead = _chart_glyph(icon_px, entry.get("chart"))
         else:
