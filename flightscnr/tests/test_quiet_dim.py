@@ -169,3 +169,22 @@ class TestQuietDimRows:
         sw = info._toggle_switch_rect(int(ry - scroll))
         hit = info.display_row_at(sw.centerx, sw.centery, info.PAGE_ATC_QUIET, scroll)
         assert hit == idx
+
+
+class TestFlushPending:
+    def test_flush_heals_wedged_reload(self):
+        """Unpersisted edits used to block maybe_reload forever."""
+        settings.set_quiet_dim_percent(45, persist=False)
+        assert settings._disk_synced is False
+        settings.flush_pending()
+        assert settings._disk_synced is True
+        import json
+
+        with open(settings.SETTINGS_PATH, encoding="utf-8") as fh:
+            assert json.load(fh)["quiet_dim_percent"] == 45
+        settings.set_quiet_dim_percent(20, persist=True)
+
+    def test_flush_noop_when_synced(self):
+        before = settings._settings_mtime
+        settings.flush_pending()
+        assert settings._settings_mtime == before

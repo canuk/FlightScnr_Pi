@@ -1420,6 +1420,20 @@ def brightness_percent():
     return int(_state.get("brightness_percent", 100))
 
 
+def flush_pending() -> None:
+    """Persist in-memory slider edits that never reached disk.
+
+    A drag that loses its release path (page change mid-drag, gesture
+    abort) left ``_disk_synced`` False forever, which also wedged
+    ``maybe_reload`` — the display then ignored portal-written settings
+    until restart. The app calls this whenever no slider owns the
+    finger; it is a no-op when memory and disk already agree.
+    """
+    global _disk_synced
+    if not _disk_synced:
+        _save(_state)
+
+
 def quiet_dim_enabled() -> bool:
     return bool(_state.get("quiet_dim_enabled", False))
 
