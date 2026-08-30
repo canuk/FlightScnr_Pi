@@ -38,7 +38,11 @@ def route_display_lines(
         return [f"{origin_label} > ?"]
 
     one_line = f"{origin_label} > {dest_label}"
-    if font is not None and y > 0:
+    if font is None:
+        # Nothing to measure against, so hand back the joined form. Callers
+        # without a font re-joined the split pair anyway.
+        return [one_line]
+    if y > 0:
         try:
             from display.round_touch import draw
 
@@ -47,7 +51,7 @@ def route_display_lines(
                 return [one_line]
         except ImportError:
             pass
-    elif font is not None and font.size(one_line)[0] <= 520:
+    elif font.size(one_line)[0] <= 520:
         return [one_line]
 
     return [origin_label, f"> {dest_label}"]

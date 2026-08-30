@@ -259,18 +259,23 @@ class SettingsPickerUxTests(unittest.TestCase):
 
         info.invalidate_atc_labels()
 
-    def test_quiet_overflow_draws_scrollbar(self):
+    def test_quiet_start_uses_the_dial_not_a_scrolling_list(self):
+        """Quiet start/end moved to the dial time picker, so there is no list
+        to scroll and no overflow cue to draw."""
         import pygame
         from display.round_touch import settings, theme
         from display.round_touch.screens import info
 
+        self.assertIn("quiet_start", info.TIME_PICKER_KINDS)
         surf = pygame.Surface((theme.SIZE, theme.SIZE))
         with mock.patch.object(settings, "atc_quiet_start", return_value="22:00"):
             info.invalidate_atc_labels()
             with mock.patch.object(info, "_draw_scroll_overflow_cues") as cue:
                 max_scroll = info.draw_atc_picker(surf, "quiet_start")
-        self.assertGreater(max_scroll, 0)
-        cue.assert_called_once()
+        self.assertEqual(max_scroll, 0)
+        cue.assert_not_called()
+        actions = {a for a, _v, _r in info._atc_picker_hits}
+        self.assertIn("time_num", actions)
 
     def test_draw_info_uses_picker_on_options_page(self):
         import pygame

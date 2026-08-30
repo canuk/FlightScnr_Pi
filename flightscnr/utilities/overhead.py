@@ -1883,7 +1883,11 @@ class Overhead:
         try:
             with open(TRACKED_FILE, "w", encoding="utf-8") as f:
                 json.dump({"callsign": ""}, f)
-            _tracked_cache["at"] = 0.0
+            # Clear mtime and value too, not just the TTL. A wipe that lands
+            # in the same mtime tick as the write that set the callsign left
+            # the reader's mtime guard satisfied, so it kept serving the old
+            # callsign until some later write changed the timestamp.
+            _tracked_cache.update({"at": 0.0, "mtime": None, "value": ""})
             print("Tracked flight ended - auto-cleared.")
         except Exception as e:
             print(f"Failed to auto-clear tracked flight: {e}")

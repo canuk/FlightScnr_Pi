@@ -95,12 +95,14 @@ class TestAircraftPhoto(unittest.TestCase):
                 "plane": "EC45",
                 "registration": "12-72233",
             })
-            lookup.assert_called_once_with(
-                "a9add7",
-                aircraft_type="EC45",
-                registration="12-72233",
-                force=False,
-            )
+            # Assert the arguments this test is about, not the whole
+            # signature — the lookup has grown optional keywords since.
+            lookup.assert_called_once()
+            args, kwargs = lookup.call_args
+            assert args == ("a9add7",)
+            assert kwargs["aircraft_type"] == "EC45"
+            assert kwargs["registration"] == "12-72233"
+            assert kwargs["force"] is False
 
     def test_credit_line_planespotters(self):
         self.assertEqual(

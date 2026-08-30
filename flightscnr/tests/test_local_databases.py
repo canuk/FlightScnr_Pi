@@ -67,7 +67,9 @@ class TestAirportsModule:
             airports_mod._loaded = False
             airports_mod._db = {}
             result = airports_mod.get_airport_coords("ORD")
-            assert result == {"lat": 41.978, "lon": -87.904}
+            # Coordinates only — the row also carries "name" and may grow more.
+            assert result["lat"] == pytest.approx(41.978)
+            assert result["lon"] == pytest.approx(-87.904)
 
     def test_get_airport_coords_icao(self):
         """Look up by ICAO code returns correct coordinates."""
@@ -104,7 +106,8 @@ class TestAirportsModule:
             airports_mod._loaded = False
             airports_mod._db = {}
             result = airports_mod.get_airport_coords("ord")
-            assert result == {"lat": 41.978, "lon": -87.904}
+            assert result["lat"] == pytest.approx(41.978)
+            assert result["lon"] == pytest.approx(-87.904)
 
     def test_get_airport_coords_empty_returns_empty(self):
         """Empty code returns empty dict."""

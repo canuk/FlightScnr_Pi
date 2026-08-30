@@ -84,9 +84,15 @@ class RadarHudSettingsTests(unittest.TestCase):
                 settings.radar_hud_layout_top(),
                 settings.copy_radar_hud_layout_top_default(),
             )
-            self.assertEqual(settings.radar_hud_layout_offset("wx_icon"), (-29, 31))
-            self.assertEqual(settings.radar_hud_layout_offset("temp"), (42, -29))
-            self.assertEqual(settings.radar_hud_layout_offset("wind"), (14, -6))
+            # Read the baked defaults rather than restating them — the reset
+            # must return each key to whatever the default currently holds.
+            defaults = settings.copy_radar_hud_layout_top_default()
+            for key, (dx_def, dy_def) in defaults.items():
+                self.assertEqual(
+                    settings.radar_hud_layout_offset(key), (dx_def, dy_def)
+                )
+            # A key with no baked default falls back to no offset.
+            self.assertNotIn("clock", defaults)
             self.assertEqual(settings.radar_hud_layout_offset("clock"), (0, 0))
 
     def test_arrange_gated_by_env(self):
