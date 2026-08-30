@@ -1428,10 +1428,26 @@ def flush_pending() -> None:
     ``maybe_reload`` — the display then ignored portal-written settings
     until restart. The app calls this whenever no slider owns the
     finger; it is a no-op when memory and disk already agree.
+
+    Only the keys that actually differ from disk are written, through
+    the read-modify-write path, so preserve-listed keys keep the
+    pending value instead of snapping back to the disk copy.
     """
     global _disk_synced
-    if not _disk_synced:
-        _save(_state)
+    if _disk_synced:
+        return
+    try:
+        with open(SETTINGS_PATH, encoding="utf-8") as fh:
+            disk = json.load(fh)
+        if not isinstance(disk, dict):
+            disk = {}
+    except (OSError, json.JSONDecodeError, TypeError):
+        disk = {}
+    pending = {k: v for k, v in _state.items() if disk.get(k) != v}
+    if pending:
+        _rmw_save(pending)
+    else:
+        _disk_synced = True
 
 
 def quiet_dim_enabled() -> bool:
