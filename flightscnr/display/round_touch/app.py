@@ -212,8 +212,10 @@ class RoundTouchDisplay:
         self._last_slider_draw = 0.0
         # Inertial settings scrolling: (velocity px/s, last tick time).
         self._scroll_momentum_v = 0.0
-        # Raw px dragged past a list edge; drawn at ~1/3 (rubber band).
+        # Raw px dragged past a list edge (display curve compresses it).
         self._overscroll = 0.0
+        # Spring velocity for the settle-back animation (px/s).
+        self._overscroll_v = 0.0
         self._scroll_momentum_t = 0.0
         self._scroll_samples: list[tuple[float, int]] = []
         self._display_focus = 0
@@ -1636,6 +1638,7 @@ class RoundTouchDisplay:
             self._settings_drag_scrolled = False
             self._settings_pressed_row = None
             self._overscroll = 0.0
+            self._overscroll_v = 0.0
         if screen == SCREEN_LIVE and previous != SCREEN_LIVE:
             # Fresh entry into live tracking — force an immediate position fetch.
             self._live_map_last_fetch = 0.0
@@ -3426,10 +3429,17 @@ class RoundTouchDisplay:
 
     def _tick_scroll_momentum(self) -> None:
         """Decay-based inertial scroll after a settings flick."""
-        if not self._scroll_momentum_v and not self._overscroll:
+        if (
+            not self._scroll_momentum_v
+            and not self._overscroll
+            and not self._overscroll_v
+        ):
             return
         if self.screen != SCREEN_SETTINGS or self.input.is_dragging():
+            # A fresh grab owns the list; the spring restarts from the
+            # finger's release state, not a stale velocity.
             self._scroll_momentum_v = 0.0
+            self._overscroll_v = 0.0
             return
         now = time.time()
         dt = min(0.1, max(0.0, now - self._scroll_momentum_t))
@@ -3437,21 +3447,33 @@ class RoundTouchDisplay:
         if self._scroll_momentum_v:
             before = self._scroll.offset
             self._apply_scroll_delta(int(round(self._scroll_momentum_v * dt)))
-            # Exponential decay tuned to feel like a platform scroll view.
-            self._scroll_momentum_v *= 0.135 ** dt
-            if abs(self._scroll_momentum_v) < 40.0 or (
-                self._scroll.offset == before and not self._overscroll
-            ):
-                self._scroll_momentum_v = 0.0
-                self._safe_draw()
             if self._overscroll:
-                # A fling that ran into the edge: one small kick, then spring.
+                # Fling reached the edge — hand the remaining velocity to the
+                # spring so the bounce depth matches the fling energy.
+                self._overscroll_v = self._scroll_momentum_v
                 self._scroll_momentum_v = 0.0
-        elif self._overscroll:
-            # Critically damped spring back to the resting edge.
-            self._overscroll *= math.exp(-10.0 * dt)
-            if abs(self._overscroll) < 1.5:
+            else:
+                # Exponential decay tuned to feel like a platform scroll view.
+                self._scroll_momentum_v *= 0.135 ** dt
+                if abs(self._scroll_momentum_v) < 40.0 or (
+                    self._scroll.offset == before
+                ):
+                    self._scroll_momentum_v = 0.0
+                    self._safe_draw()
+        elif self._overscroll or self._overscroll_v:
+            # Slightly underdamped spring (zeta ~0.8): one gentle settle,
+            # not a rubber wobble and not a hard exponential stop.
+            k = 260.0
+            c = 2.0 * 0.8 * math.sqrt(k)
+            x = self._overscroll
+            v = self._overscroll_v
+            v += (-k * x - c * v) * dt
+            x += v * dt
+            self._overscroll = x
+            self._overscroll_v = v
+            if abs(x) < 1.0 and abs(v) < 30.0:
                 self._overscroll = 0.0
+                self._overscroll_v = 0.0
                 self._safe_draw()
             else:
                 now2 = time.time()
@@ -3460,9 +3482,15 @@ class RoundTouchDisplay:
                     self._safe_draw()
 
     def _settings_draw_offset(self) -> int:
-        """Scroll offset plus the rubber-band displacement."""
-        limit = float(theme.s(56))
-        disp = max(-limit, min(limit, self._overscroll * 0.35))
+        """Scroll offset plus the rubber-band displacement.
+
+        iOS-style asymptotic curve: ~0.55 finger-tracking near the edge,
+        smoothly approaching (never hitting) the max displacement, so the
+        band tightens naturally instead of stopping at a wall.
+        """
+        limit = float(theme.s(64))
+        x = self._overscroll
+        disp = 0.55 * limit * x / (0.55 * abs(x) + limit)
         return self._scroll.offset + int(round(disp))
 
     def _apply_scroll_delta(self, delta: int):
@@ -3652,7 +3680,9 @@ class RoundTouchDisplay:
                         v = (y1 - y0) / (t1 - t0)
                 self._scroll_samples = []
                 self._scroll_momentum_t = time.time()
-                if abs(v) > 120.0:
+                if self._overscroll:
+                    self._overscroll_v = -v
+                elif abs(v) > 120.0:
                     self._scroll_momentum_v = -v
                 self._safe_draw()
                 return
@@ -5357,8 +5387,9 @@ class RoundTouchDisplay:
                         # ATC labels shell out to bluetoothctl / mpv IPC on
                         # rebuild — freeze them while the finger drags.
                         info.hold_atc_labels()
+                    drag_iv = 0.016 if self.screen == SCREEN_SETTINGS else 0.05
                     if (
-                        now_drag - self._last_slider_draw >= 0.05
+                        now_drag - self._last_slider_draw >= drag_iv
                         or not self.input.is_dragging()
                     ):
                         self._safe_draw()
