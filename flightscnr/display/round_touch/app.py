@@ -539,10 +539,12 @@ class RoundTouchDisplay:
     def _arm_disclaimer_countdown_if_needed(self) -> None:
         """Skip the gate outright for a remembered Accept, once the splash ends.
 
-        "Don't show again" previously only armed an auto-continue countdown,
-        so the disclaimer still appeared every boot for several seconds. A
-        remembered acceptance now continues immediately; re-showing the
-        disclaimer is done by clearing acceptance from the web portal.
+        FORK-ONLY-DO-NOT-PR: upstream policy makes the boot disclaimer
+        mandatory, and "Don't show again" there only arms the 8s
+        auto-continue countdown. This device skips the gate instead.
+        Never send this hunk upstream; branch from upstream/main.
+
+        Re-show the disclaimer by clearing acceptance from the web portal.
         """
         if self._disclaimer_countdown_armed:
             return
@@ -4320,7 +4322,7 @@ class RoundTouchDisplay:
             self._auto_idle_clock = False
             self._safe_draw()
         elif swipe == input_handler.SWIPE_LEFT and self.screen == SCREEN_CLOCK:
-            # Fork: hide the analog dials; time goes straight to Moon.
+            # FORK-ONLY-DO-NOT-PR: hide the analog dials; time goes to Moon.
             self._open_screen(SCREEN_MOON)
             self._safe_draw()
         elif swipe == input_handler.SWIPE_LEFT and self.screen == SCREEN_ANALOG_CLOCK:
@@ -4333,6 +4335,7 @@ class RoundTouchDisplay:
             self._open_screen(SCREEN_MOON)
             self._safe_draw()
         elif swipe == input_handler.SWIPE_RIGHT and self.screen == SCREEN_MOON:
+            # FORK-ONLY-DO-NOT-PR: back from Moon lands on the digital clock.
             self._open_screen(SCREEN_CLOCK)
             self._safe_draw()
         elif swipe == input_handler.SWIPE_RIGHT and self.screen == SCREEN_FLIEGER_CLOCK:
@@ -4362,7 +4365,7 @@ class RoundTouchDisplay:
             self._return_to_radar()
             self._safe_draw()
         elif swipe == input_handler.SWIPE_UP and self.screen == SCREEN_RADAR:
-            # Fork: skip the About screen; radar goes straight to Settings.
+            # FORK-ONLY-DO-NOT-PR: skip About; radar goes to Settings.
             self._open_screen(SCREEN_SETTINGS)
             self.settings_page = info.PAGE_MAIN
             self._note_activity()
@@ -4381,6 +4384,7 @@ class RoundTouchDisplay:
             and self.screen == SCREEN_SETTINGS
             and self.settings_page == info.PAGE_MAIN
         ):
+            # FORK-ONLY-DO-NOT-PR: About hidden, so back lands on radar.
             self._return_to_radar()
             self._note_activity()
             self._safe_draw()
@@ -4440,6 +4444,7 @@ class RoundTouchDisplay:
                 if prev is not None:
                     self._set_settings_page(prev)
                 else:
+                    # FORK-ONLY-DO-NOT-PR: About hidden, so back lands on radar.
                     self._return_to_radar()
             elif self.screen == SCREEN_COVERAGE:
                 self._open_screen(SCREEN_SETTINGS)
@@ -4780,7 +4785,8 @@ class RoundTouchDisplay:
                     if prev is not None:
                         self._set_settings_page(prev)
                     else:
-                        # First settings page — back to radar (About hidden).
+                        # FORK-ONLY-DO-NOT-PR: first settings page goes back
+                        # to radar because the About screen is hidden.
                         self._return_to_radar()
                 elif action == "next":
                     nxt = info.next_page(self.settings_page)

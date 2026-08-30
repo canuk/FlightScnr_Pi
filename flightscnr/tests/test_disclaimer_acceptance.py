@@ -123,6 +123,10 @@ class TestDisclaimerAcceptance(_SettingsTempMixin, unittest.TestCase):
 
 
 class TestDisclaimerBootFlow(unittest.TestCase):
+    """FORK-ONLY-DO-NOT-PR: these cases assert the fork's skip-the-gate
+    behaviour. Upstream keeps the mandatory 8s auto-continue countdown, so
+    this class must never travel in a pull request."""
+
     def _bare(self) -> app_mod.RoundTouchDisplay:
         d = object.__new__(app_mod.RoundTouchDisplay)
         d._boot_until = 0.0
