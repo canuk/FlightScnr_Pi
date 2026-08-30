@@ -2957,6 +2957,7 @@ class RoundTouchDisplay:
         if (
             self.screen != SCREEN_RADAR
             or self._radar_modal_active()
+            or radial_menu.is_open()
             or not settings.radar_hud_enabled()
             or settings.radar_hud_arrange()
         ):
@@ -4852,7 +4853,7 @@ class RoundTouchDisplay:
             logger.debug("Scheduled weather refresh tick failed", exc_info=True)
 
     def _tick_auto_idle_clock(self):
-        if self._radar_modal_active():
+        if self._radar_modal_active() or radial_menu.is_open():
             return
         if not settings.auto_idle_clock_enabled():
             return
@@ -5552,7 +5553,8 @@ class RoundTouchDisplay:
                                 self._long_press_pan.clear_candidate()
                                 self._clear_hud_mute_hold()
                             scale_delta = self.gestures.handle_finger_event(event)
-                            if scale_delta:
+                            if scale_delta and not radial_menu.is_open():
+                                # Range must not change under a frozen menu.
                                 self._apply_scale_step(scale_delta)
                         self._handle_navigation()
                 _lt = self._loop_stage("loop_events", _lt)

@@ -43,6 +43,11 @@ _entries: list[dict] = []
 _tap: tuple[int, int] = (0, 0)
 _center: tuple[int, int] = (0, 0)
 _opened_at = 0.0
+# Post-animation stamp: the menu is static once built, so re-rendering
+# fonts and glyphs every sweep frame (up to 12s) wasted Pi frame budget.
+_stamp: tuple[pygame.Surface, tuple[int, int]] | None = None
+# Animations finish ~0.6s in (band 0.17s + last wedge stagger + pop).
+_ANIM_TOTAL_S = 1.0
 _closed_reported = True
 _last_rect: pygame.Rect | None = None
 
@@ -61,6 +66,8 @@ def _r_out() -> int:
 
 def _reset_for_tests() -> None:
     global _entries, _tap, _center, _opened_at, _closed_reported, _last_rect
+    global _stamp
+    _stamp = None
     _entries = []
     _tap = (0, 0)
     _center = (0, 0)
@@ -83,7 +90,8 @@ def tap_point() -> tuple[int, int]:
 
 def open_menu(x: int, y: int, items: list[dict]) -> None:
     """Open at a tap point; the ring slides inward to stay on screen."""
-    global _entries, _tap, _center, _opened_at, _closed_reported
+    global _entries, _tap, _center, _opened_at, _closed_reported, _stamp
+    _stamp = None
     _entries = list(items[:MAX_ENTRIES])
     for entry in _entries:
         if entry.get("kind") == "airport" and "chart" not in entry:
@@ -110,9 +118,10 @@ def open_menu(x: int, y: int, items: list[dict]) -> None:
 
 
 def close() -> None:
-    global _entries, _last_rect
+    global _entries, _last_rect, _stamp
     _entries = []
     _last_rect = None
+    _stamp = None
 
 
 def tick() -> bool:
@@ -257,6 +266,39 @@ def _chart_glyph(size: int, chart) -> pygame.Surface:
 
 
 def draw(surface: pygame.Surface) -> pygame.Rect | None:
+    """Render the menu; returns its bounds or None when closed.
+
+    After the build-in animation the menu is static, so it renders once
+    into a transparent stamp and every later frame is a single blit.
+    """
+    global _last_rect, _stamp
+    if not _entries:
+        _last_rect = None
+        _stamp = None
+        return None
+    if _stamp is not None:
+        stamp_surf, pos = _stamp
+        surface.blit(stamp_surf, pos)
+        _last_rect = pygame.Rect(pos, stamp_surf.get_size())
+        return _last_rect
+    rect = _draw_uncached(surface)
+    if (
+        rect is not None
+        and (time.monotonic() - _opened_at) >= _ANIM_TOTAL_S
+    ):
+        canvas = pygame.Surface(surface.get_size(), pygame.SRCALPHA)
+        stamp_rect = _draw_uncached(canvas)
+        if stamp_rect is not None:
+            clipped = stamp_rect.clip(canvas.get_rect())
+            if clipped.width > 0 and clipped.height > 0:
+                _stamp = (
+                    canvas.subsurface(clipped).copy(),
+                    (clipped.left, clipped.top),
+                )
+    return rect
+
+
+def _draw_uncached(surface: pygame.Surface) -> pygame.Rect | None:
     """Render the menu; returns its bounds or None when closed."""
     global _last_rect
     if not _entries:
