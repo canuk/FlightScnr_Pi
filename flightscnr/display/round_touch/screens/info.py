@@ -3049,6 +3049,27 @@ def _draw_settings_rows(
                 surface.blit(chev, (vx, ty))
                 surface.blit(
                     val_img, (vx - theme.s(6) - val_img.get_width(), ty))
+                if i < len(actions) and actions[i] == "airport_icon_style":
+                    # Show the selected style itself: sectional chart symbol
+                    # or the classic pin bitmap, just left of the value.
+                    gx = vx - theme.s(6) - val_img.get_width() - theme.s(16)
+                    gy = inner.centery
+                    try:
+                        from display.round_touch import airport_overlay
+
+                        if settings.airport_icon_style() == "chart":
+                            airport_overlay.draw_chart_icon(
+                                surface, (gx, gy), theme.s(6),
+                                towered=True, fuel=True, beacon=False,
+                            )
+                        else:
+                            icon = airport_overlay.airport_icon(theme.s(16))
+                            if icon is not None:
+                                surface.blit(
+                                    icon, icon.get_rect(center=(gx, gy))
+                                )
+                    except Exception:
+                        pass
                 continue
             surface.blit(
                 _cached_text(
