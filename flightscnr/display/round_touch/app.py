@@ -342,7 +342,12 @@ class RoundTouchDisplay:
             from display.round_touch import off_hours
 
             cfg = off_hours.prefs()
-            if cfg.get("enabled") and str(cfg.get("mode", "dim")) in ("dim", "off"):
+            already_configured = settings.quiet_dim_enabled()
+            if (
+                not already_configured
+                and cfg.get("enabled")
+                and str(cfg.get("mode", "dim")) in ("dim", "off")
+            ):
                 pct = 0 if cfg.get("mode") == "off" else int(cfg.get("dim_percent", 20))
                 settings.set_quiet_dim_enabled(True)
                 settings.set_quiet_dim_percent(max(0, min(100, pct)), persist=True)
