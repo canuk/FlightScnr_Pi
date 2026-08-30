@@ -294,8 +294,6 @@ class RoundTouchDisplay:
         self._targets_slider_last_value: int | None = None
         # Live dim preview while the quiet-dim slider is held.
         self._quiet_dim_preview: int | None = None
-        # Touch during screen-off quiet hours relights until this time.
-        self._quiet_dim_wake_until = 0.0
         self._radar_hud_volume_drag = False
         self._radar_hud_layout_drag = False
         self._hud_opacity_slider_active = False
@@ -3105,12 +3103,19 @@ class RoundTouchDisplay:
 
         day_pct = settings.brightness_percent()
         pct = off_hours.effective_brightness_percent(day_pct)
-        if settings.quiet_dim_enabled() and time.time() >= self._quiet_dim_wake_until:
+        if settings.quiet_dim_enabled():
             try:
                 from utilities import atc_audio
 
                 if atc_audio.in_quiet_hours():
-                    pct = min(pct, settings.quiet_dim_percent())
+                    dim = settings.quiet_dim_percent()
+                    if dim == 0 and self.screen != SCREEN_RADAR:
+                        # 0% blacks out only the radar view. Navigating
+                        # anywhere (settings, clock) lights the panel at
+                        # the last non-zero dim level; returning to radar
+                        # goes dark again.
+                        dim = settings.quiet_dim_restore()
+                    pct = min(pct, dim)
             except Exception:
                 pass
         # Display-off mode: temporary wake after touch keeps daytime brightness.
@@ -3133,18 +3138,6 @@ class RoundTouchDisplay:
     def _wake_for_off_hours_touch(self):
         from display.round_touch import off_hours
 
-        # Quiet-hours screen-off: any touch relights the panel for a while,
-        # so the radar stays reachable in the middle of the night.
-        if settings.quiet_dim_enabled() and settings.quiet_dim_percent() == 0:
-            try:
-                from utilities import atc_audio
-
-                if atc_audio.in_quiet_hours() and time.time() >= self._quiet_dim_wake_until:
-                    self._quiet_dim_wake_until = time.time() + OFF_HOURS_TOUCH_WAKE_S
-                    self._apply_brightness()
-                    self._safe_draw()
-            except Exception:
-                pass
         if not off_hours.in_off_hours():
             return
         if off_hours.effective_brightness_percent(settings.brightness_percent()) != 0:
