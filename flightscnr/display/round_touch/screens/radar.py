@@ -573,6 +573,11 @@ def draw_radar(
             draw_location_toast(surface)
             if aircraft_alert.rim_flash_active():
                 _draw_alert_rim_flash(surface)
+            if layer is None:
+                # Menu stays topmost — same order as the fast present path.
+                from display.round_touch import radial_menu
+
+                radial_menu.draw(surface)
         # Sweep is composited in present() on the fast path so we can skip a
         # full-frame rotate every tick. Fall back to in-buffer draw above when
         # the layer isn't available.
@@ -1678,6 +1683,24 @@ def pick_flight_at(flights, tap_x, tap_y, alt_x=None, alt_y=None):
                 best_d2 = d2
                 best_score = score
     return best, best_d2
+
+
+def flights_near(flights, tap_x, tap_y, radius_px):
+    """All tappable aircraft/vessels within ``radius_px`` — [(flight, d2)]
+    sorted nearest-first. Same visibility rules as pick_flight_at."""
+    r2 = float(radius_px) ** 2
+    out = []
+    for flight in _visible_flights(flights):
+        if not aircraft_alert.is_shown_on_radar(flight):
+            continue
+        pos = _flight_screen_xy(flight)
+        if not pos:
+            continue
+        d2 = (pos[0] - tap_x) ** 2 + (pos[1] - tap_y) ** 2
+        if d2 <= r2:
+            out.append((flight, d2))
+    out.sort(key=lambda item: item[1])
+    return out
 
 
 def flights_by_distance(flights):
