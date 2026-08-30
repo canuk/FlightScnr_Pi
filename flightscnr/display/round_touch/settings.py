@@ -365,6 +365,8 @@ _defaults = {
     "quiet_dim_percent": 20,
     # Last non-zero dim level, restored by the screen-off button.
     "quiet_dim_restore": 20,
+    # One-time fold of legacy off-hours dim/off into quiet dim.
+    "quiet_dim_migrated": False,
     # Targets page: per-category appearance ("" = today's default look).
     "tgt_plane_color": "",
     "tgt_heli_color": "",

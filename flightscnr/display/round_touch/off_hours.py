@@ -214,14 +214,8 @@ def in_night_window(now: datetime | None = None) -> bool:
 
 
 def effective_brightness_percent(day_percent: int) -> int:
-    if in_off_hours():
-        cfg = prefs()
-        mode = str(cfg.get("mode", "dim")).lower()
-        if mode == "off":
-            return 0
-        if mode == "clock":
-            # Legacy: full day brightness while on clock.
-            return clamp_brightness_percent(int(day_percent))
-        # dim (and dim + force_clock): use configured night dim level.
-        return clamp_brightness_percent(int(cfg.get("dim_percent", 20)))
+    """Off-hours no longer changes brightness — display dimming is the
+    quiet-hours dim feature (Settings → Quiet). Off-hours keeps its
+    schedule for the night-clock behavior only. Legacy dim/off prefs
+    migrate to quiet dim on startup."""
     return day_percent

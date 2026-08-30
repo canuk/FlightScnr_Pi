@@ -325,8 +325,36 @@ class RoundTouchDisplay:
         self._disclaimer_countdown_armed = False
         self._update_check_started = False
         self._pending_wifi_setup = enter_setup
+        self._migrate_off_hours_dim()
         self._apply_brightness()
         self._safe_draw()
+
+    def _migrate_off_hours_dim(self) -> None:
+        """One-time fold: legacy off-hours dim/off becomes quiet-hours dim.
+
+        Off-hours no longer touches brightness. Anyone who had night
+        dimming (the old default) keeps the same behavior through quiet
+        dim — the quiet window already defaults to the off-hours window.
+        """
+        try:
+            if bool(settings._state.get("quiet_dim_migrated", False)):
+                return
+            from display.round_touch import off_hours
+
+            cfg = off_hours.prefs()
+            if cfg.get("enabled") and str(cfg.get("mode", "dim")) in ("dim", "off"):
+                pct = 0 if cfg.get("mode") == "off" else int(cfg.get("dim_percent", 20))
+                settings.set_quiet_dim_enabled(True)
+                settings.set_quiet_dim_percent(max(0, min(100, pct)), persist=True)
+                if pct > 0:
+                    settings.set_quiet_dim_restore(pct)
+                logger.info(
+                    "Migrated off-hours %s (%s%%) to quiet-hours dim",
+                    cfg.get("mode"), pct,
+                )
+            settings._rmw_save({"quiet_dim_migrated": True})
+        except Exception:
+            logger.debug("Off-hours dim migration failed", exc_info=True)
 
     def _start_update_check_thread(self) -> None:
         """Start periodic GitHub update checks (once, after disclaimer unlock)."""
@@ -3500,7 +3528,9 @@ class RoundTouchDisplay:
             if self._overscroll:
                 # Fling reached the edge — hand the remaining velocity to the
                 # spring so the bounce depth matches the fling energy.
-                self._overscroll_v = self._scroll_momentum_v
+                self._overscroll_v = max(
+                    -3000.0, min(3000.0, self._scroll_momentum_v)
+                )
                 self._scroll_momentum_v = 0.0
             else:
                 # Exponential decay tuned to feel like a platform scroll view.
@@ -3513,12 +3543,21 @@ class RoundTouchDisplay:
         elif self._overscroll or self._overscroll_v:
             # Slightly underdamped spring (zeta ~0.8): one gentle settle,
             # not a rubber wobble and not a hard exponential stop.
+            # Integrate in <=8ms substeps — a single hiccup frame at the
+            # 100ms dt clamp sat on Euler's stability edge and the spring
+            # exploded instead of settling.
             k = 260.0
             c = 2.0 * 0.8 * math.sqrt(k)
             x = self._overscroll
-            v = self._overscroll_v
-            v += (-k * x - c * v) * dt
-            x += v * dt
+            v = max(-4000.0, min(4000.0, self._overscroll_v))
+            steps = max(1, int(math.ceil(dt / 0.008)))
+            h = dt / steps
+            for _ in range(steps):
+                v += (-k * x - c * v) * h
+                x += v * h
+            if not (math.isfinite(x) and math.isfinite(v)) or abs(x) > 5000.0:
+                x = 0.0
+                v = 0.0
             self._overscroll = x
             self._overscroll_v = v
             if abs(x) < 1.0 and abs(v) < 30.0:
@@ -3738,7 +3777,7 @@ class RoundTouchDisplay:
                 self._scroll_samples = []
                 self._scroll_momentum_t = time.time()
                 if self._overscroll:
-                    self._overscroll_v = -v
+                    self._overscroll_v = max(-3000.0, min(3000.0, -v))
                 elif abs(v) > 120.0:
                     self._scroll_momentum_v = -v
                 self._safe_draw()
