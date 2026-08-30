@@ -35,23 +35,34 @@ def _font_cache_survives_pygame_quit():
 
     from display.round_touch import draw
 
-    real_quit = pygame.quit
-    real_font_quit = pygame.font.quit
+    def _wrap(owner, name):
+        """Wrap owner.name so it clears the font cache first."""
+        try:
+            original = getattr(owner, name)
+        except Exception:
+            # A build without a working font module (some dev Macs) raises on
+            # attribute access. Nothing to protect there.
+            return None
 
-    def quit_and_drop_fonts():
-        draw.reset_font_cache()
-        real_quit()
+        def wrapped():
+            draw.reset_font_cache()
+            original()
 
-    def font_quit_and_drop_fonts():
-        draw.reset_font_cache()
-        real_font_quit()
+        try:
+            setattr(owner, name, wrapped)
+        except Exception:
+            return None
+        return original
 
-    pygame.quit = quit_and_drop_fonts
-    pygame.font.quit = font_quit_and_drop_fonts
+    restore = [
+        (pygame, "quit", _wrap(pygame, "quit")),
+        (pygame.font, "quit", _wrap(pygame.font, "quit")),
+    ]
     try:
         yield
     finally:
-        pygame.quit = real_quit
-        pygame.font.quit = real_font_quit
+        for owner, name, original in restore:
+            if original is not None:
+                setattr(owner, name, original)
 
 
