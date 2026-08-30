@@ -145,6 +145,22 @@
         .btn-sm{padding:.4rem .65rem;font-size:.8rem}
         .system-card .body{padding-top:.75rem}
         .hidden{display:none}
+        .search-wrap{position:relative;margin:0 0 1rem}
+        .search-wrap input{width:100%;padding:.6rem .8rem;background:var(--field);
+        border:1px solid var(--fline);border-radius:10px;color:var(--text);font-size:.95rem}
+        .search-wrap input:focus{outline:none;border-color:var(--accent)}
+        .search-results{position:absolute;left:0;right:0;top:calc(100% + .3rem);
+        background:var(--card2);border:1px solid var(--line);border-radius:10px;z-index:50;
+        max-height:16rem;overflow:auto;box-shadow:0 8px 24px rgba(0,0,0,.5)}
+        .search-results button{display:block;width:100%;text-align:left;background:none;border:0;
+        border-bottom:1px solid var(--line);color:var(--text);padding:.55rem .8rem;cursor:pointer;font-size:.88rem}
+        .search-results button:last-child{border-bottom:0}
+        .search-results button:hover,.search-results button.sel{background:var(--card)}
+        .search-results .sec{display:block;color:var(--muted);font-size:.72rem;margin-top:.1rem}
+        .search-empty{padding:.55rem .8rem;color:var(--muted);font-size:.85rem}
+        .search-hit{animation:searchflash 2s ease-out;border-radius:6px}
+        @keyframes searchflash{0%,55%{background:rgba(34,194,76,.28);box-shadow:0 0 0 2px var(--accent2)}
+        100%{background:transparent;box-shadow:none}}
     </style>
 </head>
 <body>
@@ -154,6 +170,11 @@
         <h1>FlightScnrPi</h1>
     </div>
     <p class="subtitle">Portal settings for radar, local ADS-B, display, alerts, tracking, and API keys.</p>
+
+    <div class="search-wrap">
+        <input id="setting_search" type="search" placeholder="Search settings…" autocomplete="off">
+        <div id="setting_search_results" class="search-results hidden"></div>
+    </div>
 
     <details class="card">
         <summary><span class="ico">&#9678;</span>Radar<span class="sum">center, range, units</span><span class="chev">&#9656;</span></summary>
@@ -504,6 +525,13 @@
         <div class="body">
             <label for="bright_pct">Screen brightness <span id="bright_pct_label">100%</span></label>
             <input id="bright_pct" type="range" min="3" max="100" step="1" value="100">
+            <div class="chk">
+                <label for="quiet_dim_enabled">Dim during quiet hours</label>
+                <span class="switch"><input id="quiet_dim_enabled" type="checkbox"><span class="track"></span></span>
+            </div>
+            <label for="quiet_dim_pct">Quiet-hours dim level <span id="quiet_dim_pct_label">20%</span></label>
+            <input id="quiet_dim_pct" type="range" min="0" max="100" step="1" value="20" oninput="document.getElementById('quiet_dim_pct_label').textContent = this.value + '%'">
+            <p class="hint">Caps the screen at this brightness while ATC quiet hours are active. Same as Settings &rarr; Quiet on the device, where the slider previews the dimness live.</p>
             <label for="display_rotation">Screen rotation</label>
             <select id="display_rotation">
                 <option value="0">0°</option>
@@ -639,15 +667,15 @@
             <label for="lofi_volume" style="margin-top:.6rem">Lofi volume <span id="lofi_volume_label">25%</span></label>
             <input id="lofi_volume" type="range" min="0" max="100" step="1" value="25" oninput="document.getElementById('lofi_volume_label').textContent = this.value + '%'">
             <div class="chk">
-                <label for="lofi_controls_enabled">Track buttons on radar</label>
+                <label for="lofi_controls_enabled">Lofi prev/next buttons</label>
                 <span class="switch"><input id="lofi_controls_enabled" type="checkbox"><span class="track"></span></span>
             </div>
             <p class="hint">Prev/next pill on the rim opposite the clock HUD. Shows only while the beats are enabled.</p>
             <div class="chk">
-                <label for="lofi_title_scroll">Scroll track name</label>
+                <label for="lofi_title_scroll">Scroll lofi track name</label>
                 <span class="switch"><input id="lofi_title_scroll" type="checkbox" checked><span class="track"></span></span>
             </div>
-            <p class="hint">Marquee the track name through the pill. Off = truncate long names at 20 characters.</p>
+            <p class="hint">Marquee the lofi track name through the pill. Off = truncate long names at 20 characters.</p>
 
             <div id="lofi-pack" style="margin:.8rem 0 0">
                 <p class="hint" id="lofi_pack_hint">The starter playlist is not installed yet — the beats need tracks to play.</p>
@@ -693,15 +721,6 @@
                 <label for="night_en">Enable off-hours (night mode)</label>
                 <span class="switch"><input id="night_en" type="checkbox"><span class="track"></span></span>
             </div>
-            <label for="night_mode">During off-hours</label>
-            <select id="night_mode">
-                <option value="dim">Dim display</option>
-                <option value="off">Turn off display</option>
-            </select>
-            <div id="dim-row">
-                <label for="night_dim">Dim brightness <span id="night_dim_label">20%</span></label>
-                <input id="night_dim" type="range" min="3" max="100" step="1" value="20">
-            </div>
             <div class="chk">
                 <label for="night_clock">Show clock during off-hours</label>
                 <span class="switch"><input id="night_clock" type="checkbox"><span class="track"></span></span>
@@ -710,7 +729,7 @@
                 <div><label for="night_start">Start</label><input type="time" id="night_start"></div>
                 <div><label for="night_end">End</label><input type="time" id="night_end"></div>
             </div>
-            <p class="note">Dim/off and clock can be combined — e.g. dim the display and stay on the clock screen.</p>
+            <p class="note">Off-hours controls the night-clock schedule. Display dimming (down to 0% = screen off) lives under Display, screens &amp; volume &rarr; "Dim during quiet hours", which follows the ATC quiet-hours window.</p>
             <button class="btn btn-primary" id="btn-offhours" style="margin-top:.7rem" type="button">Save off-hours</button>
             <div id="offhours-status" class="status"></div>
         </div>
@@ -1402,6 +1421,11 @@ async function loadAll() {
         const d = await jsonFetch("/display/json");
         $("bright_pct").value = String(d.brightness_percent || 100);
         syncBrightLabel();
+        if ($("quiet_dim_enabled")) $("quiet_dim_enabled").checked = !!d.quiet_dim_enabled;
+        if ($("quiet_dim_pct")) {
+            $("quiet_dim_pct").value = String(d.quiet_dim_percent ?? 20);
+            document.getElementById("quiet_dim_pct_label").textContent = ($("quiet_dim_pct").value) + "%";
+        }
         if ($("display_rotation")) {
             const rot = [0, 90, 180, 270].includes(Number(d.display_rotation))
                 ? String(d.display_rotation)
@@ -1469,10 +1493,8 @@ async function loadAll() {
         $("night_en").checked = !!o.enabled;
         let mode = (o.mode || "dim");
         if (mode === "clock") mode = "dim";
-        $("night_mode").value = mode;
         $("night_start").value = o.start || "22:00";
         $("night_end").value = o.end || "06:00";
-        $("night_dim").value = String(o.dim_percent || 20);
         syncNightDimLabel();
         if ($("night_clock")) $("night_clock").checked = !!o.force_clock || (o.mode === "clock");
         toggleDimRow();
@@ -1556,7 +1578,6 @@ async function loadAll() {
 }
 
 function toggleDimRow() {
-    $("dim-row").style.display = $("night_mode").value === "dim" ? "block" : "none";
 }
 
 function syncBrightLabel() {
@@ -1564,8 +1585,6 @@ function syncBrightLabel() {
     if (el) el.textContent = `${$("bright_pct").value}%`;
 }
 function syncNightDimLabel() {
-    const el = $("night_dim_label");
-    if (el) el.textContent = `${$("night_dim").value}%`;
 }
 function syncHudOpacityLabel() {
     const el = $("radar_hud_opacity_label");
@@ -2052,6 +2071,8 @@ async function saveAndReloadSettings(statusId) {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
                 brightness_percent: Number($("bright_pct").value),
+                quiet_dim_enabled: $("quiet_dim_enabled") ? $("quiet_dim_enabled").checked : false,
+                quiet_dim_percent: $("quiet_dim_pct") ? Number($("quiet_dim_pct").value) : 20,
                 display_rotation: Number($("display_rotation") ? $("display_rotation").value : 90),
                 flight_detail_timeout_s: Number($("detail_timeout").value),
                 clock_timeout_s: Number($("clock_timeout").value),
@@ -2110,11 +2131,9 @@ async function saveOffHours() {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
                 enabled: $("night_en").checked,
-                mode: $("night_mode").value,
                 force_clock: $("night_clock") ? $("night_clock").checked : false,
                 start: $("night_start").value,
                 end: $("night_end").value,
-                dim_percent: Number($("night_dim").value),
             }),
         });
         showStatus("offhours-status", data.message || "Off-hours saved.");
@@ -2960,10 +2979,8 @@ $("fav-list").addEventListener("click", (ev) => {
     if (!btn) return;
     deleteFavourite(btn.getAttribute("data-fav-delete"));
 });
-$("night_mode").addEventListener("change", toggleDimRow);
 $("range_index").addEventListener("change", syncRangeSelect);
 $("bright_pct").addEventListener("input", syncBrightLabel);
-$("night_dim").addEventListener("input", syncNightDimLabel);
 if ($("radar_hud_opacity")) $("radar_hud_opacity").addEventListener("input", syncHudOpacityLabel);
 if ($("hourly_chime_volume")) $("hourly_chime_volume").addEventListener("input", syncChimeVolumeLabel);
 if ($("traffic_sfx_volume")) $("traffic_sfx_volume").addEventListener("input", syncChimeVolumeLabel);
@@ -3524,6 +3541,87 @@ document.addEventListener("DOMContentLoaded", () => {
             if (r.ok) { input.value = ""; loadLofiTracks(); }
         } catch (_) { if (msg) msg.textContent = "Upload failed."; }
     });
+
+    // --- Settings search: keyword match on labels, jump + flash ---
+    (function () {
+        const inp = $("setting_search"), box = $("setting_search_results");
+        if (!inp || !box) return;
+        let index = null;
+        let current = [];
+        function sectionTitle(det) {
+            const sum = det.querySelector(":scope > summary");
+            if (!sum) return "";
+            let t = "";
+            for (const n of sum.childNodes) if (n.nodeType === 3) t += n.textContent;
+            return t.replace(/\s+/g, " ").trim();
+        }
+        function buildIndex() {
+            index = [];
+            document.querySelectorAll("details.card").forEach((det) => {
+                const sec = sectionTitle(det) || "Settings";
+                const sum = det.querySelector(":scope > summary");
+                const sumHint = sum && sum.querySelector(".sum") ? sum.querySelector(".sum").textContent : "";
+                if (sum) index.push({
+                    text: (sec + " " + sumHint).toLowerCase(),
+                    label: sec, sec: "Section", el: sum,
+                });
+                det.querySelectorAll("label").forEach((lab) => {
+                    const t = lab.textContent.replace(/\s+/g, " ").trim();
+                    if (t) index.push({
+                        text: (t + " " + sec).toLowerCase(),
+                        label: t, sec, el: lab,
+                    });
+                });
+            });
+        }
+        function go(entry) {
+            box.classList.add("hidden");
+            inp.blur();
+            for (let n = entry.el; n; n = n.parentElement)
+                if (n.tagName === "DETAILS") n.open = true;
+            entry.el.scrollIntoView({ behavior: "smooth", block: "center" });
+            entry.el.classList.remove("search-hit");
+            void entry.el.offsetWidth;
+            entry.el.classList.add("search-hit");
+            setTimeout(() => entry.el.classList.remove("search-hit"), 2100);
+        }
+        function render(q) {
+            if (index === null) buildIndex();
+            const words = q.toLowerCase().split(/\s+/).filter(Boolean);
+            if (!words.length) { box.classList.add("hidden"); current = []; return; }
+            current = index.filter((e) => words.every((w) => e.text.includes(w))).slice(0, 12);
+            box.innerHTML = "";
+            if (!current.length) {
+                const d = document.createElement("div");
+                d.className = "search-empty";
+                d.textContent = "No settings match";
+                box.appendChild(d);
+            } else current.forEach((e, i) => {
+                const b = document.createElement("button");
+                b.type = "button";
+                const name = document.createElement("span");
+                name.textContent = e.label;
+                const sec = document.createElement("span");
+                sec.className = "sec";
+                sec.textContent = e.sec;
+                b.appendChild(name);
+                b.appendChild(sec);
+                if (i === 0) b.classList.add("sel");
+                b.addEventListener("mousedown", (ev) => { ev.preventDefault(); go(e); });
+                box.appendChild(b);
+            });
+            box.classList.remove("hidden");
+        }
+        inp.addEventListener("input", () => render(inp.value));
+        inp.addEventListener("keydown", (ev) => {
+            if (ev.key === "Enter" && current.length) { ev.preventDefault(); go(current[0]); }
+            else if (ev.key === "Escape") { box.classList.add("hidden"); inp.blur(); }
+        });
+        inp.addEventListener("focus", () => { if (inp.value.trim()) render(inp.value); });
+        document.addEventListener("click", (ev) => {
+            if (!ev.target.closest(".search-wrap")) box.classList.add("hidden");
+        });
+    })();
 </script>
 </body>
 </html>

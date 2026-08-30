@@ -112,6 +112,8 @@ BOOT_SPLASH_S = 3
 DISCLAIMER_AUTO_CONTINUE_S = 8
 AUTO_IDLE_MIN_RADAR_S = 5
 OFF_HOURS_TOUCH_WAKE_S = 300
+# Touching the blacked-out quiet-hours radar relights it briefly.
+RADAR_PEEK_S = 20.0
 
 
 class RoundTouchDisplay:
@@ -211,6 +213,14 @@ class RoundTouchDisplay:
         self._timeout_rot_base: pygame.Surface | None = None
         self._prev_timeout_ring_frac: float | None = None
         self._last_slider_draw = 0.0
+        # Inertial settings scrolling: (velocity px/s, last tick time).
+        self._scroll_momentum_v = 0.0
+        # Raw px dragged past a list edge (display curve compresses it).
+        self._overscroll = 0.0
+        # Spring velocity for the settle-back animation (px/s).
+        self._overscroll_v = 0.0
+        self._scroll_momentum_t = 0.0
+        self._scroll_samples: list[tuple[float, int]] = []
         self._display_focus = 0
         self._system_confirm: str | None = None
         # Settings list picker kind (ATC + other multi-option rows), or None.
@@ -223,6 +233,8 @@ class RoundTouchDisplay:
         # Same for settings pages, plus whether that drag already scrolled.
         self._settings_drag_y: int | None = None
         self._settings_drag_scrolled = False
+        # Card under the finger right now — instant pressed highlight.
+        self._settings_pressed_row: int | None = None
         self._fatal_error = None
         self._scroll = nav.ScrollState()
         self._last_grab_seq = 0
@@ -244,6 +256,8 @@ class RoundTouchDisplay:
         self._aircraft_photo_inflight: set[str] = set()
         self._aircraft_photo_miss: set[str] = set()
         self._aircraft_photo_redraw = False
+        # Set by the async ATC power worker once mpv transport settles.
+        self._atc_power_redraw = False
         self._vessel_photos: dict[str, dict] = {}
         self._vessel_photo_inflight: set[str] = set()
         self._vessel_photo_miss: set[str] = set()
@@ -278,6 +292,13 @@ class RoundTouchDisplay:
         self._vfr_opacity_slider_active = False
         self._atc_volume_slider_active = False
         self._lofi_volume_slider_active = False
+        self._quiet_dim_slider_active = False
+        self._targets_slider_which: str | None = None
+        self._targets_slider_last_value: int | None = None
+        # Live dim preview while the quiet-dim slider is held.
+        self._quiet_dim_preview: int | None = None
+        # Radar peek: dark radar relights until this time after a touch.
+        self._radar_peek_until = 0.0
         self._radar_hud_volume_drag = False
         self._radar_hud_layout_drag = False
         self._hud_opacity_slider_active = False
@@ -303,8 +324,41 @@ class RoundTouchDisplay:
         self._disclaimer_countdown_armed = False
         self._update_check_started = False
         self._pending_wifi_setup = enter_setup
+        self._migrate_off_hours_dim()
         self._apply_brightness()
         self._safe_draw()
+
+    def _migrate_off_hours_dim(self) -> None:
+        """One-time fold: legacy off-hours dim/off becomes quiet-hours dim.
+
+        Off-hours no longer touches brightness. Anyone who had night
+        dimming (the old default) keeps the same behavior through quiet
+        dim — the quiet window already defaults to the off-hours window.
+        """
+        try:
+            if bool(settings._state.get("quiet_dim_migrated", False)):
+                return
+            from display.round_touch import off_hours
+
+            cfg = off_hours.prefs()
+            already_configured = settings.quiet_dim_enabled()
+            if (
+                not already_configured
+                and cfg.get("enabled")
+                and str(cfg.get("mode", "dim")) in ("dim", "off")
+            ):
+                pct = 0 if cfg.get("mode") == "off" else int(cfg.get("dim_percent", 20))
+                settings.set_quiet_dim_enabled(True)
+                settings.set_quiet_dim_percent(max(0, min(100, pct)), persist=True)
+                if pct > 0:
+                    settings.set_quiet_dim_restore(pct)
+                logger.info(
+                    "Migrated off-hours %s (%s%%) to quiet-hours dim",
+                    cfg.get("mode"), pct,
+                )
+            settings._rmw_save({"quiet_dim_migrated": True})
+        except Exception:
+            logger.debug("Off-hours dim migration failed", exc_info=True)
 
     def _start_update_check_thread(self) -> None:
         """Start periodic GitHub update checks (once, after disclaimer unlock)."""
@@ -941,8 +995,9 @@ class RoundTouchDisplay:
             drawn_max = info.draw_info(
                 self.surface,
                 self.settings_page,
-                self._scroll.offset,
+                self._settings_draw_offset(),
                 self._display_focus,
+                pressed_row=self._settings_pressed_row,
                 system_confirm=self._system_confirm,
                 atc_picker=self._atc_picker,
                 atc_picker_scroll=self._atc_picker_scroll.offset,
@@ -1576,6 +1631,8 @@ class RoundTouchDisplay:
         self._hud_volume_slider_kind = None
         self._settings_drag_y = None
         self._settings_drag_scrolled = False
+        self._settings_pressed_row = None
+        self._overscroll = 0.0
         self._system_confirm = None
         self._close_atc_picker()
         self._invalidate_timeout_content_cache()
@@ -1615,6 +1672,9 @@ class RoundTouchDisplay:
             self._scroll.reset()
             self._settings_drag_y = None
             self._settings_drag_scrolled = False
+            self._settings_pressed_row = None
+            self._overscroll = 0.0
+            self._overscroll_v = 0.0
         if screen == SCREEN_LIVE and previous != SCREEN_LIVE:
             # Fresh entry into live tracking — force an immediate position fetch.
             self._live_map_last_fetch = 0.0
@@ -1787,10 +1847,7 @@ class RoundTouchDisplay:
             # Switch and slider are hit-tested directly on the row.
             return
         elif action == "enabled":
-            from utilities import atc_audio
-
-            atc_audio.toggle_power()
-            info.invalidate_atc_labels()
+            self._async_atc_power(not settings.atc_enabled())
         elif action == "volume":
             return
         elif action == "lofi":
@@ -1804,6 +1861,9 @@ class RoundTouchDisplay:
             settings.toggle_lofi_title_scroll()
         elif action == "quiet":
             settings.set_atc_quiet_hours_enabled(not settings.atc_quiet_hours_enabled())
+        elif action == "quiet_dim":
+            settings.set_quiet_dim_enabled(not settings.quiet_dim_enabled())
+            self._apply_brightness()
         elif action == "quiet_start":
             self._open_atc_picker("quiet_start")
         elif action == "quiet_end":
@@ -1824,6 +1884,8 @@ class RoundTouchDisplay:
         if kind == "channel" and not settings.atc_airport():
             return
         info.invalidate_atc_labels()
+        if kind in info.TIME_PICKER_KINDS:
+            info.time_picker_reset(kind)
         self._atc_picker = kind
         self._atc_picker_scroll.reset()
         self._atc_picker_drag_y = None
@@ -1933,6 +1995,35 @@ class RoundTouchDisplay:
         action, value = hit
         if action in ("close", "outside"):
             self._close_atc_picker()
+            return
+        if action == "time_num":
+            try:
+                info.time_picker_pick(int(value))
+            except (TypeError, ValueError):
+                return
+            self._note_activity()
+            self._safe_draw()
+            return
+        if action == "time_ampm":
+            info.time_picker_set_pm(value == "PM")
+            self._note_activity()
+            self._safe_draw()
+            return
+        if action == "time_part":
+            info.time_picker_set_stage(value)
+            self._note_activity()
+            self._safe_draw()
+            return
+        if action == "time_set":
+            kind = self._atc_picker
+            self._close_atc_picker()
+            hhmm = info.time_picker_value()
+            if kind == "quiet_start":
+                settings.set_atc_quiet_start(hhmm)
+            elif kind == "quiet_end":
+                settings.set_atc_quiet_end(hhmm)
+            self._note_activity()
+            self._safe_draw()
             return
         if action != "item" or not value:
             return
@@ -2101,6 +2192,8 @@ class RoundTouchDisplay:
             or self._vfr_opacity_slider_active
             or self._atc_volume_slider_active
             or self._lofi_volume_slider_active
+            or self._quiet_dim_slider_active
+            or self._targets_slider_which
             or self._hud_opacity_slider_active
             or self._hud_volume_slider_kind
             or self._radar_hud_volume_drag
@@ -2381,6 +2474,127 @@ class RoundTouchDisplay:
         self._display_focus = info.lofi_volume_row_index()
         return True
 
+    def _toggle_quiet_dim_off(self) -> None:
+        """Screen-off button: dim level 0 <-> last non-zero level."""
+        current = settings.quiet_dim_percent()
+        if current > 0:
+            settings.set_quiet_dim_restore(current)
+            settings.set_quiet_dim_percent(0, persist=True)
+        else:
+            settings.set_quiet_dim_percent(
+                settings.quiet_dim_restore(), persist=True
+            )
+        self._display_focus = info.quiet_dim_row_index()
+        self._apply_brightness()
+        self._note_activity()
+        self._safe_draw()
+
+    def _apply_quiet_dim_slider(self, x: int, *, persist: bool = True) -> bool:
+        from display.round_touch import backlight
+
+        value = info.quiet_dim_slider_value_at(x, self._scroll.offset)
+        if value is None:
+            return False
+        changed = value != settings.quiet_dim_percent()
+        settings.set_quiet_dim_percent(value, persist=persist)
+        self._display_focus = info.quiet_dim_row_index()
+        if persist:
+            # Finger lifted — drop the preview, restore normal brightness.
+            self._quiet_dim_preview = None
+            self._apply_brightness()
+        else:
+            # Held — the panel shows the dim level live.
+            self._quiet_dim_preview = value
+            backlight.apply_percent(value)
+        return changed
+
+    def _update_targets_slider_drag(self) -> bool:
+        kind = self._atc_picker
+        if (
+            self.screen != SCREEN_SETTINGS
+            or kind not in info.TARGETS_EDITOR_KINDS
+        ):
+            self._targets_slider_which = None
+            return False
+        if not self.input.is_dragging():
+            if self._targets_slider_which:
+                which = self._targets_slider_which
+                self._targets_slider_which = None
+                if self._targets_slider_last_value is not None:
+                    info.targets_apply_slider(
+                        kind, which, self._targets_slider_last_value,
+                        persist=True,
+                    )
+                self._targets_slider_last_value = None
+                radar.invalidate_frame_layer()
+                self.input.consume_scroll_drag()
+                return True
+            return False
+        pos = self.input.drag_pos()
+        if pos is None:
+            return False
+        x, y = pos
+        if not self._targets_slider_which:
+            if self._slider_drag_armed():
+                return False
+            which = info.targets_editor_slider_at(kind, x, y)
+            if which is None:
+                return False
+            self._targets_slider_which = which
+        v = info.targets_editor_slider_value_at(
+            kind, self._targets_slider_which, x
+        )
+        changed = False
+        if v is not None and v != self._targets_slider_last_value:
+            self._targets_slider_last_value = v
+            info.targets_apply_slider(
+                kind, self._targets_slider_which, v, persist=False
+            )
+            changed = True
+        self.input.consume_scroll_drag()
+        return changed
+
+    def _update_quiet_dim_slider_drag(self) -> bool:
+        if self.screen != SCREEN_SETTINGS or self.settings_page != info.PAGE_ATC_QUIET:
+            if self._quiet_dim_slider_active or self._quiet_dim_preview is not None:
+                self._quiet_dim_slider_active = False
+                self._quiet_dim_preview = None
+                self._apply_brightness()
+            return False
+        if not self.input.is_dragging():
+            if self._quiet_dim_slider_active:
+                self._quiet_dim_slider_active = False
+                settings.set_quiet_dim_percent(
+                    settings.quiet_dim_percent(), persist=True
+                )
+                self._quiet_dim_preview = None
+                self._apply_brightness()
+                self.input.consume_scroll_drag()
+                return True
+            return False
+        pos = self.input.drag_pos()
+        if pos is None:
+            return False
+        x, y = pos
+        if not self._quiet_dim_slider_active:
+            if self._slider_drag_armed():
+                return False
+            if not settings.quiet_dim_enabled():
+                return False
+            if not info.quiet_dim_slider_at(x, y, self._scroll.offset):
+                return False
+            self._quiet_dim_slider_active = True
+        elif not info.quiet_dim_slider_drag_band(x, y, self._scroll.offset):
+            self._quiet_dim_slider_active = False
+            settings.set_quiet_dim_percent(settings.quiet_dim_percent(), persist=True)
+            self._quiet_dim_preview = None
+            self._apply_brightness()
+            self.input.consume_scroll_drag()
+            return True
+        changed = self._apply_quiet_dim_slider(x, persist=False)
+        self.input.consume_scroll_drag()
+        return changed
+
     def _update_lofi_volume_slider_drag(self) -> bool:
         if self.screen != SCREEN_SETTINGS or self.settings_page != info.PAGE_ATC:
             self._lofi_volume_slider_active = False
@@ -2445,6 +2659,30 @@ class RoundTouchDisplay:
         self.input.consume_scroll_drag()
         return changed
 
+    def _async_atc_power(self, enabled: bool) -> None:
+        """Flip the ATC switch instantly; run the slow mpv work off-thread.
+
+        toggle_power() on the UI thread blocked for seconds (feed fetch,
+        mixer subprocesses, mpv spawn, transport lock) — the switch felt
+        dead. The persisted enable flips first so the row repaints at
+        once, then a worker does the transport and requests a redraw.
+        """
+        from utilities import atc_audio
+
+        target = bool(enabled)
+        settings.set_atc_enabled(target)
+        info.invalidate_atc_labels()
+
+        def _worker() -> None:
+            try:
+                atc_audio.apply_enabled(target)
+            except Exception:
+                logger.exception("ATC power apply failed")
+            info.invalidate_atc_labels()
+            self._atc_power_redraw = True
+
+        Thread(target=_worker, daemon=True, name="atc-power").start()
+
     def _execute_atc_action(self, action: str) -> None:
         """Legacy Play/Stop actions — both map to the single ATC power switch."""
         from utilities import atc_audio
@@ -2458,10 +2696,7 @@ class RoundTouchDisplay:
 
     def _toggle_radar_hud_atc(self) -> None:
         """HUD ATC long-press: same enable/disable as Settings → ATC Audio."""
-        from utilities import atc_audio
-
-        atc_audio.toggle_power()
-        info.invalidate_atc_labels()
+        self._async_atc_power(not settings.atc_enabled())
         radar.invalidate_frame_layer()
 
     def _begin_facing_calibrate(self):
@@ -2872,8 +3107,31 @@ class RoundTouchDisplay:
     def _apply_brightness(self):
         from display.round_touch import backlight, off_hours
 
+        # A held quiet-dim slider previews its level directly.
+        if self._quiet_dim_preview is not None:
+            backlight.apply_percent(int(self._quiet_dim_preview))
+            return
+
         day_pct = settings.brightness_percent()
         pct = off_hours.effective_brightness_percent(day_pct)
+        if settings.quiet_dim_enabled():
+            try:
+                from utilities import atc_audio
+
+                if atc_audio.in_quiet_hours():
+                    dim = settings.quiet_dim_percent()
+                    if dim == 0 and (
+                        self.screen != SCREEN_RADAR
+                        or time.time() < self._radar_peek_until
+                    ):
+                        # 0% blacks out only the radar view. Navigating
+                        # anywhere lights the panel at the last non-zero
+                        # dim level, and a touch on the dark radar peeks
+                        # it at that level for a few seconds.
+                        dim = settings.quiet_dim_restore()
+                    pct = min(pct, dim)
+            except Exception:
+                pass
         # Display-off mode: temporary wake after touch keeps daytime brightness.
         if pct == 0 and time.time() < self._off_hours_wake_until:
             pct = day_pct
@@ -2894,6 +3152,21 @@ class RoundTouchDisplay:
     def _wake_for_off_hours_touch(self):
         from display.round_touch import off_hours
 
+        # Radar peek: a touch on the blacked-out quiet-hours radar
+        # relights it briefly; each touch restarts the timer.
+        if (
+            self.screen == SCREEN_RADAR
+            and settings.quiet_dim_enabled()
+            and settings.quiet_dim_percent() == 0
+        ):
+            try:
+                from utilities import atc_audio
+
+                if atc_audio.in_quiet_hours():
+                    self._radar_peek_until = time.time() + RADAR_PEEK_S
+                    self._apply_brightness()
+            except Exception:
+                pass
         if not off_hours.in_off_hours():
             return
         if off_hours.effective_brightness_percent(settings.brightness_percent()) != 0:
@@ -3209,14 +3482,114 @@ class RoundTouchDisplay:
         self._maybe_enrich_flight_detail()
         return True
 
+    def _tick_scroll_momentum(self) -> None:
+        """Decay-based inertial scroll after a settings flick."""
+        if (
+            not self._scroll_momentum_v
+            and not self._overscroll
+            and not self._overscroll_v
+        ):
+            return
+        if self.screen != SCREEN_SETTINGS or self.input.is_dragging():
+            # A fresh grab owns the list; the spring restarts from the
+            # finger's release state, not a stale velocity.
+            self._scroll_momentum_v = 0.0
+            self._overscroll_v = 0.0
+            return
+        now = time.time()
+        dt = min(0.1, max(0.0, now - self._scroll_momentum_t))
+        self._scroll_momentum_t = now
+        if self._scroll_momentum_v:
+            before = self._scroll.offset
+            self._apply_scroll_delta(int(round(self._scroll_momentum_v * dt)))
+            if self._overscroll:
+                # Fling reached the edge — hand the remaining velocity to the
+                # spring so the bounce depth matches the fling energy.
+                self._overscroll_v = max(
+                    -3000.0, min(3000.0, self._scroll_momentum_v)
+                )
+                self._scroll_momentum_v = 0.0
+            else:
+                # Exponential decay tuned to feel like a platform scroll view.
+                self._scroll_momentum_v *= 0.135 ** dt
+                if abs(self._scroll_momentum_v) < 40.0 or (
+                    self._scroll.offset == before
+                ):
+                    self._scroll_momentum_v = 0.0
+                    self._safe_draw()
+        elif self._overscroll or self._overscroll_v:
+            # Slightly underdamped spring (zeta ~0.8): one gentle settle,
+            # not a rubber wobble and not a hard exponential stop.
+            # Integrate in <=8ms substeps — a single hiccup frame at the
+            # 100ms dt clamp sat on Euler's stability edge and the spring
+            # exploded instead of settling.
+            k = 260.0
+            c = 2.0 * 0.8 * math.sqrt(k)
+            x = self._overscroll
+            v = max(-4000.0, min(4000.0, self._overscroll_v))
+            steps = max(1, int(math.ceil(dt / 0.008)))
+            h = dt / steps
+            for _ in range(steps):
+                v += (-k * x - c * v) * h
+                x += v * h
+            if not (math.isfinite(x) and math.isfinite(v)) or abs(x) > 5000.0:
+                x = 0.0
+                v = 0.0
+            self._overscroll = x
+            self._overscroll_v = v
+            if abs(x) < 1.0 and abs(v) < 30.0:
+                self._overscroll = 0.0
+                self._overscroll_v = 0.0
+                self._safe_draw()
+            else:
+                now2 = time.time()
+                if now2 - self._last_slider_draw >= 0.016:
+                    self._last_slider_draw = now2
+                    self._safe_draw()
+
+    def _settings_draw_offset(self) -> int:
+        """Scroll offset plus the rubber-band displacement.
+
+        iOS-style asymptotic curve: ~0.55 finger-tracking near the edge,
+        smoothly approaching (never hitting) the max displacement, so the
+        band tightens naturally instead of stopping at a wall.
+        """
+        limit = float(theme.s(64))
+        x = self._overscroll
+        disp = 0.55 * limit * x / (0.55 * abs(x) + limit)
+        return self._scroll.offset + int(round(disp))
+
     def _apply_scroll_delta(self, delta: int):
         if not delta:
             return
         if self.screen == SCREEN_SETTINGS and self._atc_picker:
             self._atc_picker_scroll.step(delta)
+        elif self.screen == SCREEN_SETTINGS:
+            # Apple-style edges: excess drag piles into _overscroll and the
+            # list springs back on release instead of stopping dead.
+            sc = self._scroll
+            target = float(sc.offset) + self._overscroll + float(delta)
+            if target < 0.0:
+                sc.offset = 0
+                self._overscroll = target
+            elif target > float(sc.max_offset):
+                sc.offset = int(sc.max_offset)
+                self._overscroll = target - float(sc.max_offset)
+            else:
+                sc.offset = int(round(target))
+                self._overscroll = 0.0
         else:
             self._scroll.step(delta)
         self._note_activity()
+        if self.screen == SCREEN_SETTINGS:
+            # Scrolling repaints the whole page; cap it at ~25 fps so touch
+            # events don't queue behind draws, and freeze the ATC labels so
+            # their bluetoothctl/IPC rebuild can't stall mid-gesture.
+            info.hold_atc_labels()
+            now_scroll = time.time()
+            if now_scroll - self._last_slider_draw < 0.016:
+                return
+            self._last_slider_draw = now_scroll
         self._safe_draw()
 
     def _handle_scroll_drag(self):
@@ -3305,6 +3678,19 @@ class RoundTouchDisplay:
                 ):
                     self.input.consume_scroll_drag()
                     return
+        if self.screen == SCREEN_SETTINGS and self.settings_page == info.PAGE_ATC_QUIET:
+            # Without this guard the page scrolled under a dim-slider drag,
+            # so the slider felt like it took several tries to grab.
+            if self._quiet_dim_slider_active:
+                self.input.consume_scroll_drag()
+                return
+            if self.input.is_dragging():
+                pos = self.input.drag_pos()
+                if pos and info.quiet_dim_slider_at(
+                    pos[0], pos[1], self._scroll.offset
+                ):
+                    self.input.consume_scroll_drag()
+                    return
         if self.screen in (
             SCREEN_SETTINGS,
             SCREEN_FLIGHT,
@@ -3319,15 +3705,53 @@ class RoundTouchDisplay:
             if self.input.is_dragging():
                 pos = self.input.drag_pos()
                 if pos is not None:
+                    if self.screen == SCREEN_SETTINGS:
+                        # Highlight the card on finger-down; drop it as
+                        # soon as the drag turns into a scroll.
+                        threshold = float(input_handler.gesture_threshold_px())
+                        row = None
+                        if self.input.max_travel() < threshold:
+                            row = info.display_row_at(
+                                pos[0], pos[1],
+                                self.settings_page, self._scroll.offset,
+                            )
+                        if row != self._settings_pressed_row:
+                            self._settings_pressed_row = row
+                            self._note_activity()
+                            self._safe_draw()
+                    now_t = time.time()
                     if self._settings_drag_y is None:
                         self._settings_drag_scrolled = False
+                        self._scroll_samples = [(now_t, pos[1])]
+                        self._scroll_momentum_v = 0.0
                     else:
                         dy = pos[1] - self._settings_drag_y
                         if dy:
                             self._settings_drag_scrolled = True
                             self._apply_scroll_delta(-dy)
+                        self._scroll_samples.append((now_t, pos[1]))
+                        if len(self._scroll_samples) > 6:
+                            self._scroll_samples.pop(0)
                     self._settings_drag_y = pos[1]
                     return
+            if self._settings_drag_y is not None:
+                # Drag ended — hand off to inertial scrolling (Apple-style).
+                self._settings_drag_y = None
+                self._settings_pressed_row = None
+                v = 0.0
+                if len(self._scroll_samples) >= 2:
+                    t0, y0 = self._scroll_samples[0]
+                    t1, y1 = self._scroll_samples[-1]
+                    if t1 - t0 > 0.005:
+                        v = (y1 - y0) / (t1 - t0)
+                self._scroll_samples = []
+                self._scroll_momentum_t = time.time()
+                if self._overscroll:
+                    self._overscroll_v = max(-3000.0, min(3000.0, -v))
+                elif abs(v) > 120.0:
+                    self._scroll_momentum_v = -v
+                self._safe_draw()
+                return
             self._settings_drag_y = None
             return
         dy = self.input.consume_scroll_drag()
@@ -3364,6 +3788,18 @@ class RoundTouchDisplay:
         rgb[channel] = value
         settings.set_custom_theme_rgb(*rgb, persist=persist)
         return True
+
+    def _apply_theme_swatch(self, group: str, rgb: tuple) -> None:
+        """Crayon-box tap: set the whole color for one group at once."""
+        r, g, b = rgb
+        if group == info.RGB_GROUP_RUNWAY:
+            settings.set_runway_darkmap_rgb(r, g, b, persist=True)
+        elif group == info.RGB_GROUP_RUNWAY_LIGHT:
+            settings.set_runway_light_rgb(r, g, b, persist=True)
+        else:
+            settings.set_custom_theme_rgb(r, g, b, persist=True)
+        self._note_activity()
+        self._safe_draw()
 
     def _apply_brightness_slider(self, x: int, *, persist: bool = True) -> bool:
         value = info.brightness_slider_value_at(x, self._scroll.offset)
@@ -3614,6 +4050,18 @@ class RoundTouchDisplay:
             ):
                 self._apply_lofi_volume_slider(x, persist=True)
                 return
+            if self.settings_page == info.PAGE_ATC_QUIET and info.quiet_dim_off_button_at(
+                x, y, self._scroll.offset
+            ):
+                if settings.quiet_dim_enabled():
+                    self._toggle_quiet_dim_off()
+                return
+            if self.settings_page == info.PAGE_ATC_QUIET and info.quiet_dim_slider_at(
+                x, y, self._scroll.offset
+            ):
+                if settings.quiet_dim_enabled():
+                    self._apply_quiet_dim_slider(x, persist=True)
+                return
             if self.settings_page == info.PAGE_ATC:
                 btn = info.atc_action_at(x, y)
                 if btn is not None:
@@ -3623,6 +4071,16 @@ class RoundTouchDisplay:
             if row is not None:
                 self._apply_display_row(self.settings_page, row)
         elif self.settings_page == info.PAGE_COLORS and x is not None and y is not None:
+            sw = info.theme_swatch_at(x, y, self._scroll.offset)
+            if sw is not None:
+                self._apply_theme_swatch(*sw)
+                return
+            exp = info.theme_expander_at(x, y, self._scroll.offset)
+            if exp is not None:
+                info.theme_toggle_expanded(exp)
+                self._note_activity()
+                self._safe_draw()
+                return
             hit = info.theme_slider_at(x, y, self._scroll.offset)
             if hit is not None:
                 group, channel = hit
@@ -5033,6 +5491,7 @@ class RoundTouchDisplay:
                     self._safe_draw()
                     self._last_radar_draw = time.time()
 
+                self._tick_scroll_momentum()
                 if (
                     self._update_facing_drag()
                     or self._update_radar_hud_layout_drag()
@@ -5043,6 +5502,8 @@ class RoundTouchDisplay:
                     or self._update_chime_volume_slider_drag()
                     or self._update_vfr_opacity_slider_drag()
                     or self._update_lofi_volume_slider_drag()
+                    or self._update_quiet_dim_slider_drag()
+                    or self._update_targets_slider_drag()
                     or self._update_atc_volume_slider_drag()
                     or self._update_radar_hud_volume_drag()
                 ):
@@ -5055,8 +5516,9 @@ class RoundTouchDisplay:
                         # ATC labels shell out to bluetoothctl / mpv IPC on
                         # rebuild — freeze them while the finger drags.
                         info.hold_atc_labels()
+                    drag_iv = 0.016 if self.screen == SCREEN_SETTINGS else 0.05
                     if (
-                        now_drag - self._last_slider_draw >= 0.05
+                        now_drag - self._last_slider_draw >= drag_iv
                         or not self.input.is_dragging()
                     ):
                         self._safe_draw()
@@ -5184,6 +5646,10 @@ class RoundTouchDisplay:
                 ):
                     self._aircraft_photo_redraw = False
                     self._safe_draw()
+                if self._atc_power_redraw:
+                    self._atc_power_redraw = False
+                    if self.screen == SCREEN_SETTINGS:
+                        self._safe_draw()
 
                 if self._live_map_redraw and self.screen == SCREEN_LIVE:
                     self._live_map_redraw = False
@@ -5378,6 +5844,8 @@ class RoundTouchDisplay:
                     self._tick_manual_weather_refresh()
                     self._tick_off_hours_clock()
                 self._apply_brightness()
+                if not self._slider_drag_armed():
+                    settings.flush_pending()
                 self._loop_stage("loop_misc", _lt)
                 if FRAME_DEBUG:
                     try:

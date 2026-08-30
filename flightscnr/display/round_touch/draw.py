@@ -87,35 +87,68 @@ SWITCH_KNOB_OFF = (150, 165, 180)
 
 
 def toggle_switch_size(font: pygame.font.Font) -> tuple[int, int]:
-    """Pill switch dimensions for a row drawn in ``font``."""
-    height = max(theme.s(14), font.get_height() - theme.s(8))
-    return int(height * 1.8), height
+    """Material 3 switch proportions (52x32dp track), scaled to the row."""
+    height = max(theme.s(21), font.get_height() - theme.s(2))
+    return int(height * 1.63), height
+
+
+# Same look as the radar HUD volume popover slider: pill track, SWEEP
+# fill, solid round knob riding the fill edge.
+SLIDER_TRACK = (70, 74, 80)
+
+
+def draw_slider(
+    surface: pygame.Surface,
+    track_x: int,
+    track_cy: int,
+    track_w: int,
+    pct: float,
+    *,
+    enabled: bool = True,
+    fill_color: tuple | None = None,
+) -> pygame.Rect:
+    """Draw a horizontal 0–100 slider; returns the track rect."""
+    track_h = max(6, theme.s(10))
+    rect = pygame.Rect(int(track_x), int(track_cy) - track_h // 2, int(track_w), track_h)
+    pygame.draw.rect(surface, SLIDER_TRACK, rect, border_radius=track_h // 2)
+    frac = max(0.0, min(100.0, float(pct))) / 100.0
+    fill_w = int(round(frac * track_w))
+    if fill_w > 0:
+        if fill_color is None:
+            fill_color = theme.SWEEP if enabled else theme.SWEEP_TRAIL
+        pygame.draw.rect(
+            surface,
+            fill_color,
+            pygame.Rect(rect.x, rect.y, fill_w, track_h),
+            border_radius=track_h // 2,
+        )
+    knob_r = max(6, theme.s(7))
+    pygame.draw.circle(
+        surface, SWITCH_KNOB_ON, (rect.x + fill_w, int(track_cy)), knob_r
+    )
+    return rect
 
 
 def draw_toggle_switch(surface: pygame.Surface, rect: pygame.Rect, on: bool) -> None:
-    """Pill switch: green with the knob right when on, dim and left when off."""
+    """Material 3 style switch: filled track + big thumb when on,
+    outlined track + small thumb when off."""
     radius = max(2, rect.height // 2)
-    pygame.draw.rect(
-        surface,
-        theme.GRID if on else SWITCH_OFF_FILL,
-        rect,
-        border_radius=radius,
-    )
-    pygame.draw.rect(
-        surface,
-        theme.SWEEP if on else theme.HINT,
-        rect,
-        max(1, theme.s(1)),
-        border_radius=radius,
-    )
-    knob_r = max(2, radius - max(1, theme.s(2)))
-    knob_x = rect.right - radius if on else rect.left + radius
-    pygame.draw.circle(
-        surface,
-        SWITCH_KNOB_ON if on else SWITCH_KNOB_OFF,
-        (int(knob_x), rect.centery),
-        knob_r,
-    )
+    if on:
+        pygame.draw.rect(surface, theme.GRID, rect, border_radius=radius)
+        pygame.draw.rect(
+            surface, theme.SWEEP, rect, max(1, theme.s(1)), border_radius=radius)
+        knob_r = max(3, radius - max(1, theme.s(2)))
+        knob_x = rect.right - radius
+        pygame.draw.circle(
+            surface, SWITCH_KNOB_ON, (int(knob_x), rect.centery), knob_r)
+    else:
+        pygame.draw.rect(surface, SWITCH_OFF_FILL, rect, border_radius=radius)
+        pygame.draw.rect(
+            surface, theme.HINT, rect, max(1, theme.s(2)), border_radius=radius)
+        knob_r = max(3, radius - max(2, theme.s(5)))
+        knob_x = rect.left + radius
+        pygame.draw.circle(
+            surface, SWITCH_KNOB_OFF, (int(knob_x), rect.centery), knob_r)
 
 
 def draw_center_line(
@@ -373,9 +406,9 @@ def fill_background(surface: pygame.Surface):
     surface.fill(theme.BG)
 
 
-# Settings / detail screens get a barely-there contour texture (see
-# assets/patterns/ATTRIBUTION.md). Composed once per dial size; the radar,
-# clocks, and other full-art screens keep the plain fill.
+# Settings / detail / clock / forecast screens get a barely-there contour
+# texture (see assets/patterns/ATTRIBUTION.md). Composed once per dial size;
+# the radar and other full-art screens keep the plain fill.
 _TEXTURE_ALPHA = 18  # white tile over the near-black BG → lines land ≈ RGB 13-26
 _texture_bg: pygame.Surface | None = None
 _texture_bg_size = 0

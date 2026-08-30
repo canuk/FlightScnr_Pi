@@ -360,6 +360,32 @@ _defaults = {
     "atc_quiet_hours_enabled": True,
     "atc_quiet_start": "",
     "atc_quiet_end": "",
+    # Dim the display during quiet hours (screen-side quiet mode).
+    "quiet_dim_enabled": False,
+    "quiet_dim_percent": 20,
+    # Last non-zero dim level, restored by the screen-off button.
+    "quiet_dim_restore": 20,
+    # One-time fold of legacy off-hours dim/off into quiet dim.
+    "quiet_dim_migrated": False,
+    # Targets page: per-category appearance ("" = today's default look).
+    "tgt_plane_color": "",
+    "tgt_heli_color": "",
+    "tgt_drone_color": "",
+    "tgt_vessel_color": "",
+    "tgt_plane_size": 100,
+    "tgt_heli_size": 100,
+    "tgt_drone_size": 100,
+    "tgt_vessel_size": 100,
+    "tgt_plane_form": "icon",
+    "tgt_heli_form": "icon",
+    "tgt_drone_form": "icon",
+    "tgt_vessel_form": "icon",
+    "compass_color": "",
+    "compass_opacity": 100,
+    "compass_labels": "letters",
+    "blip_color": "",
+    "blip_size": 100,
+    "blip_opacity": 100,
     # Resume after app restart / reboot when ATC was left enabled.
     "atc_want_playing": False,
     # User enabled ATC during quiet hours — resume may keep overriding.
@@ -603,6 +629,9 @@ _ATC_PRESERVE_KEYS = (
     "atc_quiet_hours_enabled",
     "atc_quiet_start",
     "atc_quiet_end",
+    "quiet_dim_enabled",
+    "quiet_dim_percent",
+    "quiet_dim_restore",
     "atc_want_playing",
     "atc_quiet_override",
 )
@@ -1389,6 +1418,220 @@ _sync_config_max_height()
 
 def brightness_percent():
     return int(_state.get("brightness_percent", 100))
+
+
+def flush_pending() -> None:
+    """Persist in-memory slider edits that never reached disk.
+
+    A drag that loses its release path (page change mid-drag, gesture
+    abort) left ``_disk_synced`` False forever, which also wedged
+    ``maybe_reload`` — the display then ignored portal-written settings
+    until restart. The app calls this whenever no slider owns the
+    finger; it is a no-op when memory and disk already agree.
+
+    Only the keys that actually differ from disk are written, through
+    the read-modify-write path, so preserve-listed keys keep the
+    pending value instead of snapping back to the disk copy.
+    """
+    global _disk_synced
+    if _disk_synced:
+        return
+    try:
+        with open(SETTINGS_PATH, encoding="utf-8") as fh:
+            disk = json.load(fh)
+        if not isinstance(disk, dict):
+            disk = {}
+    except (OSError, json.JSONDecodeError, TypeError):
+        disk = {}
+    pending = {k: v for k, v in _state.items() if disk.get(k) != v}
+    if pending:
+        _rmw_save(pending)
+    else:
+        _disk_synced = True
+
+
+def quiet_dim_enabled() -> bool:
+    return bool(_state.get("quiet_dim_enabled", False))
+
+
+def set_quiet_dim_enabled(enabled: bool) -> None:
+    _rmw_save({"quiet_dim_enabled": bool(enabled)})
+
+
+def quiet_dim_percent() -> int:
+    try:
+        pct = int(_state.get("quiet_dim_percent", 20))
+    except (TypeError, ValueError):
+        pct = 20
+    return max(0, min(100, pct))
+
+
+TARGET_CATEGORIES = ("plane", "heli", "drone", "vessel")
+TARGET_FORMS = ("icon", "triangle", "dot")
+COMPASS_LABEL_MODES = ("letters", "degrees", "both")
+TARGET_SIZE_MIN, TARGET_SIZE_MAX = 50, 150
+
+
+def _parse_rgb(raw) -> tuple[int, int, int] | None:
+    try:
+        parts = [int(p) for p in str(raw or "").split(",")]
+        if len(parts) == 3:
+            return tuple(max(0, min(255, p)) for p in parts)
+    except (TypeError, ValueError):
+        pass
+    return None
+
+
+def _rgb_str(rgb) -> str:
+    if not rgb:
+        return ""
+    r, g, b = rgb
+    return f"{int(r)},{int(g)},{int(b)}"
+
+
+def target_color(cat: str) -> tuple[int, int, int] | None:
+    """Custom accent for a target category, or None for today's default."""
+    return _parse_rgb(_state.get(f"tgt_{cat}_color", ""))
+
+
+def set_target_color(cat: str, rgb, *, persist: bool = True) -> None:
+    if cat not in TARGET_CATEGORIES:
+        return
+    _rmw_save({f"tgt_{cat}_color": _rgb_str(rgb)})
+
+
+def target_size_pct(cat: str) -> int:
+    try:
+        v = int(_state.get(f"tgt_{cat}_size", 100))
+    except (TypeError, ValueError):
+        v = 100
+    return max(TARGET_SIZE_MIN, min(TARGET_SIZE_MAX, v))
+
+
+def set_target_size_pct(cat: str, value: int, *, persist: bool = True) -> None:
+    global _disk_synced
+    if cat not in TARGET_CATEGORIES:
+        return
+    v = max(TARGET_SIZE_MIN, min(TARGET_SIZE_MAX, int(value)))
+    if persist:
+        _rmw_save({f"tgt_{cat}_size": v})
+    else:
+        _state[f"tgt_{cat}_size"] = v
+        _disk_synced = False
+
+
+def target_form(cat: str) -> str:
+    v = str(_state.get(f"tgt_{cat}_form", "icon"))
+    return v if v in TARGET_FORMS else "icon"
+
+
+def set_target_form(cat: str, form: str) -> None:
+    if cat in TARGET_CATEGORIES and form in TARGET_FORMS:
+        _rmw_save({f"tgt_{cat}_form": form})
+
+
+def compass_color() -> tuple[int, int, int] | None:
+    return _parse_rgb(_state.get("compass_color", ""))
+
+
+def set_compass_color(rgb) -> None:
+    _rmw_save({"compass_color": _rgb_str(rgb)})
+
+
+def compass_opacity() -> int:
+    try:
+        v = int(_state.get("compass_opacity", 100))
+    except (TypeError, ValueError):
+        v = 100
+    return max(20, min(100, v))
+
+
+def set_compass_opacity(value: int, *, persist: bool = True) -> None:
+    global _disk_synced
+    v = max(20, min(100, int(value)))
+    if persist:
+        _rmw_save({"compass_opacity": v})
+    else:
+        _state["compass_opacity"] = v
+        _disk_synced = False
+
+
+def compass_labels() -> str:
+    v = str(_state.get("compass_labels", "letters"))
+    return v if v in COMPASS_LABEL_MODES else "letters"
+
+
+def set_compass_labels(mode: str) -> None:
+    if mode in COMPASS_LABEL_MODES:
+        _rmw_save({"compass_labels": mode})
+
+
+def blip_color() -> tuple[int, int, int] | None:
+    return _parse_rgb(_state.get("blip_color", ""))
+
+
+def set_blip_color(rgb) -> None:
+    _rmw_save({"blip_color": _rgb_str(rgb)})
+
+
+def blip_size_pct() -> int:
+    try:
+        v = int(_state.get("blip_size", 100))
+    except (TypeError, ValueError):
+        v = 100
+    return max(TARGET_SIZE_MIN, min(TARGET_SIZE_MAX, v))
+
+
+def set_blip_size_pct(value: int, *, persist: bool = True) -> None:
+    global _disk_synced
+    v = max(TARGET_SIZE_MIN, min(TARGET_SIZE_MAX, int(value)))
+    if persist:
+        _rmw_save({"blip_size": v})
+    else:
+        _state["blip_size"] = v
+        _disk_synced = False
+
+
+def blip_opacity() -> int:
+    try:
+        v = int(_state.get("blip_opacity", 100))
+    except (TypeError, ValueError):
+        v = 100
+    return max(20, min(100, v))
+
+
+def set_blip_opacity(value: int, *, persist: bool = True) -> None:
+    global _disk_synced
+    v = max(20, min(100, int(value)))
+    if persist:
+        _rmw_save({"blip_opacity": v})
+    else:
+        _state["blip_opacity"] = v
+        _disk_synced = False
+
+
+def quiet_dim_restore() -> int:
+    try:
+        pct = int(_state.get("quiet_dim_restore", 20))
+    except (TypeError, ValueError):
+        pct = 20
+    return max(1, min(100, pct))
+
+
+def set_quiet_dim_restore(value: int) -> None:
+    _rmw_save({"quiet_dim_restore": max(1, min(100, int(value)))})
+
+
+def set_quiet_dim_percent(value: int, *, persist: bool = True):
+    global _disk_synced
+    pct = max(0, min(100, int(value)))
+    if persist:
+        # Preserve-listed key: a plain _save(_state) would re-read the old
+        # disk value over the new one (the snap-back-to-default bug).
+        _rmw_save({"quiet_dim_percent": pct})
+    else:
+        _state["quiet_dim_percent"] = pct
+        _disk_synced = False
 
 
 def set_brightness_percent(value: int, *, persist: bool = True):

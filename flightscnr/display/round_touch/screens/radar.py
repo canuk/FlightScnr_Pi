@@ -614,25 +614,48 @@ def _draw_grid(surface, *, calibrate: bool = False):
 
     cx, cy = theme.CENTER_X, theme.CENTER_Y
     if settings.show_compass_rose():
+        # Targets page: custom rose color / opacity / label mode.
+        rose_rgb = settings.compass_color() or theme.GRID
+        rose_alpha = int(255 * settings.compass_opacity() / 100)
+        mode = settings.compass_labels()
+
+        def _blit_rose(rendered, center):
+            if rose_alpha < 255:
+                rendered = rendered.copy()
+                rendered.set_alpha(rose_alpha)
+            surface.blit(rendered, rendered.get_rect(center=center))
+
         font = draw.load_font(theme.FONT_CARDINAL, bold=True)
         # Place cardinals on the visible rim so they track true north.
         card_r = theme.VISIBLE_RADIUS - theme.CARDINAL_NORTH_OFFSET_Y
-        for text, bearing in (("N", 0), ("E", 90), ("S", 180), ("W", 270)):
-            rad = math.radians(bearing - facing - 90)
-            x = cx + int(card_r * math.cos(rad))
-            y = cy + int(card_r * math.sin(rad))
-            rendered = font.render(text, True, theme.GRID)
-            surface.blit(rendered, rendered.get_rect(center=(x, y)))
+        if mode in ("letters", "both"):
+            for text, bearing in (("N", 0), ("E", 90), ("S", 180), ("W", 270)):
+                rad = math.radians(bearing - facing - 90)
+                x = cx + int(card_r * math.cos(rad))
+                y = cy + int(card_r * math.sin(rad))
+                _blit_rose(font.render(text, True, rose_rgb), (x, y))
 
         diag_r = theme.GRID_OUTER_RADIUS - theme.CARDINAL_DIAGONAL_INSET
         diag_font = draw.load_font(theme.FONT_CARDINAL_DIAG, bold=True)
-        for label, angle in (("NE", 45), ("SE", 135), ("SW", 225), ("NW", 315)):
-            rad = math.radians(angle - facing - 90)
-            x = theme.CENTER_X + int(diag_r * math.cos(rad))
-            y = theme.CENTER_Y + int(diag_r * math.sin(rad))
-            rendered = diag_font.render(label, True, theme.GRID)
-            rect = rendered.get_rect(center=(x, y))
-            surface.blit(rendered, rect)
+        if mode == "letters":
+            for label, angle in (("NE", 45), ("SE", 135), ("SW", 225), ("NW", 315)):
+                rad = math.radians(angle - facing - 90)
+                x = theme.CENTER_X + int(diag_r * math.cos(rad))
+                y = theme.CENTER_Y + int(diag_r * math.sin(rad))
+                _blit_rose(diag_font.render(label, True, rose_rgb), (x, y))
+        if mode in ("degrees", "both"):
+            # Three-digit headings at 30° ticks; in "both" the cardinals
+            # keep their letters and degrees fill the gaps.
+            for bearing in range(0, 360, 30):
+                if mode == "both" and bearing % 90 == 0:
+                    continue
+                rad = math.radians(bearing - facing - 90)
+                r_lab = card_r if (mode == "degrees" or bearing % 90 != 0) else diag_r
+                x = cx + int(r_lab * math.cos(rad))
+                y = cy + int(r_lab * math.sin(rad))
+                _blit_rose(
+                    diag_font.render(f"{bearing:03d}", True, rose_rgb), (x, y)
+                )
 
     # Range tags collide with calibrate help text — omit them in that mode.
     if calibrate or not settings.show_range_rings():
@@ -1251,7 +1274,8 @@ def _flight_icon_color(flight, *, compact: bool):
     if vessel_declutter.is_vessel(flight) and vessel_declutter.hierarchy_enabled():
         if vessel_declutter.is_parked(flight):
             return _overlay_color_for_basemap(theme.VESSEL_PARKED)
-        return _overlay_color_for_basemap(theme.VESSEL_MOVING)
+        custom_vessel = settings.target_color("vessel")
+        return _overlay_color_for_basemap(custom_vessel or theme.VESSEL_MOVING)
     try:
         from display.round_touch import aircraft_type_icons
 
@@ -1263,7 +1287,10 @@ def _flight_icon_color(flight, *, compact: bool):
         from display.round_touch import altitude_color
 
         return altitude_color.color_for_altitude(flight.get("altitude"))
-    return _overlay_color_for_basemap(theme.AIRCRAFT)
+    # Targets page: per-category accent replaces only the single default
+    # color — altitude coloring and alert pulses keep priority above.
+    custom = settings.target_color(aircraft.target_category(flight))
+    return _overlay_color_for_basemap(custom or theme.AIRCRAFT)
 
 
 def _draw_flights(surface, flights):
@@ -1323,7 +1350,21 @@ def _draw_flights(surface, flights):
             if rim_style == "dot":
                 # Whole dot centred inside the rim; apply_round_bezel() crops
                 # the overhang, leaving a D flat against the display edge.
-                pygame.draw.circle(surface, color, (x, y), theme.RIM_BLIP_RADIUS)
+                blip_rgb = settings.blip_color() or color
+                r_blip = max(
+                    2,
+                    int(round(theme.RIM_BLIP_RADIUS * settings.blip_size_pct() / 100.0)),
+                )
+                alpha = settings.blip_opacity()
+                if alpha >= 100:
+                    pygame.draw.circle(surface, blip_rgb, (x, y), r_blip)
+                else:
+                    dot = pygame.Surface((r_blip * 2, r_blip * 2), pygame.SRCALPHA)
+                    pygame.draw.circle(
+                        dot, (*blip_rgb[:3], int(255 * alpha / 100)),
+                        (r_blip, r_blip), r_blip,
+                    )
+                    surface.blit(dot, (x - r_blip, y - r_blip))
                 continue
             aircraft.draw_plane_icon(
                 surface,

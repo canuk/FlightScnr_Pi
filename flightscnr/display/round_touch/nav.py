@@ -35,6 +35,7 @@ SETTINGS_PAGES = (
     "Options",
     "Layers",
     "Theme",
+    "Targets",
     "System",
 )
 
@@ -804,6 +805,19 @@ def draw_curved_footer(surface: pygame.Surface, kinds: list[str]) -> None:
     from display.round_touch import radar_hud
 
     glyph_color, fill_rgba = radar_hud._hud_chrome()
+    key = (tuple(kinds), tuple(glyph_color), tuple(fill_rgba))
+    surf_pos = _overlay_cached(
+        _footer_cache, key,
+        lambda tmp: _draw_curved_footer_uncached(tmp, kinds),
+    )
+    if surf_pos and surf_pos[0] is not None:
+        surface.blit(surf_pos[0], surf_pos[1])
+
+
+def _draw_curved_footer_uncached(surface: pygame.Surface, kinds: list[str]) -> None:
+    from display.round_touch import radar_hud
+
+    glyph_color, fill_rgba = radar_hud._hud_chrome()
     r, _radar_half, _side_half, _gap = _footer_arc_metrics()
     band = theme.s(30)
     cx, cy = theme.CENTER_X, theme.CENTER_Y
@@ -910,7 +924,44 @@ def draw_curved_page_dots(
         pygame.draw.circle(surface, color, center, radius)
 
 
+_crumb_cache: dict = {}
+_footer_cache: dict = {}
+
+
+def _overlay_cached(cache: dict, key, render) -> tuple[pygame.Surface, tuple[int, int]] | None:
+    """Render-once overlay: crop to drawn pixels, reuse until the key changes."""
+    hit = cache.get(key)
+    if hit is None:
+        tmp = pygame.Surface((theme.SIZE, theme.SIZE), pygame.SRCALPHA)
+        render(tmp)
+        bounds = tmp.get_bounding_rect(min_alpha=1)
+        if bounds.width <= 0 or bounds.height <= 0:
+            hit = (None, (0, 0))
+        else:
+            hit = (tmp.subsurface(bounds).copy(), bounds.topleft)
+        cache.clear()
+        cache[key] = hit
+    return hit
+
+
 def draw_curved_breadcrumb(
+    surface: pygame.Surface,
+    parts: list[str],
+    *,
+    active_color=None,
+    with_scrim: bool = False,
+) -> None:
+    key = (tuple(parts), repr(active_color), bool(with_scrim))
+    surf_pos = _overlay_cached(
+        _crumb_cache, key,
+        lambda tmp: _draw_curved_breadcrumb_uncached(
+            tmp, parts, active_color=active_color, with_scrim=with_scrim),
+    )
+    if surf_pos and surf_pos[0] is not None:
+        surface.blit(surf_pos[0], surf_pos[1])
+
+
+def _draw_curved_breadcrumb_uncached(
     surface: pygame.Surface,
     parts: list[str],
     *,
