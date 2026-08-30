@@ -25,17 +25,39 @@ os.environ.setdefault("HOME_LAT", "51.5")
 os.environ.setdefault("HOME_LON", "-0.1")
 
 
+def _real_rotation():
+    """Load rotation.py straight from disk.
+
+    tests.test_gesture_handler and tests.test_long_press_pan register a stub
+    under ``display.round_touch.rotation`` at import time and keep it there —
+    their own lazy imports need it. Collection therefore poisons the name
+    before this suite runs, so resolving it through sys.modules hands back a
+    stub with no normalize_degrees on it. Go to the file instead.
+    """
+    import importlib.util
+
+    path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "display", "round_touch", "rotation.py",
+    )
+    spec = importlib.util.spec_from_file_location("rotation_under_test", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 class TestDisplayRotation(unittest.TestCase):
     def test_normalize_degrees(self):
-        from display.round_touch.rotation import normalize_degrees
+        normalize_degrees = _real_rotation().normalize_degrees
 
         self.assertEqual(normalize_degrees(90), 90)
         self.assertEqual(normalize_degrees(450), 90)
         self.assertEqual(normalize_degrees(95), 90)
 
     def test_to_logical_corners(self):
-        from display.round_touch import rotation, theme
+        from display.round_touch import theme
 
+        rotation = _real_rotation()
         side = theme.SIZE
         cases = {
             0: ((10, 20), (10, 20)),
