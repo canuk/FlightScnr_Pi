@@ -115,6 +115,8 @@ BOOT_SPLASH_S = 3
 DISCLAIMER_AUTO_CONTINUE_S = 8
 AUTO_IDLE_MIN_RADAR_S = 5
 OFF_HOURS_TOUCH_WAKE_S = 300
+# Touching the blacked-out quiet-hours radar relights it briefly.
+RADAR_PEEK_S = 20.0
 
 
 class RoundTouchDisplay:
@@ -298,6 +300,8 @@ class RoundTouchDisplay:
         self._targets_slider_last_value: int | None = None
         # Live dim preview while the quiet-dim slider is held.
         self._quiet_dim_preview: int | None = None
+        # Radar peek: dark radar relights until this time after a touch.
+        self._radar_peek_until = 0.0
         self._radar_hud_volume_drag = False
         self._radar_hud_layout_drag = False
         self._hud_opacity_slider_active = False
@@ -3160,11 +3164,14 @@ class RoundTouchDisplay:
 
                 if atc_audio.in_quiet_hours():
                     dim = settings.quiet_dim_percent()
-                    if dim == 0 and self.screen != SCREEN_RADAR:
+                    if dim == 0 and (
+                        self.screen != SCREEN_RADAR
+                        or time.time() < self._radar_peek_until
+                    ):
                         # 0% blacks out only the radar view. Navigating
-                        # anywhere (settings, clock) lights the panel at
-                        # the last non-zero dim level; returning to radar
-                        # goes dark again.
+                        # anywhere lights the panel at the last non-zero
+                        # dim level, and a touch on the dark radar peeks
+                        # it at that level for a few seconds.
                         dim = settings.quiet_dim_restore()
                     pct = min(pct, dim)
             except Exception:
@@ -3189,6 +3196,21 @@ class RoundTouchDisplay:
     def _wake_for_off_hours_touch(self):
         from display.round_touch import off_hours
 
+        # Radar peek: a touch on the blacked-out quiet-hours radar
+        # relights it briefly; each touch restarts the timer.
+        if (
+            self.screen == SCREEN_RADAR
+            and settings.quiet_dim_enabled()
+            and settings.quiet_dim_percent() == 0
+        ):
+            try:
+                from utilities import atc_audio
+
+                if atc_audio.in_quiet_hours():
+                    self._radar_peek_until = time.time() + RADAR_PEEK_S
+                    self._apply_brightness()
+            except Exception:
+                pass
         if not off_hours.in_off_hours():
             return
         if off_hours.effective_brightness_percent(settings.brightness_percent()) != 0:
