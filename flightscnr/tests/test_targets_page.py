@@ -213,3 +213,12 @@ class TestTargetsWeb:
         html = client.get("/").get_data(as_text=True)
         assert 'id="targets_body"' in html
         assert 'id="btn-targets"' in html
+
+
+class TestTapDispatchGate:
+    def test_targets_is_a_row_page(self):
+        """Regression: taps on Targets rows fell through the app's tap gate
+        because it kept its own page list instead of asking info."""
+        assert info.is_settings_row_page(info.PAGE_TARGETS)
+        assert info.is_settings_row_page(info.PAGE_ATC)
+        assert not info.is_settings_row_page(info.PAGE_SYSTEM)

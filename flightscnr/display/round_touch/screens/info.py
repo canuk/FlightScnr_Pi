@@ -1914,6 +1914,11 @@ def _draw_card(
 
 
 
+def is_settings_row_page(page: int) -> bool:
+    """Public gate for app.py tap dispatch — one list, never two."""
+    return _settings_row_page(page)
+
+
 def _settings_row_page(page: int) -> bool:
     return page in (
         PAGE_DISPLAY,

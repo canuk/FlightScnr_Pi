@@ -3927,15 +3927,7 @@ class RoundTouchDisplay:
             self._safe_draw()
             return
         if (
-            self.settings_page
-            in (
-                info.PAGE_DISPLAY,
-                info.PAGE_HUD,
-                info.PAGE_OPTIONS,
-                info.PAGE_LAYERS,
-                info.PAGE_ATC,
-                info.PAGE_ATC_QUIET,
-            )
+            info.is_settings_row_page(self.settings_page)
             and x is not None
             and y is not None
         ):
