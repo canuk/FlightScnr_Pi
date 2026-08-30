@@ -74,7 +74,7 @@ class TestMapStyle(unittest.TestCase):
     def test_map_style_label_flat_black(self):
         import display.round_touch.settings as settings
 
-        settings._state = dict(settings._defaults)
+        settings._state = settings._fresh_state()
         settings._state["map_style"] = "black"
         self.assertEqual(settings.map_style(), "black")
         self.assertEqual(settings.map_style_label(), "Dark: Flat")

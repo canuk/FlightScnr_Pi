@@ -71,7 +71,7 @@ class TestFacingSettings(unittest.TestCase):
 
         self.settings = settings
         settings._facing_preview = None
-        settings._state = dict(settings._defaults)
+        settings._state = settings._fresh_state()
         settings._state["facing_deg"] = 0.0
 
     def tearDown(self):
@@ -113,7 +113,7 @@ class TestLatLonFacing(unittest.TestCase):
 
         self.settings = settings
         settings._facing_preview = None
-        settings._state = dict(settings._defaults)
+        settings._state = settings._fresh_state()
         settings._state["facing_deg"] = 0.0
         # Stable geometry for assertions
         theme.set_framebuffer_side(720)

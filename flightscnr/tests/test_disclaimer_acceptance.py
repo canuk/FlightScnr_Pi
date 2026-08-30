@@ -49,7 +49,7 @@ class _SettingsTempMixin:
         for p in patches:
             p.start()
             self.addCleanup(p.stop)
-        settings._state = dict(settings._defaults)
+        settings._state = settings._fresh_state()
         settings._state["safety_disclaimer_version"] = 0
 
 

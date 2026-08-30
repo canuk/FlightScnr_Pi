@@ -28,7 +28,7 @@ class TestBasemapProjection(unittest.TestCase):
 
         self.settings = settings
         settings._facing_preview = None
-        settings._state = dict(settings._defaults)
+        settings._state = settings._fresh_state()
         settings._state["facing_deg"] = 0.0
         theme.set_framebuffer_side(720)
         scale.select(0)  # 2 mi — where flat-earth vs Mercator divergence is obvious

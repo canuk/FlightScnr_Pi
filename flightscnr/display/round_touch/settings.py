@@ -663,6 +663,16 @@ _ATC_PRESERVE_KEYS = (
 )
 
 
+def _fresh_state(base=None) -> "_SettingsState":
+    """A clean settings state that still tracks assignments.
+
+    Tests reset settings between cases. Assigning a plain ``dict`` to
+    ``_state`` silently turns every later save back into a whole-file write,
+    so use this instead.
+    """
+    return _SettingsState(_defaults if base is None else base)
+
+
 def _read_disk() -> dict | None:
     """Current file contents, or None when it is missing or unreadable."""
     try:
