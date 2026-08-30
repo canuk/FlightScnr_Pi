@@ -5917,6 +5917,8 @@ class RoundTouchDisplay:
                     self._tick_manual_weather_refresh()
                     self._tick_off_hours_clock()
                 self._apply_brightness()
+                if not self._slider_drag_armed():
+                    settings.flush_pending()
                 self._loop_stage("loop_misc", _lt)
                 if FRAME_DEBUG:
                     try:
