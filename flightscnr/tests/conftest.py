@@ -28,6 +28,40 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
+@pytest.fixture(autouse=True, scope="session")
+def _font_cache_survives_pygame_quit():
+    """Drop cached fonts whenever a test tears pygame down.
+
+    A few suites call ``pygame.quit()`` in ``tearDownClass``. That frees the
+    freetype faces behind every Font in ``draw._font_cache`` while the Python
+    objects live on, so the next suite that renders text segfaults — which is
+    why the whole-suite run died partway through while each file passed alone.
+    Wrapping the teardown covers every such test, present and future.
+    """
+    import pygame
+
+    from display.round_touch import draw
+
+    real_quit = pygame.quit
+    real_font_quit = pygame.font.quit
+
+    def quit_and_drop_fonts():
+        draw.reset_font_cache()
+        real_quit()
+
+    def font_quit_and_drop_fonts():
+        draw.reset_font_cache()
+        real_font_quit()
+
+    pygame.quit = quit_and_drop_fonts
+    pygame.font.quit = font_quit_and_drop_fonts
+    try:
+        yield
+    finally:
+        pygame.quit = real_quit
+        pygame.font.quit = real_font_quit
+
+
 @pytest.fixture(autouse=True)
 def _no_background_atc_threads(monkeypatch):
     try:
