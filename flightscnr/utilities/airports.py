@@ -91,6 +91,13 @@ def _record_from_row(row: dict) -> dict | None:
     atype = (row.get("type") or "").strip().lower()
     if atype:
         rec["type"] = atype
+    # Field elevation, when the source row has it. Used by the arrival /
+    # departure board to turn altitudes into height above the field. Absent
+    # from caches built before this was parsed — callers treat that as 0.
+    try:
+        rec["elevation_ft"] = int(float(row["elevation_ft"]))
+    except (KeyError, TypeError, ValueError):
+        pass
     return rec
 
 
@@ -249,17 +256,18 @@ def iter_airports_near(
         if dist > radius:
             continue
         seen.add(ident)
-        out.append(
-            {
-                "ident": ident,
-                "lat": alat,
-                "lon": alon,
-                "type": atype,
-                "name": (rec.get("name") or "").strip(),
-                "facility": (rec.get("facility") or "").strip(),
-                "dist_km": dist,
-            }
-        )
+        point = {
+            "ident": ident,
+            "lat": alat,
+            "lon": alon,
+            "type": atype,
+            "name": (rec.get("name") or "").strip(),
+            "facility": (rec.get("facility") or "").strip(),
+            "dist_km": dist,
+        }
+        if "elevation_ft" in rec:
+            point["elevation_ft"] = rec["elevation_ft"]
+        out.append(point)
 
     out.sort(key=lambda a: a["dist_km"])
     return out

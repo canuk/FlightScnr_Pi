@@ -114,6 +114,9 @@ def _to_entry(plane: dict, min_altitude: int) -> dict | None:
     return {
         "callsign": callsign,
         "icao_hex": icao_hex,
+        # adsb.fi serves the readsb/tar1090 schema, which carries the tail
+        # number in "r". Free of charge — it rides the position response.
+        "registration": (plane.get("r") or "").strip().upper(),
         "airline": airline,
         "plane": plane_type,
         "origin": "",

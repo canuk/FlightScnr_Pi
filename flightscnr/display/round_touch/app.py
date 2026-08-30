@@ -68,6 +68,7 @@ from display.round_touch.screens import (
     fire_detail,
     earthquake_detail,
     flight_detail,
+    flip_board,
     forecast,
     info,
     moon,
@@ -94,6 +95,7 @@ SCREEN_ANALOG_CLOCK = "analog_clock"
 SCREEN_ANALOG_NIGHT = "analog_clock_night"
 SCREEN_FLIEGER_CLOCK = "flieger_clock"
 SCREEN_MOON = "moon"
+SCREEN_FLIP_BOARD = "flip_board"
 SCREEN_FORECAST = "forecast"
 SCREEN_TRACKED = "tracked"
 SCREEN_LIVE = "live_tracking"
@@ -169,6 +171,8 @@ class RoundTouchDisplay:
         self.screen = SCREEN_RADAR
         self.settings_page = info.PAGE_MAIN
         self.flights = []
+        self._flip_board_sampled_at = 0.0
+        self._flip_board_saved_at = 0.0
         self._ais_vessels: list = []
         self._position_smoother = position_smooth.PositionSmoother()
         self._last_ais_poll = 0.0
@@ -781,10 +785,40 @@ class RoundTouchDisplay:
             if mode in ("marine", "both") and self._ais_vessels:
                 flights.extend(self._ais_vessels)
             self.flights = flights
+            self._update_flip_board(flights)
             if self.screen == SCREEN_FLIGHT:
                 self._sync_selected_flight_index()
         except Exception:
             logger.exception("Failed to refresh flight data")
+
+    # Movement detection needs a steady cadence, not every draw. adsb.fi
+    # refreshes about every 5s, so sampling at 4s never misses a snapshot.
+    _FLIP_BOARD_SAMPLE_S = 4.0
+    _FLIP_BOARD_SAVE_S = 120.0
+
+    def _update_flip_board(self, flights: list) -> None:
+        """Fold the current radar snapshot into the arrival / departure board."""
+        if not settings.show_flip_board():
+            return
+        now = time.time()
+        if now - self._flip_board_sampled_at < self._FLIP_BOARD_SAMPLE_S:
+            return
+        self._flip_board_sampled_at = now
+        try:
+            from display.round_touch import airport_overlay
+            from utilities import flip_board as flip_board_data
+
+            airports = airport_overlay.in_view_airports()
+            if not airports:
+                return
+            events = flip_board_data.tracker().observe(flights, airports, now)
+            if events and self.screen == SCREEN_FLIP_BOARD:
+                self._safe_draw()
+            if events or now - self._flip_board_saved_at >= self._FLIP_BOARD_SAVE_S:
+                self._flip_board_saved_at = now
+                flip_board_data.save()
+        except Exception:
+            logger.debug("Flip board update failed", exc_info=True)
 
     @staticmethod
     def _flight_identity(flight: dict | None) -> str | None:
@@ -1024,6 +1058,8 @@ class RoundTouchDisplay:
             flieger_clock.draw_flieger_clock(self.surface)
         elif self.screen == SCREEN_MOON:
             moon.draw_moon(self.surface)
+        elif self.screen == SCREEN_FLIP_BOARD:
+            flip_board.draw_flip_board(self.surface)
         elif self.screen == SCREEN_FORECAST:
             forecast.draw_forecast(self.surface)
         elif self.screen == SCREEN_TRACKED:
@@ -1264,7 +1300,7 @@ class RoundTouchDisplay:
             return None
         if self.screen in (SCREEN_WIFI_SETUP, SCREEN_DISCLAIMER):
             return None
-        if self.screen in (SCREEN_RADAR, SCREEN_CLOCK, SCREEN_ANALOG_CLOCK, SCREEN_ANALOG_NIGHT, SCREEN_FLIEGER_CLOCK, SCREEN_MOON, SCREEN_FORECAST):
+        if self.screen in (SCREEN_RADAR, SCREEN_CLOCK, SCREEN_ANALOG_CLOCK, SCREEN_ANALOG_NIGHT, SCREEN_FLIEGER_CLOCK, SCREEN_MOON, SCREEN_FLIP_BOARD, SCREEN_FORECAST):
             return None
         if self.screen in (SCREEN_TRACKED, SCREEN_LIVE) and tracked.is_pinned():
             return None
@@ -1582,7 +1618,7 @@ class RoundTouchDisplay:
         return (
             self._auto_idle_clock
             and settings.auto_idle_clock_enabled()
-            and self.screen in (SCREEN_CLOCK, SCREEN_ANALOG_CLOCK, SCREEN_ANALOG_NIGHT, SCREEN_FLIEGER_CLOCK, SCREEN_MOON, SCREEN_FORECAST)
+            and self.screen in (SCREEN_CLOCK, SCREEN_ANALOG_CLOCK, SCREEN_ANALOG_NIGHT, SCREEN_FLIEGER_CLOCK, SCREEN_MOON, SCREEN_FLIP_BOARD, SCREEN_FORECAST)
             and radar.visible_in_range_count(self.flights) == 0
         )
 
@@ -1662,7 +1698,7 @@ class RoundTouchDisplay:
             logger.debug("Alert reflash on radar entry failed", exc_info=True)
 
     def _open_screen(self, screen: str):
-        if screen in (SCREEN_CLOCK, SCREEN_ANALOG_CLOCK, SCREEN_ANALOG_NIGHT, SCREEN_FLIEGER_CLOCK, SCREEN_MOON, SCREEN_FORECAST):
+        if screen in (SCREEN_CLOCK, SCREEN_ANALOG_CLOCK, SCREEN_ANALOG_NIGHT, SCREEN_FLIEGER_CLOCK, SCREEN_MOON, SCREEN_FLIP_BOARD, SCREEN_FORECAST):
             self._last_clock_minute = -1
             self._last_clock_draw = 0.0
         previous = self.screen
@@ -1789,6 +1825,8 @@ class RoundTouchDisplay:
 
             settings.toggle_show_airport_icons()
             airport_overlay.invalidate()
+        elif action == "flip_board":
+            settings.toggle_show_flip_board()
         elif action == "ground_vehicles":
             settings.toggle_show_ground_vehicles()
         elif action == "map_style":
@@ -3165,7 +3203,7 @@ class RoundTouchDisplay:
             off_hours.in_off_hours()
             and off_hours.prefs().get("mode") == "clock"
             and self.screen
-            not in (SCREEN_CLOCK, SCREEN_ANALOG_CLOCK, SCREEN_ANALOG_NIGHT, SCREEN_FLIEGER_CLOCK, SCREEN_MOON, SCREEN_FORECAST)
+            not in (SCREEN_CLOCK, SCREEN_ANALOG_CLOCK, SCREEN_ANALOG_NIGHT, SCREEN_FLIEGER_CLOCK, SCREEN_MOON, SCREEN_FLIP_BOARD, SCREEN_FORECAST)
         ):
             pct = day_pct
         backlight.apply_percent(pct)
@@ -4019,7 +4057,8 @@ class RoundTouchDisplay:
         """Screen-aware breadcrumb hit: curved band on curved-chrome screens."""
         if self.screen in (
             SCREEN_SETTINGS, SCREEN_DETAILS, SCREEN_FLIGHT, SCREEN_FIRE, SCREEN_QUAKE,
-            SCREEN_CLOCK, SCREEN_FORECAST, SCREEN_UPDATE_NOTES, SCREEN_TRACKED,
+            SCREEN_CLOCK, SCREEN_FLIP_BOARD, SCREEN_FORECAST, SCREEN_UPDATE_NOTES,
+            SCREEN_TRACKED,
         ):
             return nav.tap_breadcrumb_curved(x, y)
         return nav.tap_breadcrumb(x, y)
@@ -4188,7 +4227,7 @@ class RoundTouchDisplay:
 
         if swipe != input_handler.SWIPE_NONE and self.screen not in (
             SCREEN_RADAR, SCREEN_CLOCK, SCREEN_ANALOG_CLOCK, SCREEN_ANALOG_NIGHT,
-            SCREEN_FLIEGER_CLOCK, SCREEN_MOON, SCREEN_FORECAST,
+            SCREEN_FLIEGER_CLOCK, SCREEN_MOON, SCREEN_FLIP_BOARD, SCREEN_FORECAST,
         ):
             self._note_activity()
 
@@ -4285,6 +4324,16 @@ class RoundTouchDisplay:
         elif swipe == input_handler.SWIPE_LEFT and self.screen == SCREEN_FLIEGER_CLOCK:
             self._open_screen(SCREEN_MOON)
             self._safe_draw()
+        elif (
+            swipe == input_handler.SWIPE_LEFT
+            and self.screen == SCREEN_MOON
+            and settings.show_flip_board()
+        ):
+            self._open_screen(SCREEN_FLIP_BOARD)
+            self._safe_draw()
+        elif swipe == input_handler.SWIPE_RIGHT and self.screen == SCREEN_FLIP_BOARD:
+            self._open_screen(SCREEN_MOON)
+            self._safe_draw()
         elif swipe == input_handler.SWIPE_RIGHT and self.screen == SCREEN_MOON:
             self._open_screen(SCREEN_FLIEGER_CLOCK)
             self._safe_draw()
@@ -4302,6 +4351,7 @@ class RoundTouchDisplay:
             SCREEN_ANALOG_NIGHT,
             SCREEN_FLIEGER_CLOCK,
             SCREEN_MOON,
+            SCREEN_FLIP_BOARD,
         ):
             self._return_to_radar()
             self._safe_draw()
@@ -4597,6 +4647,23 @@ class RoundTouchDisplay:
             moon.toggle_info()
             self._note_activity()
             self._safe_draw()
+        elif tap and self.screen == SCREEN_FLIP_BOARD:
+            action = flip_board.tap_footer_action(tap[0], tap[1])
+            if action == "radar":
+                self._return_to_radar()
+                self._safe_draw()
+            elif action == "prev":
+                flip_board.step_airport(-1)
+                self._note_activity()
+                self._safe_draw()
+            elif action == "next":
+                flip_board.step_airport(1)
+                self._note_activity()
+                self._safe_draw()
+            elif flip_board.tap_board(tap[0], tap[1]):
+                flip_board.toggle_direction()
+                self._note_activity()
+                self._safe_draw()
         elif tap and self.screen in (SCREEN_ANALOG_CLOCK, SCREEN_ANALOG_NIGHT, SCREEN_FLIEGER_CLOCK):
             # Full-screen face — no footer; navigation is swipe-only.
             self._note_activity()
@@ -4723,7 +4790,7 @@ class RoundTouchDisplay:
         # In off-hours clock mode, keep clock/forecast screens stable instead of
         # timing out back to radar (prevents clock<->radar flicker).
         if (
-            self.screen in (SCREEN_CLOCK, SCREEN_ANALOG_CLOCK, SCREEN_ANALOG_NIGHT, SCREEN_FLIEGER_CLOCK, SCREEN_MOON, SCREEN_FORECAST)
+            self.screen in (SCREEN_CLOCK, SCREEN_ANALOG_CLOCK, SCREEN_ANALOG_NIGHT, SCREEN_FLIEGER_CLOCK, SCREEN_MOON, SCREEN_FLIP_BOARD, SCREEN_FORECAST)
             and off_hours.in_off_hours()
             and off_hours.force_clock_enabled()
         ):
@@ -4738,7 +4805,7 @@ class RoundTouchDisplay:
         timeout_s = self._timeout_duration_s()
         if timeout_s is None:
             # Clock/forecast use their own duration but share activity timestamp.
-            if self.screen in (SCREEN_CLOCK, SCREEN_ANALOG_CLOCK, SCREEN_ANALOG_NIGHT, SCREEN_FLIEGER_CLOCK, SCREEN_MOON, SCREEN_FORECAST):
+            if self.screen in (SCREEN_CLOCK, SCREEN_ANALOG_CLOCK, SCREEN_ANALOG_NIGHT, SCREEN_FLIEGER_CLOCK, SCREEN_MOON, SCREEN_FLIP_BOARD, SCREEN_FORECAST):
                 timeout_s = float(settings.clock_timeout_s())
             else:
                 return
@@ -4751,7 +4818,7 @@ class RoundTouchDisplay:
             self._safe_draw()
 
     def _tick_clock(self):
-        if self.screen not in (SCREEN_CLOCK, SCREEN_ANALOG_CLOCK, SCREEN_ANALOG_NIGHT, SCREEN_FLIEGER_CLOCK, SCREEN_MOON, SCREEN_FORECAST):
+        if self.screen not in (SCREEN_CLOCK, SCREEN_ANALOG_CLOCK, SCREEN_ANALOG_NIGHT, SCREEN_FLIEGER_CLOCK, SCREEN_MOON, SCREEN_FLIP_BOARD, SCREEN_FORECAST):
             return
         now = time.time()
         # Analog needs ~30fps for sweeping hands + drum snap-scroll.
@@ -4783,7 +4850,7 @@ class RoundTouchDisplay:
             weather_data.request_fetch_now()
             radar_hud.rebuild_overlay()
             self._weather_redraw_pending = True
-            if self.screen in (SCREEN_CLOCK, SCREEN_ANALOG_CLOCK, SCREEN_ANALOG_NIGHT, SCREEN_FLIEGER_CLOCK, SCREEN_MOON, SCREEN_FORECAST):
+            if self.screen in (SCREEN_CLOCK, SCREEN_ANALOG_CLOCK, SCREEN_ANALOG_NIGHT, SCREEN_FLIEGER_CLOCK, SCREEN_MOON, SCREEN_FLIP_BOARD, SCREEN_FORECAST):
                 self._safe_draw()
             logger.info("Manual weather refresh completed")
         except Exception:
@@ -4821,7 +4888,7 @@ class RoundTouchDisplay:
                 self._radar_visible_since = time.time()
         elif (
             self._auto_idle_clock
-            and self.screen in (SCREEN_CLOCK, SCREEN_ANALOG_CLOCK, SCREEN_ANALOG_NIGHT, SCREEN_FLIEGER_CLOCK, SCREEN_MOON, SCREEN_FORECAST)
+            and self.screen in (SCREEN_CLOCK, SCREEN_ANALOG_CLOCK, SCREEN_ANALOG_NIGHT, SCREEN_FLIEGER_CLOCK, SCREEN_MOON, SCREEN_FLIP_BOARD, SCREEN_FORECAST)
             and radar.visible_in_range_count(self.flights) > 0
         ):
             self._return_to_radar()
@@ -4953,6 +5020,7 @@ class RoundTouchDisplay:
                     SCREEN_ANALOG_NIGHT,
                     SCREEN_FLIEGER_CLOCK,
                     SCREEN_MOON,
+                    SCREEN_FLIP_BOARD,
                     SCREEN_FORECAST,
                 ):
                     self._return_to_radar()
@@ -5778,7 +5846,7 @@ class RoundTouchDisplay:
                             )
                             self._prewarm_thread.start()
                             self._loop_stage("loop_prewarm_spawn", _lt)
-                elif self.screen in (SCREEN_CLOCK, SCREEN_ANALOG_CLOCK, SCREEN_ANALOG_NIGHT, SCREEN_FLIEGER_CLOCK, SCREEN_MOON, SCREEN_FORECAST):
+                elif self.screen in (SCREEN_CLOCK, SCREEN_ANALOG_CLOCK, SCREEN_ANALOG_NIGHT, SCREEN_FLIEGER_CLOCK, SCREEN_MOON, SCREEN_FLIP_BOARD, SCREEN_FORECAST):
                     self._tick_clock()
                 elif self.screen in (SCREEN_TRACKED, SCREEN_LIVE):
                     tracked.tick_marquee()
