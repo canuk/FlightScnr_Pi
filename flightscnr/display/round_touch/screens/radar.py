@@ -554,10 +554,9 @@ def draw_radar(
             zoom_buttons.draw(surface)
             if layer is None:
                 # Direct draws have no rotation.present() pass to stamp it.
-                from display.round_touch import lofi_controls, radial_menu
+                from display.round_touch import lofi_controls
 
                 lofi_controls.draw(surface)
-                radial_menu.draw(surface)
             # Sweep under the HUD pill.
             if settings.show_sweep_line() and layer is None:
                 draw.draw_sweep_line(
@@ -574,6 +573,11 @@ def draw_radar(
             draw_location_toast(surface)
             if aircraft_alert.rim_flash_active():
                 _draw_alert_rim_flash(surface)
+            if layer is None:
+                # Menu stays topmost — same order as the fast present path.
+                from display.round_touch import radial_menu
+
+                radial_menu.draw(surface)
         # Sweep is composited in present() on the fast path so we can skip a
         # full-frame rotate every tick. Fall back to in-buffer draw above when
         # the layer isn't available.

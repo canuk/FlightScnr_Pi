@@ -158,3 +158,39 @@ class TestAppWiring:
         src = inspect.getsource(app_mod)
         assert "radial_menu.hit" in src
         assert "radial_menu.open_menu" in src
+
+
+class TestPostAnimationStamp:
+    def test_static_menu_caches_and_blits(self):
+        """After the build-in, draw() serves a cached stamp (Pi frame cost)."""
+        import time as _time
+
+        from display.round_touch import radial_menu, theme
+
+        radial_menu.open_menu(
+            theme.CENTER_X, theme.CENTER_Y,
+            [{"label": "N1", "kind": "aircraft", "flight": {"heading": 10}},
+             {"label": "N2", "kind": "aircraft", "flight": {"heading": 90}}],
+        )
+        radial_menu._opened_at = _time.monotonic() - 5.0  # animation long done
+        surface = pygame.Surface((theme.SIZE, theme.SIZE))
+        r1 = radial_menu.draw(surface)
+        assert r1 is not None
+        assert radial_menu._stamp is not None
+        r2 = radial_menu.draw(surface)
+        assert r2 is not None
+        radial_menu.close()
+        assert radial_menu._stamp is None
+
+    def test_animating_menu_does_not_cache(self):
+        from display.round_touch import radial_menu, theme
+
+        radial_menu.open_menu(
+            theme.CENTER_X, theme.CENTER_Y,
+            [{"label": "N1", "kind": "aircraft", "flight": {"heading": 10}},
+             {"label": "N2", "kind": "aircraft", "flight": {"heading": 90}}],
+        )
+        surface = pygame.Surface((theme.SIZE, theme.SIZE))
+        radial_menu.draw(surface)
+        assert radial_menu._stamp is None
+        radial_menu.close()
