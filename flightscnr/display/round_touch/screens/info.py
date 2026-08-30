@@ -2581,15 +2581,18 @@ def _draw_quiet_dim_slider_row(surface, ry: int, focused: bool) -> None:
     text_h = body_font.get_height()
     row_h = _row_pitch() - theme.s(5)
     _draw_card(surface, ry, focused=focused)
-    # Screen on/off toggle art: a lit (white-filled) circle while the
-    # screen stays on at the dim level; a dark slashed circle once off.
+    # Screen on/off toggle art: the circle's fill previews the dim level
+    # (white at 100%, black at 0%), with a slash once the screen is off.
     off_active = enabled and pct == 0
     lw = max(2, theme.s(2))
     ring = (theme.SWEEP if enabled else theme.HINT)
     r_icon = icon.width // 2 - theme.s(1)
+    shade = int(255 * pct / 100) if enabled else 150
+    pygame.draw.circle(
+        surface, (shade, shade, shade), icon.center, r_icon - theme.s(2)
+    )
+    pygame.draw.circle(surface, ring, icon.center, r_icon, lw)
     if off_active:
-        pygame.draw.circle(surface, (6, 8, 6), icon.center, r_icon)
-        pygame.draw.circle(surface, ring, icon.center, r_icon, lw)
         off = int(r_icon * 0.7071)
         pygame.draw.line(
             surface, ring,
@@ -2597,10 +2600,6 @@ def _draw_quiet_dim_slider_row(surface, ry: int, focused: bool) -> None:
             (icon.centerx + off, icon.centery - off),
             lw,
         )
-    else:
-        fill = (255, 255, 255) if enabled else (150, 165, 180)
-        pygame.draw.circle(surface, fill, icon.center, r_icon - theme.s(2))
-        pygame.draw.circle(surface, ring, icon.center, r_icon, lw)
     label = body_font.render(
         "Dim", True, theme.LABEL if enabled else theme.HINT
     )
