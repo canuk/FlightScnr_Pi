@@ -1826,6 +1826,8 @@ class RoundTouchDisplay:
             self._async_atc_power(not settings.atc_enabled())
         elif action == "volume":
             return
+        elif action in info.TARGETS_EDITOR_KINDS:
+            self._open_atc_picker(action)
         elif action == "lofi":
             settings.toggle_lofi_enabled()
         elif action == "lofi_volume":
@@ -1855,7 +1857,10 @@ class RoundTouchDisplay:
 
     def _open_atc_picker(self, kind: str) -> None:
         kind = str(kind or "").strip().lower()
-        if kind not in info.LIST_PICKER_KINDS:
+        if (
+            kind not in info.LIST_PICKER_KINDS
+            and kind not in info.TARGETS_EDITOR_KINDS
+        ):
             return
         if kind == "channel" and not settings.atc_airport():
             return
@@ -1964,6 +1969,17 @@ class RoundTouchDisplay:
         info.invalidate_atc_labels()
 
     def _handle_atc_picker_tap(self, x: int, y: int) -> None:
+        kind = self._atc_picker
+        if kind in info.TARGETS_EDITOR_KINDS:
+            which = info.targets_editor_slider_at(kind, x, y)
+            if which is not None:
+                v = info.targets_editor_slider_value_at(kind, which, x)
+                if v is not None:
+                    info.targets_apply_slider(kind, which, v, persist=True)
+                    radar.invalidate_frame_layer()
+                    self._note_activity()
+                    self._safe_draw()
+                return
         hit = info.atc_picker_hit(x, y)
         if hit is None:
             self._close_atc_picker()
@@ -1971,6 +1987,18 @@ class RoundTouchDisplay:
         action, value = hit
         if action in ("close", "outside"):
             self._close_atc_picker()
+            return
+        if action == "tgt_swatch":
+            info.targets_apply_swatch(self._atc_picker, value)
+            radar.invalidate_frame_layer()
+            self._note_activity()
+            self._safe_draw()
+            return
+        if action == "tgt_segment":
+            info.targets_apply_segment(self._atc_picker, value)
+            radar.invalidate_frame_layer()
+            self._note_activity()
+            self._safe_draw()
             return
         if action == "time_num":
             try:
@@ -3507,6 +3535,13 @@ class RoundTouchDisplay:
         self._safe_draw()
 
     def _handle_scroll_drag(self):
+        if (
+            self.screen == SCREEN_SETTINGS
+            and self._atc_picker in info.TARGETS_EDITOR_KINDS
+        ):
+            # Editors do not scroll — the targets slider pump owns drags.
+            self.input.consume_scroll_drag()
+            return
         if self.screen == SCREEN_SETTINGS and self._atc_picker:
             # input_handler only accumulates scroll_dy before the swipe
             # threshold, then converts the rest to a swipe (which snapped the
