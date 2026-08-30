@@ -1361,11 +1361,9 @@ def hit_volume_slider(x: int, y: int) -> bool:
 
 
 def volume_slider_drag_band(x: int, y: int) -> bool:
-    """True while a sticky HUD volume drag should keep mapping screen X."""
-    if not _volume_popover or _slider_track.width <= 0:
-        return False
-    pad_y = theme.s(28)
-    return (_slider_track.top - pad_y) <= y <= (_slider_track.bottom + pad_y)
+    """Armed HUD volume drags capture the finger until release."""
+    del x, y
+    return bool(_volume_popover) and _slider_track.width > 0
 
 
 def hit_hud(x: int, y: int) -> bool:

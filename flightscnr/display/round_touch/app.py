@@ -210,6 +210,7 @@ class RoundTouchDisplay:
         # Already-rotated content+bezel (no ring) for fast display blit.
         self._timeout_rot_base: pygame.Surface | None = None
         self._prev_timeout_ring_frac: float | None = None
+        self._last_slider_draw = 0.0
         self._display_focus = 0
         self._system_confirm: str | None = None
         # Settings list picker kind (ATC + other multi-option rows), or None.
@@ -2091,6 +2092,21 @@ class RoundTouchDisplay:
             return
         self._apply_favourite_center(float(entry["lat"]), float(entry["lon"]))
 
+    def _slider_drag_armed(self) -> bool:
+        """Any slider currently owning the finger? Others must not arm —
+        a sweep that wanders through another slider's hit band mid-drag
+        used to let that slider steal the gesture (focus jumped rows)."""
+        return bool(
+            self._brightness_slider_active
+            or self._vfr_opacity_slider_active
+            or self._atc_volume_slider_active
+            or self._lofi_volume_slider_active
+            or self._hud_opacity_slider_active
+            or self._hud_volume_slider_kind
+            or self._radar_hud_volume_drag
+            or self._rgb_slider_channel is not None
+        )
+
     def _apply_atc_volume_slider(self, x: int, *, persist: bool = True) -> bool:
         from utilities import atc_audio
 
@@ -2253,6 +2269,8 @@ class RoundTouchDisplay:
             return False
         x, y = pos
         if not self._hud_opacity_slider_active:
+            if self._slider_drag_armed():
+                return False
             if not info.hud_opacity_slider_at(x, y, self._scroll.offset):
                 return False
             self._hud_opacity_slider_active = True
@@ -2329,6 +2347,8 @@ class RoundTouchDisplay:
             return False
         x, y = pos
         if self._hud_volume_slider_kind is None:
+            if self._slider_drag_armed():
+                return False
             hit = info.hud_volume_slider_at(x, y, self._scroll.offset)
             if not hit:
                 return False
@@ -2377,6 +2397,8 @@ class RoundTouchDisplay:
             return False
         x, y = pos
         if not self._lofi_volume_slider_active:
+            if self._slider_drag_armed():
+                return False
             if not info.lofi_volume_slider_at(x, y, self._scroll.offset):
                 return False
             self._lofi_volume_slider_active = True
@@ -2407,6 +2429,8 @@ class RoundTouchDisplay:
             return False
         x, y = pos
         if not self._atc_volume_slider_active:
+            if self._slider_drag_armed():
+                return False
             if not info.atc_volume_slider_at(x, y, self._scroll.offset):
                 return False
             self._atc_volume_slider_active = True
@@ -3270,12 +3294,15 @@ class RoundTouchDisplay:
                     self.input.consume_scroll_drag()
                     return
         if self.screen == SCREEN_SETTINGS and self.settings_page == info.PAGE_ATC:
-            if self._atc_volume_slider_active:
+            if self._atc_volume_slider_active or self._lofi_volume_slider_active:
                 self.input.consume_scroll_drag()
                 return
             if self.input.is_dragging():
                 pos = self.input.drag_pos()
-                if pos and info.atc_volume_slider_at(pos[0], pos[1], self._scroll.offset):
+                if pos and (
+                    info.atc_volume_slider_at(pos[0], pos[1], self._scroll.offset)
+                    or info.lofi_volume_slider_at(pos[0], pos[1], self._scroll.offset)
+                ):
                     self.input.consume_scroll_drag()
                     return
         if self.screen in (
@@ -3415,6 +3442,8 @@ class RoundTouchDisplay:
             return False
         x, y = pos
         if not self._brightness_slider_active:
+            if self._slider_drag_armed():
+                return False
             if not info.brightness_slider_at(x, y, self._scroll.offset):
                 return False
             self._brightness_slider_active = True
@@ -3455,6 +3484,8 @@ class RoundTouchDisplay:
             return False
         x, y = pos
         if not self._vfr_opacity_slider_active:
+            if self._slider_drag_armed():
+                return False
             if not info.vfr_opacity_slider_at(x, y, self._scroll.offset):
                 return False
             self._vfr_opacity_slider_active = True
@@ -3577,6 +3608,7 @@ class RoundTouchDisplay:
                 x, y, self._scroll.offset
             ):
                 self._apply_atc_volume_slider(x, persist=True)
+                return
             elif self.settings_page == info.PAGE_ATC and info.lofi_volume_slider_at(
                 x, y, self._scroll.offset
             ):
@@ -5014,7 +5046,22 @@ class RoundTouchDisplay:
                     or self._update_atc_volume_slider_drag()
                     or self._update_radar_hud_volume_drag()
                 ):
-                    self._safe_draw()
+                    # Settings pages repaint in full — throttle mid-drag
+                    # redraws so the loop keeps sampling the finger instead
+                    # of choking on layout. The release frame always draws.
+                    now_drag = time.time()
+                    self._note_activity()
+                    if self.screen == SCREEN_SETTINGS:
+                        # ATC labels shell out to bluetoothctl / mpv IPC on
+                        # rebuild — freeze them while the finger drags.
+                        info.hold_atc_labels()
+                    if (
+                        now_drag - self._last_slider_draw >= 0.05
+                        or not self.input.is_dragging()
+                    ):
+                        self._safe_draw()
+                        self._last_slider_draw = now_drag
+                        self._last_static_draw = now_drag
                     self._last_radar_draw = time.time()
 
                 now = time.time()
@@ -5285,7 +5332,9 @@ class RoundTouchDisplay:
                             != self._timeout_content_cache_key()
                         )
                         ring_iv = theme.SWEEP_FRAME_MS / 1000.0
-                        if need_content:
+                        if need_content and (
+                            now - self._last_timeout_content_draw >= 0.20
+                        ):
                             self._last_timeout_content_draw = now
                             self._last_static_draw = now
                             self._safe_draw()

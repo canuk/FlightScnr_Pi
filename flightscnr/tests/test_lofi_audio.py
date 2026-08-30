@@ -404,6 +404,48 @@ class TestAtcPageVolume:
         assert len(info._atc_row_labels()) == len(info.ATC_ACTIONS)
 
 
+class TestScrollStandsDownForSliders:
+    def test_lofi_slider_gates_the_page_scroll(self):
+        import inspect
+
+        from display.round_touch import app as app_mod
+
+        src = inspect.getsource(app_mod)
+        assert "self._atc_volume_slider_active or self._lofi_volume_slider_active" in src
+        assert "info.lofi_volume_slider_at(pos[0], pos[1], self._scroll.offset)" in src
+
+
+class TestAtcLabelFreeze:
+    def test_hold_serves_stale_labels_without_status_calls(self, monkeypatch):
+        import time as _t
+
+        from display.round_touch.screens import info
+        from utilities import atc_audio
+
+        calls = []
+        monkeypatch.setattr(atc_audio, "status", lambda: calls.append(1) or {})
+        info._atc_rows_cache = (_t.monotonic() - 60.0, ("stale", "rows"))
+        info.hold_atc_labels(5.0)
+        assert info._atc_row_labels() == ["stale", "rows"]
+        assert not calls  # no bluetoothctl / IPC rebuild during the hold
+        info._atc_rows_hold_until = 0.0
+        info._atc_rows_cache = None
+
+
+class TestSliderDragTolerance:
+    def test_armed_drags_capture_the_finger_anywhere(self):
+        import pygame
+
+        from display.round_touch import theme
+        from display.round_touch.screens import info
+
+        hit = pygame.Rect(100, 300, 400, 40)
+        # Fingers cover the slider they drag — any Y keeps the drag alive.
+        assert info.slider_drag_band_contains(hit, 300 - theme.s(56)) is True
+        assert info.slider_drag_band_contains(hit, 340 + theme.s(200)) is True
+        assert info.slider_drag_band_contains(hit, 0) is True
+
+
 class TestAtcLofiGating:
     def test_lofi_rows_hidden_without_tracks(self, monkeypatch):
         from display.round_touch.screens import info

@@ -173,6 +173,16 @@ SYSTEM_ACTIONS = (
 # Cache labels briefly so the perimeter countdown stays smooth like other pages.
 _ATC_LABEL_TTL_S = 0.4
 _atc_rows_cache: tuple[float, tuple[str, ...]] | None = None
+# While a slider drag is live, serve stale labels no matter their age —
+# the rebuild shells out to bluetoothctl and polls mpv IPC, which blocks
+# the UI thread for hundreds of ms and wrecks the drag.
+_atc_rows_hold_until = 0.0
+
+
+def hold_atc_labels(seconds: float = 1.0) -> None:
+    """Freeze ATC row labels briefly (called each frame during drags)."""
+    global _atc_rows_hold_until
+    _atc_rows_hold_until = time.monotonic() + seconds
 _atc_picker_cache: dict[str, tuple[float, tuple[tuple[str, str, bool], ...]]] = {}
 
 
@@ -1214,15 +1224,16 @@ def _in_settings_body(y: int) -> bool:
 def slider_drag_band_contains(
     hit: pygame.Rect, y: int, *, pad_y: int | None = None
 ) -> bool:
-    """True while a sticky horizontal drag should keep mapping screen X.
+    """Armed slider drags capture the finger completely until release.
 
-    After a slider arms, X may leave the track (clamped to 0–100%); leaving this
-    vertical band cancels the drag so taps elsewhere on the screen cannot steal
-    the value (ATC volume / brightness sticky-X bug).
+    A finger on a slider covers it, so people naturally drift up or down
+    while sweeping left/right — the drag keeps mapping screen X wherever
+    the finger goes. Arming still requires pressing the slider itself, and
+    every handler releases (and persists) the moment the finger lifts, so
+    taps elsewhere can never steal the value.
     """
-    if pad_y is None:
-        pad_y = theme.s(28)
-    return (hit.top - pad_y) <= y <= (hit.bottom + pad_y)
+    del hit, y, pad_y
+    return True
 
 
 def display_row_at(x: int, y: int, page: int, scroll_offset: int = 0) -> int | None:
@@ -1659,7 +1670,9 @@ def _atc_volume_slider_metrics() -> tuple[int, int, int, int]:
     label_w = body_font.size("Volume")[0]
     value_w = body_font.size(f"{settings.ATC_VOLUME_MAX}%")[0]
     track_w = theme.s(100)
-    row_h = body_font.get_height() + theme.s(8)
+    # Match the settings-row pitch exactly — a taller slider row made the
+    # ATC page look unevenly spaced.
+    row_h = body_font.get_height() + theme.s(6)
     return track_w, row_h, label_w, value_w
 
 
@@ -1844,7 +1857,7 @@ def _atc_row_labels() -> list[str]:
     now = time.monotonic()
     if _atc_rows_cache is not None:
         ts, rows = _atc_rows_cache
-        if now - ts < _ATC_LABEL_TTL_S:
+        if now - ts < _ATC_LABEL_TTL_S or now < _atc_rows_hold_until:
             return list(rows)
 
     st: dict | None = None
@@ -1897,7 +1910,7 @@ def _draw_lofi_volume_slider_row(surface, ry: int, focused: bool) -> None:
         pad = theme.s(4)
         focus = pygame.Rect(left_x - pad, ry - pad, block_w + pad * 2, row_h + pad)
         pygame.draw.rect(surface, theme.GRID, focus, max(1, theme.s(1)))
-    label = body_font.render("Lofi vol", True, theme.MUTED)
+    label = body_font.render("Lofi Vol", True, theme.MUTED)
     surface.blit(label, (left_x, int(ry + (row_h - text_h) // 2)))
     track_cy = int(ry + row_h // 2)
     track_rect = pygame.Rect(track_x, track_cy - max(2, theme.s(2)), track_w, max(4, theme.s(4)))
