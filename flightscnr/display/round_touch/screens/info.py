@@ -922,6 +922,45 @@ def _draw_targets_editor(surface, kind: str) -> int:
         cx=theme.CENTER_X, cy=theme.CENTER_Y,
     )
 
+    # Live preview: the actual glyph, drawn through the same renderer the
+    # radar uses, so color / size / symbol changes show as you make them.
+    _PREVIEW_FLIGHTS = {
+        "tgt_plane": {"plane": "B738", "heading": 45},
+        "tgt_heli": {"plane": "H125", "heading": 45},
+        "tgt_drone": {"plane": "DRON", "heading": 45},
+        "tgt_vessel": {"kind": "vessel", "heading": 45, "ground_speed": 10},
+    }
+    preview_cy = theme.CENTER_Y - int(theme.VISIBLE_RADIUS * 0.66)
+    if kind in _PREVIEW_FLIGHTS:
+        from display.round_touch import aircraft as _aircraft
+
+        pf = dict(_PREVIEW_FLIGHTS[kind])
+        rgb = _tgt_editor_color(kind) or theme.AIRCRAFT
+        _aircraft.draw_plane_icon(
+            surface, theme.CENTER_X, preview_cy, 45, rgb, flight=pf
+        )
+    elif kind == "tgt_compass":
+        rose_rgb = settings.compass_color() or theme.GRID
+        alpha = int(255 * settings.compass_opacity() / 100)
+        mode = settings.compass_labels()
+        sample = {"letters": "N  E  S  W", "degrees": "030  060  090",
+                  "both": "N  030  E  060"}[mode]
+        font = draw.load_font(theme.s(13), bold=True)
+        img = font.render(sample, True, rose_rgb)
+        img.set_alpha(alpha)
+        surface.blit(img, img.get_rect(center=(theme.CENTER_X, preview_cy)))
+    elif kind == "tgt_blip":
+        rgb = settings.blip_color() or theme.AIRCRAFT
+        r_blip = max(2, int(round(theme.s(6) * settings.blip_size_pct() / 100.0)))
+        alpha = int(255 * settings.blip_opacity() / 100)
+        dot = pygame.Surface((r_blip * 2 + 2, r_blip * 2 + 2), pygame.SRCALPHA)
+        pygame.draw.circle(
+            dot, (*rgb[:3], alpha), (r_blip + 1, r_blip + 1), r_blip
+        )
+        surface.blit(
+            dot, dot.get_rect(center=(theme.CENTER_X, preview_cy))
+        )
+
     # Swatch grid: Auto cell + the crayon palette.
     current = _tgt_editor_color(kind)
     x0, y0, cell = _tgt_grid_origin()
