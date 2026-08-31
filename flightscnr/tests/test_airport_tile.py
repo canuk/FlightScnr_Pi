@@ -380,10 +380,13 @@ class TestBoardPill:
         assert airport_tile.board_button_hit(100, 100) is None
 
     @pytest.mark.skipif(not _FONT_OK, reason="pygame.font unavailable on this host")
-    def test_pill_returns_the_ident_it_belongs_to(self):
+    def test_pill_returns_the_ident_it_belongs_to(self, monkeypatch):
         import pygame
 
-        from display.round_touch import airport_tile, theme
+        from display.round_touch import airport_tile, settings, theme
+
+        # The pill is only drawn when the board screen is reachable.
+        monkeypatch.setattr(settings, "show_flip_board", lambda: True)
 
         airport_tile.open_tile(
             {"ident": "KHMT", "lat": 33.734, "lon": -117.023, "name": "Hemet"}
@@ -396,10 +399,13 @@ class TestBoardPill:
         airport_tile.dismiss()
 
     @pytest.mark.skipif(not _FONT_OK, reason="pygame.font unavailable on this host")
-    def test_pill_sits_inside_the_card(self):
+    def test_pill_sits_inside_the_card(self, monkeypatch):
         import pygame
 
-        from display.round_touch import airport_tile, theme
+        from display.round_touch import airport_tile, settings, theme
+
+        # The pill is only drawn when the board screen is reachable.
+        monkeypatch.setattr(settings, "show_flip_board", lambda: True)
 
         airport_tile.open_tile(
             {"ident": "KHMT", "lat": 33.734, "lon": -117.023, "name": "Hemet"}

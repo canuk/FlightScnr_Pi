@@ -103,11 +103,13 @@ class TestAFullBoardIsLouder:
 
 class TestWhenItStaysSilent:
     def test_master_mute_silences_it(self, monkeypatch):
+        monkeypatch.setattr(flap_sound.settings, "show_flip_board", lambda: True)
         monkeypatch.setattr(flap_sound.settings, "master_sound_enabled", lambda: False)
         monkeypatch.setattr(flap_sound.settings, "flip_board_sound_enabled", lambda: True)
         assert flap_sound.enabled() is False
 
     def test_its_own_setting_silences_it(self, monkeypatch):
+        monkeypatch.setattr(flap_sound.settings, "show_flip_board", lambda: True)
         monkeypatch.setattr(flap_sound.settings, "master_sound_enabled", lambda: True)
         monkeypatch.setattr(
             flap_sound.settings, "flip_board_sound_enabled", lambda: False
@@ -115,6 +117,7 @@ class TestWhenItStaysSilent:
         assert flap_sound.enabled() is False
 
     def test_off_hours_silences_it(self, monkeypatch):
+        monkeypatch.setattr(flap_sound.settings, "show_flip_board", lambda: True)
         monkeypatch.setattr(flap_sound.settings, "master_sound_enabled", lambda: True)
         monkeypatch.setattr(flap_sound.settings, "flip_board_sound_enabled", lambda: True)
         monkeypatch.setattr(flap_sound, "_in_off_hours", lambda: True)
@@ -123,8 +126,17 @@ class TestWhenItStaysSilent:
     def test_it_plays_when_nothing_objects(self, monkeypatch):
         monkeypatch.setattr(flap_sound.settings, "master_sound_enabled", lambda: True)
         monkeypatch.setattr(flap_sound.settings, "flip_board_sound_enabled", lambda: True)
+        monkeypatch.setattr(flap_sound.settings, "show_flip_board", lambda: True)
         monkeypatch.setattr(flap_sound, "_in_off_hours", lambda: False)
         assert flap_sound.enabled() is True
+
+    def test_a_board_switched_off_is_silent(self, monkeypatch):
+        """The clatter belongs to the board, so it follows the board switch."""
+        monkeypatch.setattr(flap_sound.settings, "master_sound_enabled", lambda: True)
+        monkeypatch.setattr(flap_sound.settings, "flip_board_sound_enabled", lambda: True)
+        monkeypatch.setattr(flap_sound.settings, "show_flip_board", lambda: False)
+        monkeypatch.setattr(flap_sound, "_in_off_hours", lambda: False)
+        assert flap_sound.enabled() is False
 
     def test_atc_does_not_silence_it(self, monkeypatch):
         """PipeWire mixes them; the clicks are short enough not to mask a call."""

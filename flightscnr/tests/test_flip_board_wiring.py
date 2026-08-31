@@ -61,7 +61,9 @@ class TestDeviceSettingsRow(unittest.TestCase):
     def test_layers_actions_and_labels_stay_aligned(self):
         from display.round_touch.screens import info
 
-        self.assertEqual(len(info.LAYERS_ACTIONS), len(info._layers_row_labels()))
+        # layers_actions() is the rendered list; LAYERS_ACTIONS is the full
+        # set before rows whose parent feature is off are dropped.
+        self.assertEqual(len(info.layers_actions()), len(info._layers_row_labels()))
 
     def test_row_has_a_toggle_state_reader(self):
         from display.round_touch.screens import info
