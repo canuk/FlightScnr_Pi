@@ -332,6 +332,11 @@ class FlipBoardTracker:
         plane = str(flight.get("plane") or "").strip().upper()
         if plane:
             track["type"] = plane
+        hex_id = str(flight.get("icao_hex") or "").strip().upper()
+        if hex_id:
+            # Carried onto the row so the aircraft tile can find the photo
+            # cache entry and match the aircraft against the live feed.
+            track["hex"] = hex_id
 
         if on_ground and ident:
             track["ground_at"] = ident
@@ -512,6 +517,7 @@ class FlipBoardTracker:
             "type": str(track.get("type") or ""),
             "at": float(at),
             "ident": ident,
+            "hex": str(track.get("hex") or ""),
         }
         rows.insert(0, event)
         rows.sort(key=lambda e: float(e.get("at") or 0.0), reverse=True)
@@ -594,6 +600,8 @@ class FlipBoardTracker:
                         "type": str(row.get("type") or ""),
                         "at": float(row.get("at") or 0.0),
                         "ident": str(row.get("ident") or ident).upper(),
+                        # Absent from boards saved before the aircraft tile.
+                        "hex": str(row.get("hex") or "").upper(),
                     }
                     for row in rows
                     if isinstance(row, dict)

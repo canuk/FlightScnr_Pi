@@ -27,6 +27,7 @@ from utilities.route_enrichment import (
     needs_route_enrichment,
 )
 from display.round_touch import (
+    aircraft_tile,
     airport_overlay,
     disclaimer_acceptance,
     draw,
@@ -1075,6 +1076,7 @@ class RoundTouchDisplay:
             moon.draw_moon(self.surface)
         elif self.screen == SCREEN_FLIP_BOARD:
             flip_board.draw_flip_board(self.surface)
+            aircraft_tile.draw(self.surface, self.flights)
         elif self.screen == SCREEN_FORECAST:
             forecast.draw_forecast(self.surface)
         elif self.screen == SCREEN_COVERAGE:
@@ -1730,6 +1732,10 @@ class RoundTouchDisplay:
             self._last_clock_draw = 0.0
         previous = self.screen
         if screen != self.screen:
+            if self.screen == SCREEN_FLIP_BOARD:
+                # The tile belongs to the board; leaving closes it, so it does
+                # not reappear over a board the user comes back to later.
+                aircraft_tile.dismiss()
             if self.screen in (SCREEN_TRACKED, SCREEN_LIVE):
                 tracked.reset_marquee()
             self._scroll.reset()
@@ -4750,6 +4756,13 @@ class RoundTouchDisplay:
             self._note_activity()
             self._safe_draw()
         elif tap and self.screen == SCREEN_FLIP_BOARD:
+            if aircraft_tile.is_open():
+                # While the tile is up it owns the screen: any tap closes it
+                # rather than paging the board underneath.
+                aircraft_tile.dismiss()
+                self._note_activity()
+                self._safe_draw()
+                return
             action = flip_board.tap_footer_action(tap[0], tap[1])
             if action == "radar":
                 flip_board.clear_pinned()
@@ -4774,6 +4787,12 @@ class RoundTouchDisplay:
                     # toggling — both are on screen, so a toggle would be a
                     # coin flip from the user's point of view.
                     flip_board.set_direction(side)
+                    self._note_activity()
+                    self._safe_draw()
+                    return
+                row = flip_board.tap_row(tap[0], tap[1])
+                if row is not None:
+                    aircraft_tile.open_tile(row)
                     self._note_activity()
                     self._safe_draw()
                 elif flip_board.tap_board(tap[0], tap[1]):
@@ -4947,6 +4966,9 @@ class RoundTouchDisplay:
             if (now - self._last_clock_draw) >= (theme.SWEEP_FRAME_MS / 1000.0):
                 self._last_clock_draw = now
                 self._safe_draw()
+            return
+        if self.screen == SCREEN_FLIP_BOARD and aircraft_tile.tick():
+            self._safe_draw()
             return
         if self.screen == SCREEN_FLIP_BOARD and flip_board.is_animating(now):
             # Split-flap needs real frames; the 2s clock cadence would show

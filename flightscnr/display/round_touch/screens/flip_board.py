@@ -680,6 +680,27 @@ def tap_direction(x: int, y: int) -> str | None:
     return None
 
 
+def tap_row(x: int, y: int) -> dict | None:
+    """The aircraft under a tap, or None.
+
+    Only rows that actually carry a movement claim the tap; empty rows fall
+    through to ``tap_board`` so tapping past the last aircraft still flips
+    arrivals and departures.
+    """
+    if not theme.in_visible_circle(x, y):
+        return None
+    rows = rows_for(selected_airport())
+    if not rows:
+        return None
+    height = flip_tiles.tile_height(ROW_TILE_SCALE)
+    for index, top in enumerate(row_positions()):
+        if index >= len(rows):
+            break
+        if top <= y <= top + height:
+            return dict(rows[index], bucket=_direction)
+    return None
+
+
 def tap_board(x: int, y: int) -> bool:
     """True when a tap landed on the board body (flips arrivals/departures)."""
     if not theme.in_visible_circle(x, y):
