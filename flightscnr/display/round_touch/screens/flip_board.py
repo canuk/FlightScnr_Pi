@@ -40,7 +40,7 @@ ROWS = 5
 IDENT_TILE_SCALE_MAX = 3.2
 # Flight rows sit slightly under full size. Five of them at full size ate the
 # height the airport code needed, and the code is what identifies the board.
-ROW_TILE_SCALE = 0.82
+ROW_TILE_SCALE = 0.90
 # Small beside the code, the way a board's clock is secondary to its title.
 CLOCK_SCALE = 0.85
 
@@ -77,9 +77,17 @@ def _reset_for_tests() -> None:
     flip_tiles.invalidate_cache()
 
 
-def restart_animation() -> None:
-    """Flip every row again — used when the page is opened or switched."""
+def restart_animation(*, keep_ident: bool = False) -> None:
+    """Flip the rows again — used when the page is opened or switched.
+
+    ``keep_ident`` leaves the airport code settled. Turning the board over
+    changes the flights, not the field, so re-spinning the code there is
+    motion that says nothing.
+    """
+    ident = _flap_rows.get(_IDENT_FLAP_ROW) if keep_ident else None
     _flap_rows.clear()
+    if ident is not None:
+        _flap_rows[_IDENT_FLAP_ROW] = ident
 
 
 def _row_settled_at(row: int, columns: int) -> float:
@@ -184,7 +192,7 @@ def set_direction(value: str) -> str:
     wanted = str(value or "").strip().lower()
     if wanted in (ARRIVALS, DEPARTURES) and wanted != _direction:
         _direction = wanted
-        restart_animation()
+        restart_animation(keep_ident=True)
     return _direction
 
 
@@ -192,7 +200,7 @@ def toggle_direction() -> str:
     """Flip the board between arrivals and departures."""
     global _direction
     _direction = DEPARTURES if _direction == ARRIVALS else ARRIVALS
-    restart_animation()
+    restart_animation(keep_ident=True)
     return _direction
 
 
@@ -263,10 +271,18 @@ def _header_text_height() -> int:
     """Everything in the header except the airport-code flaps."""
     name_font = draw.load_font(max(8, theme.s(10)))
     return (
-        max(1, theme.s(3))
-        + name_font.get_height() + max(2, theme.s(4))
-        + _pill_height() + max(2, theme.s(4))
+        _ident_name_gap()
+        + name_font.get_height() + _name_pill_gap()
+        + _pill_height() + max(3, theme.s(6))
     )
+
+
+def _ident_name_gap() -> int:
+    return max(3, theme.s(7))
+
+
+def _name_pill_gap() -> int:
+    return max(4, theme.s(9))
 
 
 def ident_scale() -> float:
@@ -311,7 +327,9 @@ def _rows_top() -> int:
         (ROWS - 1) * row_step() + flip_tiles.tile_height(ROW_TILE_SCALE) + _dots_gap()
     )
     latest = nav.content_bottom_y() - dots_reach - max(2, theme.s(2))
-    return min(top, latest)
+    # And never so high that the header climbs into the breadcrumb band.
+    earliest = nav.content_top_y(has_dots=True) + header
+    return max(earliest, min(top, latest))
 
 
 def fits_in_circle() -> bool:
@@ -363,7 +381,7 @@ def _draw_heading(surface: pygame.Surface, airport: dict, y: int) -> int:
     # Only if it clears the bezel at that height.
     if theme.in_visible_circle(clock_x + clock_w, clock_y + clock_h // 2):
         flip_tiles.draw_segment_clock(surface, clock, clock_x, clock_y, CLOCK_SCALE)
-    y += tile_h + max(1, theme.s(3))
+    y += tile_h + _ident_name_gap()
 
     # Full airport name beneath the code.
     name = str(airport.get("facility") or airport.get("name") or "").strip()
@@ -371,8 +389,8 @@ def _draw_heading(surface: pygame.Surface, airport: dict, y: int) -> int:
         name_font = draw.load_font(max(8, theme.s(10)))
         img = draw.render_text_cached(name_font, name[:28], theme.MUTED)
         surface.blit(img, ((theme.SIZE - img.get_width()) // 2, y))
-        y += img.get_height() + max(2, theme.s(4))
-    y = _draw_direction_line(surface, y) + max(2, theme.s(4))
+        y += img.get_height() + _name_pill_gap()
+    y = _draw_direction_line(surface, y) + max(3, theme.s(6))
 
     return y
 
