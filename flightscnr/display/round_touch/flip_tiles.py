@@ -48,7 +48,7 @@ GLYPH = (245, 246, 248)
 YELLOW = (255, 206, 0)
 HINGE = (0, 0, 0, 120)
 # The visible split between the two cards, drawn over the glyph.
-SEAM = (118, 122, 130, 205)
+SEAM = (118, 122, 130, 168)
 HEADING = YELLOW
 SEPARATOR = (120, 124, 132)
 # Segment display for the clock, like the red readout on a terminal board.
