@@ -1325,6 +1325,9 @@ class RoundTouchDisplay:
         if self.screen in (SCREEN_RADAR, SCREEN_CLOCK, SCREEN_ANALOG_CLOCK, SCREEN_ANALOG_NIGHT, SCREEN_FLIEGER_CLOCK, SCREEN_MOON, SCREEN_FORECAST):
             return None
         if self.screen == SCREEN_FLIP_BOARD:
+            # Pinned means it stays until the user leaves.
+            if flip_board.is_pinned():
+                return None
             return float(FLIP_BOARD_TIMEOUT_S)
         if self.screen in (SCREEN_TRACKED, SCREEN_LIVE) and tracked.is_pinned():
             return None
@@ -4394,6 +4397,7 @@ class RoundTouchDisplay:
             self._note_activity()
             self._safe_draw()
         elif swipe == input_handler.SWIPE_RIGHT and self.screen == SCREEN_FLIP_BOARD:
+            flip_board.clear_pinned()
             self._open_screen(SCREEN_MOON)
             self._safe_draw()
         elif swipe == input_handler.SWIPE_RIGHT and self.screen == SCREEN_MOON:
@@ -4748,7 +4752,12 @@ class RoundTouchDisplay:
         elif tap and self.screen == SCREEN_FLIP_BOARD:
             action = flip_board.tap_footer_action(tap[0], tap[1])
             if action == "radar":
+                flip_board.clear_pinned()
                 self._return_to_radar()
+                self._safe_draw()
+            elif action == "pin":
+                flip_board.toggle_pinned()
+                self._note_activity()
                 self._safe_draw()
             elif action == "prev":
                 flip_board.step_airport(-1)

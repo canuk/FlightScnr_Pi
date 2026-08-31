@@ -27,7 +27,25 @@ import pygame
 
 from display.round_touch import draw, flip_tiles, nav, settings, theme
 
-FOOTER_BUTTONS = ("prev", "radar", "next")
+FOOTER_BUTTONS = ("pin", "prev", "radar", "next")
+
+_pinned = False
+
+
+def is_pinned() -> bool:
+    """True while the board is held open regardless of the timeout."""
+    return _pinned
+
+
+def toggle_pinned() -> bool:
+    global _pinned
+    _pinned = not _pinned
+    return _pinned
+
+
+def clear_pinned() -> None:
+    global _pinned
+    _pinned = False
 
 # Tile slots for the aircraft identifier. Six covers a US tail number (N12345)
 # and an airline callsign (SWA221); longer ids are truncated.
@@ -74,6 +92,8 @@ def _reset_for_tests() -> None:
     _airport_index = 0
     _direction = ARRIVALS
     _flap_rows.clear()
+    _direction_hits.clear()
+    clear_pinned()
     flip_tiles.invalidate_cache()
 
 
@@ -543,7 +563,7 @@ def draw_flip_board(surface: pygame.Surface) -> None:
     nav.draw_curved_page_dots(
         surface, _airport_index, len(airports), active_color=theme.LABEL
     )
-    nav.draw_curved_footer(surface, list(FOOTER_BUTTONS))
+    nav.draw_curved_footer(surface, list(FOOTER_BUTTONS), pin_active=_pinned)
 
 
 def _heading_top() -> int:

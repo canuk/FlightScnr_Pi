@@ -99,3 +99,44 @@ def test_the_board_gets_a_full_minute():
     d._session_unlocked = True
     assert d._timeout_duration_s() == app_mod.FLIP_BOARD_TIMEOUT_S
     assert app_mod.FLIP_BOARD_TIMEOUT_S == 60.0
+
+
+def test_pinning_cancels_the_timeout():
+    from display.round_touch.screens import flip_board
+
+    d = object.__new__(app_mod.RoundTouchDisplay)
+    d.screen = app_mod.SCREEN_FLIP_BOARD
+    d._boot_until = 0.0
+    d._session_unlocked = True
+
+    flip_board.clear_pinned()
+    assert d._timeout_duration_s() == app_mod.FLIP_BOARD_TIMEOUT_S
+
+    flip_board.toggle_pinned()
+    try:
+        assert d._timeout_duration_s() is None, "a pinned board must not time out"
+    finally:
+        flip_board.clear_pinned()
+
+
+def test_the_pin_sits_left_of_prev():
+    """Outboard of Prev on the bottom arc, as asked."""
+    from display.round_touch import nav
+    from display.round_touch.screens import flip_board
+
+    segments = dict(
+        (kind, mid)
+        for kind, mid, _half in nav.curved_footer_segments(list(flip_board.FOOTER_BUTTONS))
+    )
+    assert {"pin", "prev", "radar", "next"} <= set(segments)
+    # Larger angle on the bottom arc is further to screen-left.
+    assert segments["pin"] > segments["prev"] > segments["radar"]
+
+
+def test_the_pin_clears_when_the_board_is_reset():
+    from display.round_touch.screens import flip_board
+
+    flip_board.toggle_pinned()
+    assert flip_board.is_pinned()
+    flip_board._reset_for_tests()
+    assert not flip_board.is_pinned()

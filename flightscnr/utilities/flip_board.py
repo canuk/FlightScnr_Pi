@@ -68,6 +68,15 @@ DESCENT_FPM = -300
 # through this window toward the field.
 APPROACH_RADIUS_NM = 3.0
 APPROACH_CEILING_AGL_FT = 2500
+# A climb-out is caught in the same window. The half-mile box only sees an
+# aircraft for a few seconds after rotation, and a ground station usually has
+# not acquired it yet.
+DEPARTURE_RADIUS_NM = 3.0
+DEPARTURE_CEILING_AGL_FT = 2500
+# Plenty of aircraft never transmit a vertical rate — N73898 reports none —
+# so derive one from consecutive altitudes when the field is missing.
+DERIVED_RATE_MIN_FT = 200
+DERIVED_RATE_MAX_GAP_S = 60.0
 # Rows the board keeps per airport per direction.
 MAX_ROWS = 5
 # Forget movements older than this.
@@ -285,14 +294,25 @@ class FlipBoardTracker:
         if track is None:
             track = {
                 "first": now,
+                # Born here if we first met it in the confirmation box, or
+                # low and close in the wider window — which is where a
+                # climbing departure is usually acquired.
                 "born_at": ident if (ident and low) else "",
                 "departed_from": "",
                 "arriving_at": "",
                 "arriving_since": 0.0,
                 "ground_at": "",
                 "arrived_at": "",
+                "alt_at": 0.0,
+                "alt_ft": None,
             }
             self._tracks[key] = track
+        if not vs and not on_ground:
+            vs = self._derived_rate(track, alt, now)
+        if not on_ground:
+            track["alt_at"] = now
+            track["alt_ft"] = alt
+
         track["last"] = now
         label = flight_label(flight)
         if label:
@@ -333,12 +353,35 @@ class FlipBoardTracker:
         approach_ident = (
             str(approach.get("ident") or "").upper() if approach else ""
         )
+        if not track.get("born_at") and in_approach and approach_ident:
+            # First contact was in the wider window: remember the field, so a
+            # climb-out from it is not mistaken for a passing overflight.
+            if now - float(track.get("first") or now) < 1.0:
+                track["born_at"] = approach_ident
         if vs <= DESCENT_FPM and in_approach and approach_ident:
             if track.get("arriving_at") != approach_ident:
                 track["arriving_at"] = approach_ident
                 track["arriving_since"] = now
         elif vs >= CLIMB_FPM or not in_approach:
             track["arriving_at"] = ""
+
+        # A climb-out inside the wider window counts, provided we first met
+        # this aircraft there rather than watching it arrive from elsewhere.
+        # The half-mile box only holds it for a few seconds after rotation,
+        # by which time a ground station often has not acquired it.
+        if vs >= CLIMB_FPM and approach_ident and in_approach:
+            born = str(track.get("born_at") or "")
+            ground = str(track.get("ground_at") or "")
+            if (
+                approach_ident in (born, ground)
+                and track.get("departed_from") != approach_ident
+            ):
+                track["departed_from"] = approach_ident
+                track["arriving_at"] = ""
+                new_events.append(
+                    self._record(approach_ident, "departures", track, now)
+                )
+                return
 
         if not ident or not low:
             # Outside the confirmation box: the pending arrival above is all
@@ -369,6 +412,25 @@ class FlipBoardTracker:
                 new_events.append(
                     self._record(ident, "departures", track, now)
                 )
+
+    @staticmethod
+    def _derived_rate(track: dict, alt: int, now: float) -> int:
+        """Feet per minute inferred from consecutive altitudes.
+
+        Many aircraft transmit position without a vertical rate, so a climb
+        test that only reads the reported field never fires for them.
+        """
+        prev_at = float(track.get("alt_at") or 0.0)
+        prev_alt = track.get("alt_ft")
+        if not prev_at or prev_alt is None:
+            return 0
+        gap = now - prev_at
+        if gap <= 0 or gap > DERIVED_RATE_MAX_GAP_S:
+            return 0
+        climb = int(alt) - int(prev_alt)
+        if abs(climb) < DERIVED_RATE_MIN_FT:
+            return 0
+        return int(climb / gap * 60.0)
 
     def _retire_gone(
         self, present: set[str], now: float, new_events: list[dict]

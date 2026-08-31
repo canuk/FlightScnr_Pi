@@ -637,3 +637,70 @@ class TestApproachWindow(unittest.TestCase):
         self.tracker.observe([climb], AIRPORTS, now=1010.0)
         self.tracker.observe([], AIRPORTS, now=1010.0 + flip_board.GONE_S + 1)
         self.assertEqual(self.tracker.board("KHWD")["arrivals"], [])
+
+
+class TestDepartureWithoutAReportedRate(unittest.TestCase):
+    """N73898 took off from KHMT and never reached the board.
+
+    Two reasons, both fixed here. It was acquired 1.7 nm out at 888 ft above
+    the field — outside the half-mile confirmation box — and it transmits no
+    vertical rate at all, so the climb test could never fire for it.
+    """
+
+    def setUp(self):
+        self.tracker = flip_board.FlipBoardTracker()
+
+    @staticmethod
+    def _out(nm_north, agl, **kw):
+        # ~1 nm is 1/60 of a degree of latitude.
+        return plane(
+            plane_latitude=KHWD["lat"] + nm_north / 60.0,
+            plane_longitude=KHWD["lon"],
+            altitude=KHWD["elevation_ft"] + agl,
+            **kw,
+        )
+
+    def test_a_climb_out_is_caught_outside_the_tight_box(self):
+        # Acquired already climbing, low and close: that is a departure even
+        # though the rotation itself was never seen.
+        self.tracker.observe([self._out(1.2, 600, vertical_speed=700)],
+                             AIRPORTS, now=1000.0)
+        self.tracker.observe([self._out(1.7, 900, vertical_speed=700)],
+                             AIRPORTS, now=1030.0)
+        departures = self.tracker.board("KHWD")["departures"]
+        self.assertEqual(len(departures), 1)
+        self.assertEqual(departures[0]["id"], "N12345")
+
+    def test_a_climb_is_derived_when_no_rate_is_reported(self):
+        """Rising altitude is the climb signal when baro_rate is absent."""
+        self.tracker.observe([self._out(1.2, 500, vertical_speed=0)],
+                             AIRPORTS, now=1000.0)
+        events = self.tracker.observe(
+            [self._out(1.5, 1100, vertical_speed=0)], AIRPORTS, now=1030.0
+        )
+        self.assertEqual([e["bucket"] for e in events], ["departures"],
+                         "a climb with no reported rate went unrecorded")
+
+    def test_level_traffic_without_a_rate_is_not_a_departure(self):
+        for t, agl in ((1000.0, 900), (1030.0, 920), (1060.0, 905)):
+            self.tracker.observe(
+                [self._out(1.4, agl, vertical_speed=0)], AIRPORTS, now=t
+            )
+        self.assertEqual(self.tracker.board("KHWD")["departures"], [])
+
+    def test_an_overflight_arriving_from_elsewhere_is_not_a_departure(self):
+        """First seen far away and high, so the field is not its origin."""
+        self.tracker.observe([self._out(20.0, 9000, vertical_speed=0)],
+                             AIRPORTS, now=1000.0)
+        self.tracker.observe([self._out(1.5, 1200, vertical_speed=800)],
+                             AIRPORTS, now=1200.0)
+        self.assertEqual(self.tracker.board("KHWD")["departures"], [])
+
+    def test_a_departure_is_still_recorded_once(self):
+        self.tracker.observe([self._out(1.2, 600, vertical_speed=700)],
+                             AIRPORTS, now=1000.0)
+        for t, agl in ((1030.0, 900), (1060.0, 1400), (1090.0, 1900)):
+            self.tracker.observe(
+                [self._out(1.7, agl, vertical_speed=700)], AIRPORTS, now=t
+            )
+        self.assertEqual(len(self.tracker.board("KHWD")["departures"]), 1)
