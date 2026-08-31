@@ -19,6 +19,7 @@ timeout of its own, and nothing should reclaim it.
 """
 
 import os
+import time
 import sys
 import tempfile
 
@@ -117,6 +118,56 @@ def test_pinning_cancels_the_timeout():
         assert d._timeout_duration_s() is None, "a pinned board must not time out"
     finally:
         flip_board.clear_pinned()
+
+
+def _timeout_display(screen, *, activity_age_s):
+    d = object.__new__(app_mod.RoundTouchDisplay)
+    d.screen = screen
+    d._boot_until = 0.0
+    d._session_unlocked = True
+    d._auto_idle_clock = False
+    d._secondary_activity = time.time() - activity_age_s
+    d._returned = []
+    d._return_to_radar = lambda: d._returned.append(True)
+    d._safe_draw = lambda: None
+    d._idle_clock_holds_screen = lambda: False
+    return d
+
+
+def test_a_pinned_board_survives_the_tick(monkeypatch):
+    """The pin has to stop the timeout that actually fires, not just the ring.
+
+    _timeout_duration_s returns None for a pinned board, which is what draws
+    the countdown ring. _tick_timeout read that None, saw SCREEN_FLIP_BOARD in
+    the clock-family tuple, and substituted clock_timeout_s() — so pinning
+    swapped a 60s timeout for a 10s one and the board left sooner.
+    """
+    from display.round_touch.screens import flip_board
+
+    monkeypatch.setattr(settings, "clock_timeout_s", lambda: 10)
+
+    flip_board.toggle_pinned()
+    try:
+        d = _timeout_display(app_mod.SCREEN_FLIP_BOARD, activity_age_s=30.0)
+        d._tick_timeout()
+        assert d._returned == [], "a pinned board was sent back to the radar"
+    finally:
+        flip_board.clear_pinned()
+
+
+def test_an_unpinned_board_still_leaves_after_its_minute(monkeypatch):
+    from display.round_touch.screens import flip_board
+
+    monkeypatch.setattr(settings, "clock_timeout_s", lambda: 10)
+    flip_board.clear_pinned()
+
+    early = _timeout_display(app_mod.SCREEN_FLIP_BOARD, activity_age_s=30.0)
+    early._tick_timeout()
+    assert early._returned == [], "left before its 60s were up"
+
+    late = _timeout_display(app_mod.SCREEN_FLIP_BOARD, activity_age_s=61.0)
+    late._tick_timeout()
+    assert late._returned == [True], "never left"
 
 
 def test_the_pin_sits_left_of_prev():

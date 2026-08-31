@@ -4918,6 +4918,10 @@ class RoundTouchDisplay:
             return
         if self.screen in (SCREEN_TRACKED, SCREEN_LIVE) and tracked.is_pinned():
             return
+        # The board shares the clock-family fallback below, which would give a
+        # pinned board clock_timeout_s() instead of no timeout at all.
+        if self.screen == SCREEN_FLIP_BOARD and flip_board.is_pinned():
+            return
 
         timeout_s = self._timeout_duration_s()
         if timeout_s is None:
