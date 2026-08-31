@@ -33,8 +33,11 @@ FOOTER_BUTTONS = ("prev", "radar", "next")
 # and an airline callsign (SWA221); longer ids are truncated.
 ID_SLOTS = 6
 ROWS = 5
-# The airport code reads as the board's title, so its flaps are oversized.
-IDENT_TILE_SCALE = 2.4
+# The airport code reads as the board's title, so its flaps are oversized —
+# as far as the dial allows. Five flight rows, the field name, the direction
+# line, the page dots and the footer all have to coexist inside the circle,
+# so this is solved against the space left over rather than picked.
+IDENT_TILE_SCALE_MAX = 2.4
 # Segment clock sized to sit against those oversized flaps.
 CLOCK_SCALE = 1.8
 
@@ -227,15 +230,34 @@ def row_positions() -> list[int]:
     return [top + index * step for index in range(ROWS)]
 
 
-def _header_height() -> int:
-    """Airport code flaps, the field name, and the direction line."""
+def _header_text_height() -> int:
+    """Everything in the header except the airport-code flaps."""
     name_font = draw.load_font(max(8, theme.s(10)))
     label_font = draw.load_font(theme.s(13), bold=True)
     return (
-        flip_tiles.tile_height(scale=IDENT_TILE_SCALE) + max(1, theme.s(4))
+        max(1, theme.s(4))
         + name_font.get_height() + max(2, theme.s(4))
         + label_font.get_height() + max(2, theme.s(4))
     )
+
+
+def ident_scale() -> float:
+    """Largest airport-code flap that still leaves room for everything else."""
+    block = ROWS * row_step() - max(1, theme.s(3))
+    dots_reach = (ROWS - 1) * row_step() + flip_tiles.tile_height() + _dots_gap()
+    available = nav.content_bottom_y() - nav.content_top_y(has_dots=True)
+    margin = max(2, theme.s(2))
+    spare = (
+        available - (block + _header_gap() + _header_text_height())
+        - (dots_reach - block) - margin
+    )
+    base = max(1, flip_tiles.tile_height())
+    return max(1.0, min(IDENT_TILE_SCALE_MAX, spare / base))
+
+
+def _header_height() -> int:
+    """Airport code flaps, the field name, and the direction line."""
+    return flip_tiles.tile_height(scale=ident_scale()) + _header_text_height()
 
 
 def _header_gap() -> int:
@@ -251,7 +273,13 @@ def _rows_top() -> int:
     """
     block = ROWS * row_step() - max(1, theme.s(3))
     header = _header_height() + _header_gap()
-    return theme.CENTER_Y - (block + header) // 2 + header
+    top = theme.CENTER_Y - (block + header) // 2 + header
+    # Clamp against the footer: the airport-code flaps grew and pushed the
+    # page dots down onto it. Derived from the bottom, so a further header
+    # change moves the block rather than overrunning the chrome.
+    dots_reach = (ROWS - 1) * row_step() + flip_tiles.tile_height() + _dots_gap()
+    latest = nav.content_bottom_y() - dots_reach - max(2, theme.s(2))
+    return min(top, latest)
 
 
 def fits_in_circle() -> bool:
@@ -295,16 +323,16 @@ def _draw_heading(surface: pygame.Surface, airport: dict, y: int) -> int:
     # with the local time on segments beside it, centred against that block.
     ident = str(airport.get("ident") or "").upper()[:4]
     clock = _local_clock_text()
-    ident_w = flip_tiles.row_width(len(ident), scale=IDENT_TILE_SCALE) if ident else 0
+    ident_w = flip_tiles.row_width(len(ident), scale=ident_scale()) if ident else 0
     clock_w, clock_h = flip_tiles.segment_clock_size(clock, CLOCK_SCALE)
     gap = max(4, theme.s(12))
     block_w = ident_w + gap + clock_w
     x = (theme.SIZE - block_w) // 2
-    tile_h = flip_tiles.tile_height(scale=IDENT_TILE_SCALE)
+    tile_h = flip_tiles.tile_height(scale=ident_scale())
     shown_ident = _flap_text(_IDENT_FLAP_ROW, ident, time.time())
     flip_tiles.draw_tiles(
         surface, shown_ident, x, y,
-        slots=len(ident) or 1, ink=flip_tiles.YELLOW, scale=IDENT_TILE_SCALE,
+        slots=len(ident) or 1, ink=flip_tiles.YELLOW, scale=ident_scale(),
     )
     flip_tiles.draw_segment_clock(
         surface, clock, x + ident_w + gap, y + (tile_h - clock_h) // 2, CLOCK_SCALE
@@ -430,11 +458,13 @@ def _heading_top() -> int:
     return _rows_top() - _header_gap() - _header_height()
 
 
+def _dots_gap() -> int:
+    return max(4, theme.s(14))
+
+
 def dots_y() -> int:
     """Row of airport dots, between the last flap row and the footer."""
-    return (
-        row_positions()[-1] + flip_tiles.tile_height() + max(4, theme.s(14))
-    )
+    return row_positions()[-1] + flip_tiles.tile_height() + _dots_gap()
 
 
 # -- input -----------------------------------------------------------------
