@@ -90,13 +90,6 @@ def _note_mouse_fallback() -> None:
     )
 
 
-# Vertical travel that counts as "the user was scrolling, not tapping".
-# Below the swipe threshold the list already moves with the finger, so a
-# release here must not also tap the row underneath. Small enough that an
-# ordinary unsteady finger still taps.
-SCROLL_TAP_DEADZONE_PX = 6
-
-
 def _gesture_threshold_px() -> int:
     """Movement below this is a tap; at or above is a swipe."""
     try:
@@ -108,6 +101,21 @@ def _gesture_threshold_px() -> int:
 
 def gesture_threshold_px() -> int:
     return _gesture_threshold_px()
+
+
+# Vertical travel that counts as "the user was scrolling, not tapping".
+# Below the swipe threshold the list already moves with the finger, so a
+# release must not also tap the row underneath.
+#
+# Sized against the swipe threshold, not a fixed pixel count. A fixed 6 px is
+# 8% of the 70 px a tap may travel at a 1080 framebuffer, so an ordinary
+# finger roll killed taps everywhere. A third of the threshold sits well
+# above finger noise and well below a deliberate drag.
+_DEADZONE_FRACTION = 0.35
+
+
+def scroll_tap_deadzone_px() -> int:
+    return max(10, int(_gesture_threshold_px() * _DEADZONE_FRACTION))
 
 
 def _logical_pos(pos) -> tuple[int, int]:
@@ -200,7 +208,7 @@ class TouchInput:
 
         if travel < threshold:
             self._pending_swipe = SWIPE_NONE
-            if scrolled >= SCROLL_TAP_DEADZONE_PX:
+            if scrolled >= scroll_tap_deadzone_px():
                 # The list moved under the finger; releasing is the end of a
                 # scroll, not a tap on the row it happened to stop over.
                 self._pending_tap = None
