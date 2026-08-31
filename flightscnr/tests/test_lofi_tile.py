@@ -38,6 +38,8 @@ from display.round_touch import lofi_tile, theme  # noqa: E402
 from utilities import lofi_audio  # noqa: E402
 
 TRACK = "Attic Light.mp3"
+# Captured before the autouse fixture stubs it out.
+_REAL_CURRENT_TRACK = lofi_audio.current_track_filename
 
 
 @pytest.fixture(autouse=True)
@@ -363,3 +365,98 @@ class TestItReachesThePanel:
         before = pygame.image.tostring(display, "RGB")
         _real_rotation()._blit_lofi_tile(display, (0, 0), 90)
         assert pygame.image.tostring(display, "RGB") != before
+
+
+class TestGettingBackToPlay:
+    """A paused bed must always be reachable again.
+
+    Pausing and letting the tile time out left no way back: the pill falls
+    back to a placeholder when no track is playing, and open_tile gave up
+    when it could not resolve one. Play was unreachable without the portal.
+    """
+
+    def test_the_tile_stays_up_while_paused(self):
+        """It is the only control that can start the bed again."""
+        lofi_tile.open_tile()
+        lofi_audio.pause()
+        base = lofi_tile.time.monotonic()
+        import pytest as _pytest
+
+        with _pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                lofi_tile.time, "monotonic", lambda: base + lofi_tile.TIMEOUT_S + 5
+            )
+            assert lofi_tile.tick() is False
+            assert lofi_tile.is_open()
+
+    def test_it_times_out_again_once_playing(self, monkeypatch):
+        lofi_tile.open_tile()
+        lofi_audio.resume()
+        base = lofi_tile.time.monotonic()
+        monkeypatch.setattr(
+            lofi_tile.time, "monotonic", lambda: base + lofi_tile.TIMEOUT_S + 5
+        )
+        assert lofi_tile.tick() is True
+
+    def test_it_opens_while_paused_with_no_live_track(self, monkeypatch):
+        """The scheduler reports nothing while held, so fall back."""
+        lofi_audio.pause()
+        monkeypatch.setattr(lofi_audio, "current_track_filename", lambda: None)
+        lofi_tile.open_tile()
+        assert lofi_tile.is_open(), "no way back to the play button"
+
+    def test_it_still_does_not_open_when_nothing_is_going_on(self, monkeypatch):
+        """Not paused and no track: there is nothing to show."""
+        lofi_audio.resume()
+        monkeypatch.setattr(lofi_audio, "current_track_filename", lambda: None)
+        lofi_tile.open_tile()
+        assert not lofi_tile.is_open()
+
+    def test_it_still_draws_when_the_track_is_unknown(self, monkeypatch):
+        """No name to show, but the buttons must still be there."""
+        lofi_audio.pause()
+        monkeypatch.setattr(lofi_audio, "current_track_filename", lambda: None)
+        lofi_tile.open_tile()
+        assert lofi_tile.draw(_surface()) is not None
+        assert set(lofi_tile._hits) == {
+            lofi_tile.BUTTON_PLAY,
+            lofi_tile.BUTTON_DISABLE,
+        }
+
+    def test_play_works_from_that_state(self, monkeypatch):
+        lofi_audio.pause()
+        monkeypatch.setattr(lofi_audio, "current_track_filename", lambda: None)
+        lofi_tile.open_tile()
+        lofi_tile.apply(lofi_tile.BUTTON_PLAY)
+        assert lofi_audio.is_paused() is False
+
+
+class TestTheRememberedTrack:
+    def test_nothing_is_recalled_while_the_bed_plays(self, monkeypatch):
+        """The fallback is for a held bed only, not a stopped one."""
+        lofi_audio.remember_track("Recalled.mp3")
+        monkeypatch.setattr(lofi_audio, "_scheduler", None)
+        lofi_audio.resume()
+        assert _REAL_CURRENT_TRACK() is None
+
+    def test_it_recalls_the_last_track_while_paused(self, monkeypatch):
+        lofi_audio._reset_pause_for_tests()
+        lofi_audio.remember_track("Recalled.mp3")
+        monkeypatch.setattr(lofi_audio, "_scheduler", None)
+        lofi_audio.pause()
+        assert _REAL_CURRENT_TRACK() == "Recalled.mp3"
+
+    def test_a_live_track_wins_over_the_memory(self, monkeypatch):
+        class Sched:
+            def current_track(self):
+                return "/x/Now Playing.mp3"
+
+            def pause(self):
+                pass
+
+            def resume(self):
+                pass
+
+        lofi_audio.remember_track("Old.mp3")
+        monkeypatch.setattr(lofi_audio, "_scheduler", Sched())
+        assert _REAL_CURRENT_TRACK() == "Now Playing.mp3"

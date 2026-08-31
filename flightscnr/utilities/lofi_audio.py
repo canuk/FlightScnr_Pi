@@ -744,12 +744,29 @@ def enable_track(name) -> None:
         logger.debug("[Lofi] enable failed", exc_info=True)
 
 
+_last_track_name: str | None = None
+
+
+def remember_track(name: str | None) -> None:
+    """Hold the last track seen, so a paused bed still has an identity."""
+    global _last_track_name
+    if name:
+        _last_track_name = str(name)
+
+
 def current_track_filename() -> str | None:
-    """Filename of the playing track, as the disabled store records it."""
-    if _scheduler is None:
-        return None
-    track = _scheduler.current_track()
-    return os.path.basename(track) if track else None
+    """Filename of the playing track, as the disabled store records it.
+
+    Falls back to the last track seen while the bed is paused. The pill
+    shows a placeholder with no live track and the tile would not open, so
+    pausing and letting the tile close left no way back to play.
+    """
+    if _scheduler is not None:
+        track = _scheduler.current_track()
+        if track:
+            remember_track(os.path.basename(track))
+            return os.path.basename(track)
+    return _last_track_name if _paused else None
 
 
 def _master_volume() -> float:

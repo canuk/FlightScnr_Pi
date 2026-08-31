@@ -60,7 +60,10 @@ def open_tile(track_name: str | None = None) -> None:
 
     _track = track_name or lofi_audio.current_track_filename()
     if not _track:
-        return
+        if not lofi_audio.is_paused():
+            return
+        # Held with nothing to name it: still open, so play stays reachable.
+        _track = ""
     _open = True
     _opened_at = time.monotonic()
 
@@ -90,6 +93,12 @@ def note_activity() -> None:
 def tick() -> bool:
     """True once when the tile times out, so the caller repaints."""
     if not _open:
+        return False
+    from utilities import lofi_audio
+
+    if lofi_audio.is_paused():
+        # The tile holds the only control that starts the bed again, so it
+        # stays until the user dismisses it or presses play.
         return False
     if (time.monotonic() - _opened_at) < TIMEOUT_S:
         return False
@@ -200,7 +209,7 @@ def draw(surface: pygame.Surface) -> pygame.Rect | None:
     name_font = draw_mod.load_font(theme.s(13), bold=True)
     label_font = draw_mod.load_font(max(8, theme.s(9)), bold=True)
 
-    name = display_name(_track)
+    name = display_name(_track) or "Paused"
     pad = theme.s(12)
     gap = theme.s(10)
     button = theme.s(44)
