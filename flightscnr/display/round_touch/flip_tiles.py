@@ -20,6 +20,8 @@ frame and a Pi cannot afford to re-shade forty gradients each time.
 
 from __future__ import annotations
 
+import math
+
 import pygame
 
 from display.round_touch import draw, theme
@@ -260,3 +262,61 @@ def draw_segment_clock(
         cursor += w + gap
     width, height = segment_clock_size(text, scale)
     return pygame.Rect(int(x), int(y), width, height)
+
+
+# -- departure / arrival pictograms ----------------------------------------
+
+# The airport-board convention: a swept-wing aircraft climbing away from a
+# ground bar for departures, descending toward it for arrivals. Drawn from a
+# silhouette rather than reusing the radar's plan-view aircraft, which reads
+# as traffic on a map rather than a direction of travel.
+_PLANE_OUTLINE = (
+    (0.95, 0.00),    # nose
+    (0.30, 0.16),
+    (-0.30, 0.16),
+    (-0.42, 0.62),   # wing, swept back
+    (-0.60, 0.62),
+    (-0.52, 0.14),
+    (-0.86, 0.12),
+    (-0.95, 0.34),   # tailplane
+    (-1.00, 0.34),
+    (-1.00, -0.34),
+    (-0.95, -0.34),
+    (-0.86, -0.12),
+    (-0.52, -0.14),
+    (-0.60, -0.62),
+    (-0.42, -0.62),
+    (-0.30, -0.16),
+    (0.30, -0.16),
+)
+
+
+def draw_direction_icon(
+    surface: pygame.Surface,
+    cx: int,
+    cy: int,
+    size: int,
+    color,
+    *,
+    departing: bool,
+) -> None:
+    """Departure or arrival pictogram centred on ``(cx, cy)``."""
+    half = max(4, int(size) // 2)
+    angle = math.radians(-32.0 if departing else 32.0)
+    cos_a, sin_a = math.cos(angle), math.sin(angle)
+    scale = half * 0.82
+    # Lift the aircraft clear of the bar so the two never touch.
+    lift = -half * 0.22 if departing else -half * 0.30
+
+    points = []
+    for px, py in _PLANE_OUTLINE:
+        rx = px * cos_a - py * sin_a
+        ry = px * sin_a + py * cos_a
+        points.append((cx + rx * scale, cy + ry * scale * 0.62 + lift))
+    pygame.draw.polygon(surface, color, points)
+
+    # Ground bar beneath, as on the standard sign.
+    bar_y = cy + half - max(1, theme.s(1))
+    pygame.draw.line(
+        surface, color, (cx - half, bar_y), (cx + half, bar_y), max(2, theme.s(2))
+    )

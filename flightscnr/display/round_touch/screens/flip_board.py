@@ -147,6 +147,20 @@ def selected_airport(airports: list[dict] | None = None) -> dict | None:
     return airports[_airport_index]
 
 
+def select_airport(ident: str) -> bool:
+    """Point the board at ``ident`` when it is one of the fields in view."""
+    global _airport_index
+    wanted = str(ident or "").strip().upper()
+    if not wanted:
+        return False
+    for index, airport in enumerate(board_airports()):
+        if str(airport.get("ident") or "").upper() == wanted:
+            _airport_index = index
+            restart_animation()
+            return True
+    return False
+
+
 def step_airport(delta: int) -> None:
     """Page to the previous / next airport in view."""
     global _airport_index
@@ -308,19 +322,9 @@ def _draw_direction_icon(
     surface: pygame.Surface, cx: int, cy: int, size: int, color
 ) -> None:
     """Departures climb away, arrivals descend toward the field."""
-    import math as _math
-
-    from display.round_touch import aircraft
-
-    angle = -30.0 if _direction == DEPARTURES else 30.0
-    aircraft.draw_plane_icon(
-        surface, int(cx), int(cy), 90.0 + angle, color, compact=True,
-    )
-    # Ground line under the nose, the way a terminal board marks the two.
-    half = max(2, size // 2)
-    y = cy + half - max(1, theme.s(1))
-    pygame.draw.line(
-        surface, color, (cx - half, y), (cx + half, y), max(1, theme.s(1))
+    flip_tiles.draw_direction_icon(
+        surface, int(cx), int(cy), int(size), color,
+        departing=_direction == DEPARTURES,
     )
 
 

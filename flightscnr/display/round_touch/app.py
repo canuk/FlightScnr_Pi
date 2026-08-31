@@ -4382,7 +4382,11 @@ class RoundTouchDisplay:
         ):
             # Every row turns over on arrival, the way a real board catches up.
             flip_board.restart_animation()
+            # A deliberate swipe ends the idle-clock state, so nothing pulls
+            # the user back to radar behind their back.
+            self._auto_idle_clock = False
             self._open_screen(SCREEN_FLIP_BOARD)
+            self._note_activity()
             self._safe_draw()
         elif swipe == input_handler.SWIPE_RIGHT and self.screen == SCREEN_FLIP_BOARD:
             self._open_screen(SCREEN_MOON)
@@ -4985,7 +4989,11 @@ class RoundTouchDisplay:
                 self._radar_visible_since = time.time()
         elif (
             self._auto_idle_clock
-            and self.screen in (SCREEN_CLOCK, SCREEN_ANALOG_CLOCK, SCREEN_ANALOG_NIGHT, SCREEN_FLIEGER_CLOCK, SCREEN_MOON, SCREEN_FLIP_BOARD, SCREEN_FORECAST, SCREEN_COVERAGE)
+            # The board and the coverage page are places the user navigated
+            # to on purpose, not idle screens to be reclaimed the moment an
+            # aircraft appears. Returning from them looked like the board
+            # "going back to radar too quickly".
+            and self.screen in (SCREEN_CLOCK, SCREEN_ANALOG_CLOCK, SCREEN_ANALOG_NIGHT, SCREEN_FLIEGER_CLOCK, SCREEN_MOON, SCREEN_FORECAST)
             and radar.visible_in_range_count(self.flights) > 0
         ):
             self._return_to_radar()
@@ -5342,6 +5350,19 @@ class RoundTouchDisplay:
         """
         from display.round_touch import airport_tile
 
+        board_ident = airport_tile.board_button_hit(x, y)
+        if board_ident:
+            # The pill opens that field's arrivals board. Checked before the
+            # dismiss below, which owns the rest of the tile.
+            airport_tile.dismiss()
+            radar.invalidate_frame_layer()
+            flip_board.select_airport(board_ident)
+            flip_board.restart_animation()
+            self._auto_idle_clock = False
+            self._open_screen(SCREEN_FLIP_BOARD)
+            self._note_activity()
+            self._safe_draw()
+            return True
         if airport_tile.hit(x, y):
             # Tap on the METAR tile itself dismisses it.
             airport_tile.dismiss()

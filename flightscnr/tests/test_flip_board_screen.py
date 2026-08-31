@@ -397,3 +397,44 @@ class HeadingDirectionTests(ScreenTestCase):
 
         surface = pygame.Surface((th.SIZE, th.SIZE))
         flip_board._draw_heading(surface, {"ident": "KHMT"}, th.s(60))
+
+
+class DirectionIconTests(ScreenTestCase):
+    """Departure climbs away from the ground bar, arrival descends toward it."""
+
+    @staticmethod
+    def _ink_rows(departing):
+        import pygame as pg
+
+        from display.round_touch import flip_tiles
+
+        size = 48
+        surf = pg.Surface((size * 2, size * 2), pg.SRCALPHA)
+        flip_tiles.draw_direction_icon(
+            surf, size, size, size, (255, 255, 255), departing=departing
+        )
+        rows = []
+        for y in range(size * 2):
+            for x in range(size * 2):
+                if surf.get_at((x, y))[3] > 0:
+                    rows.append((x, y))
+        return rows
+
+    def test_both_directions_draw_something(self):
+        for departing in (True, False):
+            self.assertTrue(self._ink_rows(departing), "pictogram drew nothing")
+
+    def test_the_nose_is_higher_when_departing(self):
+        """A departure climbs; an arrival descends. Compare the nose height."""
+        dep = self._ink_rows(True)
+        arr = self._ink_rows(False)
+        # Rightmost ink is the nose in both cases; a climb puts it higher up
+        # the surface (smaller y) than a descent.
+        dep_nose_y = min(y for x, y in dep if x >= max(px for px, _ in dep) - 2)
+        arr_nose_y = min(y for x, y in arr if x >= max(px for px, _ in arr) - 2)
+        self.assertLess(
+            dep_nose_y, arr_nose_y, "departure nose should sit above arrival's"
+        )
+
+    def test_the_two_are_not_the_same_picture(self):
+        self.assertNotEqual(set(self._ink_rows(True)), set(self._ink_rows(False)))

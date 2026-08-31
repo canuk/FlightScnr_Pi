@@ -42,6 +42,9 @@ _fetch_done_at = 0.0
 _opened_at = 0.0
 _closed_reported = True
 _last_rect: "pygame.Rect | None" = None
+# Screen rect of the "open the arrivals board" pill, in panel-relative terms
+# resolved at blit time. None while the tile is closed or the pill is hidden.
+_board_button_rect: "pygame.Rect | None" = None
 
 
 def _reset_for_tests() -> None:
@@ -106,11 +109,12 @@ def is_open() -> bool:
 
 
 def dismiss() -> None:
-    global _airport, _metar, _fetch_done, _last_rect
+    global _airport, _metar, _fetch_done, _last_rect, _board_button_rect
     _airport = None
     _metar = None
     _fetch_done = False
     _last_rect = None
+    _board_button_rect = None
 
 
 def hit(x: int, y: int) -> bool:
@@ -118,6 +122,15 @@ def hit(x: int, y: int) -> bool:
     if _airport is None or _last_rect is None:
         return False
     return _last_rect.collidepoint(int(x), int(y))
+
+
+def board_button_hit(x: int, y: int) -> str | None:
+    """Ident to open the arrivals board for, when the pill was tapped."""
+    if _airport is None or _board_button_rect is None:
+        return None
+    if not _board_button_rect.collidepoint(int(x), int(y)):
+        return None
+    return str(_airport.get("ident") or "").upper() or None
 
 
 def tick() -> bool:
@@ -246,7 +259,7 @@ def _tile_ink() -> tuple[tuple[int, int, int], tuple[int, int, int]]:
 
 def draw(surface: pygame.Surface) -> pygame.Rect | None:
     """Draw the tile; returns its rect or None when closed."""
-    global _last_rect
+    global _last_rect, _board_button_rect
     if _airport is None:
         return None
     from display.round_touch import radar_hud
@@ -357,6 +370,27 @@ def draw(surface: pygame.Surface) -> pygame.Rect | None:
     if footer:
         panel.blit(name_font.render(footer, True, muted_rgb), (pad, y + gap))
 
+    # Pill through to the arrivals / departures board for this field.
+    from display.round_touch import flip_tiles
+
+    btn_h = max(10, theme.s(16))
+    btn_w = max(18, theme.s(30))
+    btn_x = width - pad - btn_w
+    btn_y = height - pad - btn_h + max(1, theme.s(2))
+    pygame.draw.rect(
+        panel, (*accent_rgb, 40), pygame.Rect(btn_x, btn_y, btn_w, btn_h),
+        border_radius=btn_h // 2,
+    )
+    pygame.draw.rect(
+        panel, (*accent_rgb, 170), pygame.Rect(btn_x, btn_y, btn_w, btn_h),
+        width=max(1, theme.s(1)), border_radius=btn_h // 2,
+    )
+    flip_tiles.draw_direction_icon(
+        panel, btn_x + btn_w // 2, btn_y + btn_h // 2,
+        int(btn_h * 0.72), accent_rgb, departing=False,
+    )
+    _panel_button = pygame.Rect(btn_x, btn_y, btn_w, btn_h)
+
     anchor_xy = None
     try:
         from display.round_touch.airport_overlay import _screen_xy
@@ -371,6 +405,10 @@ def draw(surface: pygame.Surface) -> pygame.Rect | None:
     rect = place_rect((width, height), (int(anchor_xy[0]), int(anchor_xy[1])))
     surface.blit(panel, rect)
     _last_rect = pygame.Rect(rect)
+    _board_button_rect = pygame.Rect(
+        rect.x + _panel_button.x, rect.y + _panel_button.y,
+        _panel_button.width, _panel_button.height,
+    )
     return rect
 
 

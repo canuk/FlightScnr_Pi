@@ -368,3 +368,58 @@ class TestLightHudOpacity:
 
         monkeypatch.setattr(settings, "radar_hud_dark", lambda: True)
         assert airport_tile._tile_fill((28, 30, 34, 120))[3] == 120
+
+
+class TestBoardPill:
+    """The METAR card carries a pill through to that field's board."""
+
+    def test_no_hit_while_the_tile_is_closed(self):
+        from display.round_touch import airport_tile
+
+        airport_tile.dismiss()
+        assert airport_tile.board_button_hit(100, 100) is None
+
+    @pytest.mark.skipif(not _FONT_OK, reason="pygame.font unavailable on this host")
+    def test_pill_returns_the_ident_it_belongs_to(self):
+        import pygame
+
+        from display.round_touch import airport_tile, theme
+
+        airport_tile.open_tile(
+            {"ident": "KHMT", "lat": 33.734, "lon": -117.023, "name": "Hemet"}
+        )
+        surface = pygame.Surface((theme.SIZE, theme.SIZE), pygame.SRCALPHA)
+        airport_tile.draw(surface)
+        rect = airport_tile._board_button_rect
+        assert rect is not None, "the pill should have a hit rect once drawn"
+        assert airport_tile.board_button_hit(rect.centerx, rect.centery) == "KHMT"
+        airport_tile.dismiss()
+
+    @pytest.mark.skipif(not _FONT_OK, reason="pygame.font unavailable on this host")
+    def test_pill_sits_inside_the_card(self):
+        import pygame
+
+        from display.round_touch import airport_tile, theme
+
+        airport_tile.open_tile(
+            {"ident": "KHMT", "lat": 33.734, "lon": -117.023, "name": "Hemet"}
+        )
+        surface = pygame.Surface((theme.SIZE, theme.SIZE), pygame.SRCALPHA)
+        airport_tile.draw(surface)
+        assert airport_tile._last_rect.contains(airport_tile._board_button_rect)
+        airport_tile.dismiss()
+
+    @pytest.mark.skipif(not _FONT_OK, reason="pygame.font unavailable on this host")
+    def test_a_tap_elsewhere_on_the_card_is_not_the_pill(self):
+        import pygame
+
+        from display.round_touch import airport_tile, theme
+
+        airport_tile.open_tile(
+            {"ident": "KHMT", "lat": 33.734, "lon": -117.023, "name": "Hemet"}
+        )
+        surface = pygame.Surface((theme.SIZE, theme.SIZE), pygame.SRCALPHA)
+        airport_tile.draw(surface)
+        card = airport_tile._last_rect
+        assert airport_tile.board_button_hit(card.left + 4, card.top + 4) is None
+        airport_tile.dismiss()
