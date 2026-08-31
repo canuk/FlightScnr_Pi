@@ -32,6 +32,19 @@ _STALE_FINGER_S = 2.5
 _PAIR_WINDOW_S = 2.0
 
 
+def zoom_enabled() -> bool:
+    """False disables pinch-to-zoom entirely.
+
+    A panel emitting phantom contacts turns ordinary swipes into pinches: the
+    ghost and the real finger land inside the pair window, the span clears the
+    threshold, and the map zooms instead of the page changing. Freshness and
+    span guards do not help when the ghost is genuinely concurrent, so this
+    switch makes the device usable while the hardware is misbehaving.
+    """
+    raw = os.environ.get("PINCH_ZOOM", "true").strip().lower()
+    return raw not in ("0", "false", "no", "off")
+
+
 def _debug_enabled() -> bool:
     return os.environ.get("TOUCH_DEBUG", "").strip().lower() in ("1", "true", "yes")
 
@@ -101,6 +114,8 @@ class PinchZoom:
 
     def is_pinching(self) -> bool:
         """True only for a confirmed two-finger pinch (never a swipe ghost)."""
+        if not zoom_enabled():
+            return False
         return self._pinch_confirmed and self._pinch_session and len(self._fingers) >= 2
 
     def should_suppress_tap(self) -> bool:
@@ -154,6 +169,8 @@ class PinchZoom:
         return abs(t0 - t1) <= _PAIR_WINDOW_S
 
     def _pinch_ready(self) -> bool:
+        if not zoom_enabled():
+            return False
         if self._swipe_blocked or len(self._fingers) < 2 or self._is_swipe_ghost():
             return False
         if not self._pair_is_fresh():
