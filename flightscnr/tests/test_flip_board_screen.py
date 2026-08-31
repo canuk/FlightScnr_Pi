@@ -424,16 +424,24 @@ class DirectionIconTests(ScreenTestCase):
         for departing in (True, False):
             self.assertTrue(self._ink_rows(departing), "pictogram drew nothing")
 
-    def test_the_nose_is_higher_when_departing(self):
-        """A departure climbs; an arrival descends. Compare the nose height."""
-        dep = self._ink_rows(True)
-        arr = self._ink_rows(False)
-        # Rightmost ink is the nose in both cases; a climb puts it higher up
-        # the surface (smaller y) than a descent.
-        dep_nose_y = min(y for x, y in dep if x >= max(px for px, _ in dep) - 2)
-        arr_nose_y = min(y for x, y in arr if x >= max(px for px, _ in arr) - 2)
-        self.assertLess(
-            dep_nose_y, arr_nose_y, "departure nose should sit above arrival's"
+    def test_the_aircraft_is_tilted_the_opposite_way(self):
+        """A departure climbs and an arrival descends, so the highest point of
+        the silhouette is toward the nose on one and the tail on the other.
+
+        Measured from the topmost ink, not the rightmost: the ground bar
+        spans the full width in both, so a rightmost-pixel test just compares
+        the bar with itself.
+        """
+        def highest_x(departing):
+            ink = self._ink_rows(departing)
+            top_y = min(y for _x, y in ink)
+            xs = [x for x, y in ink if y <= top_y + 1]
+            return sum(xs) / len(xs)
+
+        self.assertGreater(
+            highest_x(True), highest_x(False),
+            "a climbing aircraft should carry its high point forward, "
+            "a descending one aft",
         )
 
     def test_the_two_are_not_the_same_picture(self):
