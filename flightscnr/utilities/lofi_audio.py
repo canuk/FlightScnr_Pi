@@ -385,6 +385,9 @@ class MpvPlayer:
     def alive(self) -> bool:
         return self._proc is not None and self._proc.poll() is None
 
+    def set_paused(self, paused: bool) -> None:
+        self._ipc(["set_property", "pause", bool(paused)])
+
     def stop(self) -> None:
         proc, self._proc = self._proc, None
         if proc is None:
@@ -419,6 +422,7 @@ class CrossfadeScheduler:
         # Per-pass shuffled orders: every track plays once before a reshuffle.
         self._orders: dict[int, list[str]] = {}
         self._orders_key: tuple[str, ...] | None = None
+        self._paused_at: float | None = None
 
     def _track_at(self, index: int) -> str | None:
         """Track for a monotonic play position, honoring shuffle passes."""
@@ -438,6 +442,35 @@ class CrossfadeScheduler:
             for old in [q for q in self._orders if abs(q - p) > 1]:
                 del self._orders[old]
         return self._orders[p][k]
+
+    def pause(self) -> None:
+        """Hold the bed. The scheduler owns this because it owns the clock."""
+        if self._paused_at is not None:
+            return
+        self._paused_at = self._clock()
+        self._set_players_paused(True)
+
+    def resume(self) -> None:
+        """Start again from where the bed stopped.
+
+        Crossfades are scheduled against the clock. Time spent paused would
+        otherwise count toward the current track, so the bed would fade, or
+        jump several tracks, the moment it resumed.
+        """
+        if self._paused_at is None:
+            return
+        held = self._clock() - self._paused_at
+        self._paused_at = None
+        if self._started_at is not None:
+            self._started_at += held
+        self._set_players_paused(False)
+
+    def _set_players_paused(self, paused: bool) -> None:
+        for player in self._players:
+            try:
+                player.set_paused(paused)
+            except Exception:
+                logger.debug("[Lofi] pause failed", exc_info=True)
 
     def current_track(self) -> str | None:
         return self._track_at(self._index)
@@ -617,6 +650,9 @@ def tick(*, atc_playing: bool) -> None:
     if not enabled or not atc_playing:
         _stop_scheduler()
         return
+    if _paused:
+        # Leave the bed exactly where it is; resume() gives back the time.
+        return
     now = time.monotonic()
     if now - _last_tick < _TICK_MIN_INTERVAL_S:
         return
@@ -627,6 +663,93 @@ def tick(*, atc_playing: bool) -> None:
             sched.tick(volume)
         except Exception:
             logger.debug("[Lofi] tick failed", exc_info=True)
+
+
+_paused = False
+
+
+def _reset_pause_for_tests() -> None:
+    global _paused
+    _paused = False
+
+
+def is_paused() -> bool:
+    return _paused
+
+
+def pause() -> None:
+    """Hold the bed where it is. Safe with no bed running."""
+    global _paused
+    if _paused:
+        return
+    _paused = True
+    if _scheduler is not None:
+        _scheduler.pause()
+
+
+def resume() -> None:
+    """Start the bed again from where it stopped."""
+    global _paused
+    if not _paused:
+        return
+    _paused = False
+    if _scheduler is not None:
+        _scheduler.resume()
+
+
+def toggle_pause() -> bool:
+    """Flip the hold; returns True when the bed is now paused."""
+    if _paused:
+        resume()
+    else:
+        pause()
+    return _paused
+
+
+def disable_track(name, *, skip: bool = False) -> None:
+    """Drop one track from the playlist for good.
+
+    Writes the same store the portal writes, so both agree.
+    """
+    safe = str(name or "").strip()
+    if not safe:
+        return
+    try:
+        from display.round_touch import settings
+
+        disabled = list(settings.lofi_disabled_tracks())
+        if not any(d.lower() == safe.lower() for d in disabled):
+            disabled.append(safe)
+            settings.set_lofi_disabled_tracks(sorted(disabled))
+    except Exception:
+        logger.debug("[Lofi] disable failed", exc_info=True)
+        return
+    if skip:
+        next_track()
+
+
+def enable_track(name) -> None:
+    """Put a disabled track back into the playlist."""
+    safe = str(name or "").strip()
+    if not safe:
+        return
+    try:
+        from display.round_touch import settings
+
+        disabled = [
+            d for d in settings.lofi_disabled_tracks() if d.lower() != safe.lower()
+        ]
+        settings.set_lofi_disabled_tracks(sorted(disabled))
+    except Exception:
+        logger.debug("[Lofi] enable failed", exc_info=True)
+
+
+def current_track_filename() -> str | None:
+    """Filename of the playing track, as the disabled store records it."""
+    if _scheduler is None:
+        return None
+    track = _scheduler.current_track()
+    return os.path.basename(track) if track else None
 
 
 def _master_volume() -> float:
