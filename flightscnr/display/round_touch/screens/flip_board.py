@@ -287,6 +287,19 @@ def row_positions() -> list[int]:
     return [top + index * step for index in range(ROWS)]
 
 
+def _board_top() -> int:
+    """Where the board may start, just under the breadcrumb text.
+
+    ``nav.content_top_y(has_dots=True)`` reserves room for page dots drawn
+    *below* the breadcrumb. This board's dots are curved above it, so that
+    reservation is about forty pixels of dead space — which is exactly the
+    height the airport code wants.
+    """
+    crumb = draw.load_font(theme.FONT_DETAIL)
+    top = theme.CENTER_Y - int(theme.VISIBLE_RADIUS * 0.75)
+    return top + crumb.get_height() + max(3, theme.s(6))
+
+
 def _header_text_height() -> int:
     """Everything in the header except the airport-code flaps."""
     name_font = draw.load_font(max(8, theme.s(10)))
@@ -311,7 +324,7 @@ def ident_scale() -> float:
     dots_reach = (
         (ROWS - 1) * row_step() + flip_tiles.tile_height(ROW_TILE_SCALE) + _dots_gap()
     )
-    available = nav.content_bottom_y() - nav.content_top_y(has_dots=True)
+    available = nav.content_bottom_y() - _board_top()
     margin = max(2, theme.s(2))
     spare = (
         available - (block + _header_gap() + _header_text_height())
@@ -339,7 +352,10 @@ def _rows_top() -> int:
     """
     block = ROWS * row_step() - max(1, theme.s(3))
     header = _header_height() + _header_gap()
-    top = theme.CENTER_Y - (block + header) // 2 + header
+    # Start from the top of the content band rather than centring on the
+    # dial: the footer owns the bottom, so centring wastes the room above the
+    # airport code, which is the one thing that wants to be big.
+    top = _board_top() + header
     # Clamp against the footer: the airport-code flaps grew and pushed the
     # page dots down onto it. Derived from the bottom, so a further header
     # change moves the block rather than overrunning the chrome.
@@ -348,7 +364,7 @@ def _rows_top() -> int:
     )
     latest = nav.content_bottom_y() - dots_reach - max(2, theme.s(2))
     # And never so high that the header climbs into the breadcrumb band.
-    earliest = nav.content_top_y(has_dots=True) + header
+    earliest = _board_top() + header
     return max(earliest, min(top, latest))
 
 

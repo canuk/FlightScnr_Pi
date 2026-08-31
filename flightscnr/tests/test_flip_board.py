@@ -778,3 +778,54 @@ class TestNoDuplicateMovements(unittest.TestCase):
         rows = self.tracker.board("KHWD")["departures"]
         stamps = [e["at"] for e in rows]
         self.assertEqual(stamps, sorted(stamps, reverse=True))
+
+
+class TestPatternWork(unittest.TestCase):
+    """An aircraft in the pattern gets its landings recorded.
+
+    It never triggers the other two arrival signals: it stays in the feed for
+    the whole circuit so it never goes quiet, and a ground station usually
+    cannot see it on the runway. Reuben watched a departure post and the
+    matching arrival never appear.
+    """
+
+    def setUp(self):
+        self.tracker = flip_board.FlipBoardTracker()
+
+    def _at(self, nm, agl, vs=0):
+        return plane(
+            plane_latitude=KHWD["lat"] + nm / 60.0,
+            plane_longitude=KHWD["lon"],
+            altitude=KHWD["elevation_ft"] + agl,
+            vertical_speed=vs,
+        )
+
+    def test_a_circuit_records_both_the_departure_and_the_landing(self):
+        # Climb out.
+        self.tracker.observe([self._at(0.3, 300, vs=700)], AIRPORTS, now=1000.0)
+        self.tracker.observe([self._at(1.0, 900, vs=700)], AIRPORTS, now=1030.0)
+        # Downwind, then descending final.
+        self.tracker.observe([self._at(1.2, 1000, vs=0)], AIRPORTS, now=1120.0)
+        self.tracker.observe([self._at(0.8, 600, vs=-500)], AIRPORTS, now=1180.0)
+        # Over the numbers, still transmitting.
+        self.tracker.observe([self._at(0.2, 100, vs=-400)], AIRPORTS, now=1210.0)
+
+        board = self.tracker.board("KHWD")
+        self.assertEqual(len(board["departures"]), 1, "departure missing")
+        self.assertEqual(len(board["arrivals"]), 1, "landing in the pattern missing")
+
+    def test_a_low_pass_without_a_descent_is_not_an_arrival(self):
+        """Never seen descending into the window, so nothing is pending."""
+        self.tracker.observe([self._at(2.5, 200, vs=0)], AIRPORTS, now=1000.0)
+        self.tracker.observe([self._at(0.2, 200, vs=0)], AIRPORTS, now=1030.0)
+        self.assertEqual(self.tracker.board("KHWD")["arrivals"], [])
+
+    def test_two_circuits_record_two_landings(self):
+        def circuit(base):
+            self.tracker.observe([self._at(0.8, 600, vs=-500)], AIRPORTS, now=base)
+            self.tracker.observe([self._at(0.2, 100, vs=-400)], AIRPORTS, now=base + 30)
+            self.tracker.observe([self._at(0.4, 400, vs=700)], AIRPORTS, now=base + 60)
+
+        circuit(1000.0)
+        circuit(1400.0)   # a real circuit, well outside the repeat window
+        self.assertEqual(len(self.tracker.board("KHWD")["arrivals"]), 2)

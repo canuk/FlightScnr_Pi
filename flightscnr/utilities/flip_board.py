@@ -83,6 +83,12 @@ DERIVED_RATE_MAX_GAP_S = 60.0
 # duplicate lands about a minute apart. A real circuit takes longer than
 # this, which is what keeps touch-and-go work showing every landing.
 REPEAT_WINDOW_S = 120.0
+# Height above the field at which a descending aircraft inside the box has
+# effectively landed. Deliberately low: at a couple of hundred feet an
+# aircraft on final can still go around, and that must not read as a landing. Pattern work never triggers the other two arrival
+# signals: the aircraft stays in the feed the whole circuit, so it never goes
+# quiet, and a ground station usually cannot see it on the runway.
+TOUCHDOWN_AGL_FT = 100
 # Rows the board keeps per airport per direction.
 MAX_ROWS = 5
 # Forget movements older than this.
@@ -382,12 +388,32 @@ class FlipBoardTracker:
             ):
                 track["departed_from"] = approach_ident
                 track["arriving_at"] = ""
+                # Off the ground again, so the next landing is a new one.
+                track["arrived_at"] = ""
                 self._emit(new_events, approach_ident, "departures", track, now)
                 return
 
         if not ident or not low:
             # Outside the confirmation box: the pending arrival above is all
             # we can say until the track lands, climbs away, or goes quiet.
+            return
+
+        # Down to circuit height over the field with an arrival already
+        # pending: that is a landing, whether or not the feed reports ground
+        # and whether or not it stops transmitting.
+        agl = height_above_field_ft(alt, airport) if airport else None
+        if (
+            not on_ground
+            and agl is not None
+            and agl <= TOUCHDOWN_AGL_FT
+            and track.get("arriving_at") == ident
+            and track.get("arrived_at") != ident
+        ):
+            track["arriving_at"] = ""
+            track["arrived_at"] = ident
+            track["born_at"] = ident
+            track["departed_from"] = ""
+            self._emit(new_events, ident, "arrivals", track, now)
             return
 
         if on_ground and track.get("arriving_at") == ident:
@@ -411,6 +437,7 @@ class FlipBoardTracker:
             track["arriving_at"] = ""
             if track.get("born_at") == ident and track.get("departed_from") != ident:
                 track["departed_from"] = ident
+                track["arrived_at"] = ""
                 self._emit(new_events, ident, "departures", track, now)
 
     @staticmethod
