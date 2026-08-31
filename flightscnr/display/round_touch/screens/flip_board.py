@@ -65,6 +65,8 @@ _FLAP_RATE = 22.0
 # The airport code animates too, on its own row above the flight rows.
 _IDENT_FLAP_ROW = -1
 _flap_rows: dict[int, dict] = {}
+# Screen rects of the two direction words, set when the line is drawn.
+_direction_hits: dict[str, "pygame.Rect"] = {}
 
 
 def _reset_for_tests() -> None:
@@ -176,6 +178,16 @@ def direction() -> str:
     return _direction
 
 
+def set_direction(value: str) -> str:
+    """Show a specific side of the board."""
+    global _direction
+    wanted = str(value or "").strip().lower()
+    if wanted in (ARRIVALS, DEPARTURES) and wanted != _direction:
+        _direction = wanted
+        restart_animation()
+    return _direction
+
+
 def toggle_direction() -> str:
     """Flip the board between arrivals and departures."""
     global _direction
@@ -248,13 +260,13 @@ def row_positions() -> list[int]:
 
 
 def _header_text_height() -> int:
-    """Everything in the header except the airport-code flaps.
-
-    Just the field name now — the direction line moved down to the dots row
-    so the code could have that height instead.
-    """
+    """Everything in the header except the airport-code flaps."""
     name_font = draw.load_font(max(8, theme.s(10)))
-    return max(1, theme.s(3)) + name_font.get_height() + max(2, theme.s(4))
+    return (
+        max(1, theme.s(3))
+        + name_font.get_height() + max(2, theme.s(4))
+        + _pill_height() + max(2, theme.s(4))
+    )
 
 
 def ident_scale() -> float:
@@ -359,37 +371,76 @@ def _draw_heading(surface: pygame.Surface, airport: dict, y: int) -> int:
         name_font = draw.load_font(max(8, theme.s(10)))
         img = draw.render_text_cached(name_font, name[:28], theme.MUTED)
         surface.blit(img, ((theme.SIZE - img.get_width()) // 2, y))
-        y += img.get_height() + max(1, theme.s(2))
+        y += img.get_height() + max(2, theme.s(4))
+    y = _draw_direction_line(surface, y) + max(2, theme.s(4))
 
     return y
 
 
+def _pill_font():
+    return draw.load_font(theme.s(12), bold=True)
+
+
+def _pill_height() -> int:
+    return _pill_font().get_height() + max(4, theme.s(8))
+
+
 def _draw_direction_line(surface: pygame.Surface, y: int) -> int:
-    """Direction and its icon, with the other side dimmed beside it so it is
-    obvious the board turns over."""
-    label_font = draw.load_font(theme.s(13), bold=True)
-    active = draw.render_text_cached(
-        label_font, _TITLES[_direction], flip_tiles.HEADING
-    )
-    other = DEPARTURES if _direction == ARRIVALS else ARRIVALS
-    inactive = draw.render_text_cached(label_font, _TITLES[other], theme.HINT)
-    sep = draw.render_text_cached(label_font, "  /  ", theme.HINT)
-    icon = max(8, theme.s(13))
-    icon_gap = max(3, theme.s(5))
-    total = (
-        icon + icon_gap
-        + active.get_width() + sep.get_width() + inactive.get_width()
-    )
+    """Arrivals / Departures as a pair of pills, the selected one filled.
+
+    Both sides are always on screen so it is obvious the board has another
+    face, and each pill is its own target — tapping picks that side rather
+    than toggling, which from the user's end would be a coin flip.
+    """
+    font = _pill_font()
+    height = _pill_height()
+    icon = max(8, theme.s(12))
+    gap = max(3, theme.s(6))
+    pad = max(5, theme.s(9))
+
+    order = (ARRIVALS, DEPARTURES)
+    labels = {name: draw.render_text_cached(font, _TITLES[name], theme.LABEL)
+              for name in order}
+    widths = {
+        name: labels[name].get_width() + pad * 2 + (icon + gap if name == _direction else 0)
+        for name in order
+    }
+    total = sum(widths.values()) + gap
     x = (theme.SIZE - total) // 2
-    _draw_direction_icon(
-        surface, x + icon // 2, y + active.get_height() // 2, icon,
-        flip_tiles.HEADING,
-    )
-    x += icon + icon_gap
-    for img in (active, sep, inactive):
-        surface.blit(img, (x, y))
-        x += img.get_width()
-    return y + active.get_height()
+
+    _direction_hits.clear()
+    for name in order:
+        rect = pygame.Rect(x, y, widths[name], height)
+        selected = name == _direction
+        if selected:
+            fill = pygame.Surface(rect.size, pygame.SRCALPHA)
+            fill.fill((*flip_tiles.YELLOW, 38))
+            pygame.draw.rect(
+                fill, (*flip_tiles.YELLOW, 38), fill.get_rect(),
+                border_radius=height // 2,
+            )
+            surface.blit(fill, rect.topleft)
+        pygame.draw.rect(
+            surface,
+            flip_tiles.YELLOW if selected else theme.HINT,
+            rect,
+            width=max(1, theme.s(1)),
+            border_radius=height // 2,
+        )
+        text = draw.render_text_cached(
+            font, _TITLES[name], flip_tiles.YELLOW if selected else theme.HINT
+        )
+        tx = rect.x + pad
+        if selected:
+            flip_tiles.draw_direction_icon(
+                surface, tx + icon // 2, rect.centery, icon,
+                flip_tiles.YELLOW, departing=name == DEPARTURES,
+            )
+            tx += icon + gap
+        surface.blit(text, (tx, rect.centery - text.get_height() // 2))
+        _direction_hits[name] = rect
+        x += widths[name] + gap
+    return y + height
 
 
 def _local_clock_text() -> str:
@@ -470,8 +521,10 @@ def draw_flip_board(surface: pygame.Surface) -> None:
 
     # Straight dots under the board, not curved ones on the rim: the rim is
     # already carrying the breadcrumb and the two would overlap.
-    _draw_direction_line(surface, _direction_line_y())
-    nav.draw_page_dots(surface, _airport_index, len(airports), dots_y())
+    # Curved under the breadcrumb, the way every other paged screen does it.
+    nav.draw_curved_page_dots(
+        surface, _airport_index, len(airports), active_color=theme.LABEL
+    )
     nav.draw_curved_footer(surface, list(FOOTER_BUTTONS))
 
 
@@ -492,13 +545,20 @@ def _direction_line_y() -> int:
 
 
 def _dots_gap() -> int:
-    return (
-        max(2, theme.s(4)) + _direction_line_height() + max(3, theme.s(5))
-    )
+    """Clearance below the last flap row.
+
+    Both the page dots and the direction pills moved up top, so the block
+    only needs to stay off the footer now.
+    """
+    return max(3, theme.s(6))
 
 
 def dots_y() -> int:
-    """Row of airport dots, between the last flap row and the footer."""
+    """Bottom of the board block: the direction line's baseline.
+
+    Kept because the geometry tests measure the board's reach against the
+    footer through it; the airport dots themselves are now curved up top.
+    """
     return (
         row_positions()[-1] + flip_tiles.tile_height(ROW_TILE_SCALE) + _dots_gap()
     )
@@ -512,6 +572,19 @@ def tap_footer_action(x: int, y: int) -> str | None:
     airports = board_airports()
     kinds = list(FOOTER_BUTTONS) if airports else ["radar"]
     return nav.curved_footer_hit(x, y, kinds)
+
+
+def tap_direction(x: int, y: int) -> str | None:
+    """The direction word under a tap, if any.
+
+    The line moved below the flap rows when the page dots went up to the
+    breadcrumb, which put it outside the board body band — so tapping the
+    word "DEPARTURES" did nothing at all.
+    """
+    for name, rect in _direction_hits.items():
+        if rect.collidepoint(int(x), int(y)):
+            return name
+    return None
 
 
 def tap_board(x: int, y: int) -> bool:

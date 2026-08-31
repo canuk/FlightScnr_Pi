@@ -99,6 +99,9 @@ SCREEN_FLIEGER_CLOCK = "flieger_clock"
 SCREEN_MOON = "moon"
 SCREEN_COVERAGE = "coverage"
 SCREEN_FLIP_BOARD = "flip_board"
+# Long enough to read a board and page between fields before it hands the
+# dial back to radar.
+FLIP_BOARD_TIMEOUT_S = 60.0
 SCREEN_FORECAST = "forecast"
 SCREEN_TRACKED = "tracked"
 SCREEN_LIVE = "live_tracking"
@@ -1319,8 +1322,10 @@ class RoundTouchDisplay:
             return None
         if self.screen in (SCREEN_WIFI_SETUP, SCREEN_DISCLAIMER):
             return None
-        if self.screen in (SCREEN_RADAR, SCREEN_CLOCK, SCREEN_ANALOG_CLOCK, SCREEN_ANALOG_NIGHT, SCREEN_FLIEGER_CLOCK, SCREEN_MOON, SCREEN_FLIP_BOARD, SCREEN_FORECAST):
+        if self.screen in (SCREEN_RADAR, SCREEN_CLOCK, SCREEN_ANALOG_CLOCK, SCREEN_ANALOG_NIGHT, SCREEN_FLIEGER_CLOCK, SCREEN_MOON, SCREEN_FORECAST):
             return None
+        if self.screen == SCREEN_FLIP_BOARD:
+            return float(FLIP_BOARD_TIMEOUT_S)
         if self.screen in (SCREEN_TRACKED, SCREEN_LIVE) and tracked.is_pinned():
             return None
         if self.screen == SCREEN_FLIGHT:
@@ -4753,10 +4758,19 @@ class RoundTouchDisplay:
                 flip_board.step_airport(1)
                 self._note_activity()
                 self._safe_draw()
-            elif flip_board.tap_board(tap[0], tap[1]):
-                flip_board.toggle_direction()
-                self._note_activity()
-                self._safe_draw()
+            else:
+                side = flip_board.tap_direction(tap[0], tap[1])
+                if side is not None:
+                    # Tapping a word picks that side outright, rather than
+                    # toggling — both are on screen, so a toggle would be a
+                    # coin flip from the user's point of view.
+                    flip_board.set_direction(side)
+                    self._note_activity()
+                    self._safe_draw()
+                elif flip_board.tap_board(tap[0], tap[1]):
+                    flip_board.toggle_direction()
+                    self._note_activity()
+                    self._safe_draw()
         elif tap and self.screen in (SCREEN_ANALOG_CLOCK, SCREEN_ANALOG_NIGHT, SCREEN_FLIEGER_CLOCK):
             # Full-screen face — no footer; navigation is swipe-only.
             self._note_activity()

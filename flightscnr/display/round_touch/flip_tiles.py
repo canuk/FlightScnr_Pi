@@ -20,11 +20,20 @@ frame and a Pi cannot afford to re-shade forty gradients each time.
 
 from __future__ import annotations
 
+import logging
 import math
+import os
 
 import pygame
 
 from display.round_touch import draw, theme
+
+logger = logging.getLogger(__name__)
+
+_ASSETS_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+    "assets",
+)
 
 # Palette from a real terminal board: near-black flaps in two greys, white
 # glyphs, and yellow reserved for the header and the airport code.
@@ -266,29 +275,45 @@ def draw_segment_clock(
 
 # -- departure / arrival pictograms ----------------------------------------
 
-# The airport-board convention: a swept-wing aircraft climbing away from a
-# ground bar for departures, descending toward it for arrivals. Drawn from a
-# silhouette rather than reusing the radar's plan-view aircraft, which reads
-# as traffic on a map rather than a direction of travel.
-_PLANE_OUTLINE = (
-    (0.95, 0.00),    # nose
-    (0.30, 0.16),
-    (-0.30, 0.16),
-    (-0.42, 0.62),   # wing, swept back
-    (-0.60, 0.62),
-    (-0.52, 0.14),
-    (-0.86, 0.12),
-    (-0.95, 0.34),   # tailplane
-    (-1.00, 0.34),
-    (-1.00, -0.34),
-    (-0.95, -0.34),
-    (-0.86, -0.12),
-    (-0.52, -0.14),
-    (-0.60, -0.62),
-    (-0.42, -0.62),
-    (-0.30, -0.16),
-    (0.30, -0.16),
-)
+# Font Awesome Free 7.3.1 plane-arrival / plane-departure (CC BY 4.0), the
+# icons a terminal board actually uses. Rasterised into assets/ rather than
+# approximated with polygons.
+_DIRECTION_ICONS = {True: "plane_departure", False: "plane_arrival"}
+_direction_cache: dict[tuple, pygame.Surface] = {}
+
+
+def _direction_surface(size: int, color, *, departing: bool):
+    """Recoloured, size-fitted glyph, or None when the asset is unavailable."""
+    key = (size, tuple(color[:3]), bool(departing))
+    cached = _direction_cache.get(key)
+    if cached is not None:
+        return cached
+
+    name = _DIRECTION_ICONS[bool(departing)]
+    path = os.path.join(_ASSETS_DIR, f"{name}.png")
+    try:
+        icon = pygame.image.load(path).convert_alpha()
+    except Exception:
+        logger.debug("direction icon %s unavailable", path, exc_info=True)
+        return None
+
+    # Trim the transparent margin so the glyph fills the space it is given.
+    bounds = icon.get_bounding_rect()
+    if bounds.width and bounds.height:
+        icon = icon.subsurface(bounds).copy()
+
+    scale = min(size / icon.get_width(), size / icon.get_height())
+    width = max(1, int(round(icon.get_width() * scale)))
+    height = max(1, int(round(icon.get_height() * scale)))
+    icon = pygame.transform.smoothscale(icon, (width, height))
+
+    # Tint: keep the alpha, replace the colour.
+    tint = pygame.Surface(icon.get_size(), pygame.SRCALPHA)
+    tint.fill((*color[:3], 255))
+    icon.blit(tint, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
+
+    _direction_cache[key] = icon
+    return icon
 
 
 def draw_direction_icon(
@@ -301,22 +326,7 @@ def draw_direction_icon(
     departing: bool,
 ) -> None:
     """Departure or arrival pictogram centred on ``(cx, cy)``."""
-    half = max(4, int(size) // 2)
-    angle = math.radians(-32.0 if departing else 32.0)
-    cos_a, sin_a = math.cos(angle), math.sin(angle)
-    scale = half * 0.82
-    # Lift the aircraft clear of the bar so the two never touch.
-    lift = -half * 0.22 if departing else -half * 0.30
-
-    points = []
-    for px, py in _PLANE_OUTLINE:
-        rx = px * cos_a - py * sin_a
-        ry = px * sin_a + py * cos_a
-        points.append((cx + rx * scale, cy + ry * scale * 0.62 + lift))
-    pygame.draw.polygon(surface, color, points)
-
-    # Ground bar beneath, as on the standard sign.
-    bar_y = cy + half - max(1, theme.s(1))
-    pygame.draw.line(
-        surface, color, (cx - half, bar_y), (cx + half, bar_y), max(2, theme.s(2))
-    )
+    icon = _direction_surface(max(6, int(size)), color, departing=departing)
+    if icon is None:
+        return
+    surface.blit(icon, icon.get_rect(center=(int(cx), int(cy))))

@@ -91,11 +91,11 @@ def test_an_idle_clock_still_returns(monkeypatch):
     assert d._returned == [True]
 
 
-def test_the_board_has_no_countdown():
+def test_the_board_gets_a_full_minute():
+    """Long enough to read it and page between fields, then hand back."""
     d = object.__new__(app_mod.RoundTouchDisplay)
     d.screen = app_mod.SCREEN_FLIP_BOARD
     d._boot_until = 0.0
     d._session_unlocked = True
-    assert d._timeout_duration_s() is None, (
-        "the board should never run a countdown back to radar"
-    )
+    assert d._timeout_duration_s() == app_mod.FLIP_BOARD_TIMEOUT_S
+    assert app_mod.FLIP_BOARD_TIMEOUT_S == 60.0

@@ -400,49 +400,134 @@ class HeadingDirectionTests(ScreenTestCase):
 
 
 class DirectionIconTests(ScreenTestCase):
-    """Departure climbs away from the ground bar, arrival descends toward it."""
+    """Font Awesome plane-departure / plane-arrival, drawn from assets.
+
+    These replaced a hand-built polygon. Pixel-geometry assertions about the
+    silhouette were a guess that did not survive contact with the real
+    glyphs, so assert the things that are actually true and worth keeping:
+    each direction draws its own icon, tinted, and neither silently vanishes
+    if an asset goes missing.
+    """
 
     @staticmethod
-    def _ink_rows(departing):
+    def _ink(departing, color=(255, 206, 0)):
         import pygame as pg
 
         from display.round_touch import flip_tiles
 
-        size = 48
-        surf = pg.Surface((size * 2, size * 2), pg.SRCALPHA)
+        surf = pg.Surface((96, 96), pg.SRCALPHA)
         flip_tiles.draw_direction_icon(
-            surf, size, size, size, (255, 255, 255), departing=departing
+            surf, 48, 48, 72, color, departing=departing
         )
-        rows = []
-        for y in range(size * 2):
-            for x in range(size * 2):
-                if surf.get_at((x, y))[3] > 0:
-                    rows.append((x, y))
-        return rows
+        return [
+            (x, y)
+            for x in range(96)
+            for y in range(96)
+            if surf.get_at((x, y))[3] > 0
+        ]
 
     def test_both_directions_draw_something(self):
         for departing in (True, False):
-            self.assertTrue(self._ink_rows(departing), "pictogram drew nothing")
+            self.assertTrue(
+                self._ink(departing),
+                "pictogram drew nothing — the asset is missing or unreadable",
+            )
 
-    def test_the_aircraft_is_tilted_the_opposite_way(self):
-        """A departure climbs and an arrival descends, so the highest point of
-        the silhouette is toward the nose on one and the tail on the other.
+    def test_the_two_are_different_pictures(self):
+        self.assertNotEqual(set(self._ink(True)), set(self._ink(False)))
 
-        Measured from the topmost ink, not the rightmost: the ground bar
-        spans the full width in both, so a rightmost-pixel test just compares
-        the bar with itself.
-        """
-        def highest_x(departing):
-            ink = self._ink_rows(departing)
-            top_y = min(y for _x, y in ink)
-            xs = [x for x, y in ink if y <= top_y + 1]
-            return sum(xs) / len(xs)
+    def test_each_direction_uses_its_own_asset(self):
+        import os
 
-        self.assertGreater(
-            highest_x(True), highest_x(False),
-            "a climbing aircraft should carry its high point forward, "
-            "a descending one aft",
+        from display.round_touch import flip_tiles
+
+        self.assertEqual(flip_tiles._DIRECTION_ICONS[True], "plane_departure")
+        self.assertEqual(flip_tiles._DIRECTION_ICONS[False], "plane_arrival")
+        for name in flip_tiles._DIRECTION_ICONS.values():
+            path = os.path.join(flip_tiles._ASSETS_DIR, f"{name}.png")
+            self.assertTrue(os.path.isfile(path), f"missing asset {path}")
+
+    def test_the_glyph_is_tinted(self):
+        import pygame as pg
+
+        from display.round_touch import flip_tiles
+
+        surf = pg.Surface((96, 96), pg.SRCALPHA)
+        flip_tiles.draw_direction_icon(
+            surf, 48, 48, 72, (255, 0, 0), departing=True
+        )
+        reds = {
+            surf.get_at((x, y))[:3]
+            for x in range(96)
+            for y in range(96)
+            if surf.get_at((x, y))[3] > 200
+        }
+        self.assertTrue(reds, "no opaque pixels to check")
+        for rgb in reds:
+            self.assertGreater(rgb[0], rgb[1], "glyph was not tinted red")
+
+    def test_a_missing_asset_does_not_crash(self):
+        import pygame as pg
+
+        from display.round_touch import flip_tiles
+
+        saved = dict(flip_tiles._DIRECTION_ICONS)
+        flip_tiles._DIRECTION_ICONS[True] = "definitely_not_an_asset"
+        flip_tiles._direction_cache.clear()
+        try:
+            surf = pg.Surface((96, 96), pg.SRCALPHA)
+            flip_tiles.draw_direction_icon(
+                surf, 48, 48, 72, (255, 255, 255), departing=True
+            )
+        finally:
+            flip_tiles._DIRECTION_ICONS.update(saved)
+            flip_tiles._direction_cache.clear()
+
+
+class DirectionTapTests(ScreenTestCase):
+    """Tapping a direction word must select that side.
+
+    The line sits below the flap rows since the page dots moved up to the
+    breadcrumb, which put it outside the board-body tap band — so tapping
+    the word "DEPARTURES" did nothing at all.
+    """
+
+    def setUp(self):
+        from display.round_touch.screens import flip_board
+
+        flip_board._reset_for_tests()
+
+    def _draw(self):
+        import pygame as pg
+
+        from display.round_touch import theme as th
+        from display.round_touch.screens import flip_board
+
+        surface = pg.Surface((th.SIZE, th.SIZE))
+        flip_board._draw_direction_line(surface, flip_board._direction_line_y())
+        return flip_board
+
+    def test_both_words_register_a_hit(self):
+        screen = self._draw()
+        self.assertEqual(
+            set(screen._direction_hits), {screen.ARRIVALS, screen.DEPARTURES}
         )
 
-    def test_the_two_are_not_the_same_picture(self):
-        self.assertNotEqual(set(self._ink_rows(True)), set(self._ink_rows(False)))
+    def test_tapping_the_inactive_word_selects_it(self):
+        screen = self._draw()
+        self.assertEqual(screen.direction(), screen.ARRIVALS)
+        rect = screen._direction_hits[screen.DEPARTURES]
+        hit = screen.tap_direction(rect.centerx, rect.centery)
+        self.assertEqual(hit, screen.DEPARTURES)
+        screen.set_direction(hit)
+        self.assertEqual(screen.direction(), screen.DEPARTURES)
+
+    def test_tapping_the_active_word_leaves_it_alone(self):
+        screen = self._draw()
+        rect = screen._direction_hits[screen.ARRIVALS]
+        screen.set_direction(screen.tap_direction(rect.centerx, rect.centery))
+        self.assertEqual(screen.direction(), screen.ARRIVALS)
+
+    def test_a_tap_away_from_the_words_is_not_a_direction(self):
+        screen = self._draw()
+        self.assertIsNone(screen.tap_direction(4, 4))
