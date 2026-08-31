@@ -29,6 +29,7 @@ from utilities.route_enrichment import (
 from display.round_touch import (
     aircraft_tile,
     airport_overlay,
+    flap_sound,
     disclaimer_acceptance,
     draw,
     follow_overlays,
@@ -1862,6 +1863,8 @@ class RoundTouchDisplay:
             airport_overlay.invalidate()
         elif action == "flip_board":
             settings.toggle_show_flip_board()
+        elif action == "flip_board_sound":
+            settings.toggle_flip_board_sound_enabled()
         elif action == "ground_vehicles":
             settings.toggle_show_ground_vehicles()
         elif action == "map_style":
@@ -4973,6 +4976,7 @@ class RoundTouchDisplay:
         if self.screen == SCREEN_FLIP_BOARD and flip_board.is_animating(now):
             # Split-flap needs real frames; the 2s clock cadence would show
             # two stills instead of tiles turning.
+            flap_sound.tick(active_tiles=flip_board.turning_tile_count(now), now=now)
             if (now - self._last_clock_draw) >= (theme.SWEEP_FRAME_MS / 1000.0):
                 self._last_clock_draw = now
                 self._safe_draw()

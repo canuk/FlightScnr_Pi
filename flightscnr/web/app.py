@@ -1481,6 +1481,7 @@ def radar_json():
             "airport_icon_style": settings.airport_icon_style(),
             "airport_min_size": settings.airport_min_size(),
             "show_flip_board": settings.show_flip_board(),
+            "flip_board_sound": settings.flip_board_sound_enabled(),
             "show_ground_vehicles": settings.show_ground_vehicles(),
             "traffic_mode": settings.traffic_mode(),
             "ais_enabled": settings.ais_enabled(),
@@ -1689,6 +1690,8 @@ def radar_save():
         airport_overlay.invalidate()
     if "show_flip_board" in data:
         settings.set_show_flip_board(bool(data.get("show_flip_board")))
+    if "flip_board_sound" in data:
+        settings.set_flip_board_sound_enabled(bool(data.get("flip_board_sound")))
     if "show_ground_vehicles" in data:
         settings.set_show_ground_vehicles(bool(data.get("show_ground_vehicles")))
     if "map_style" in data:

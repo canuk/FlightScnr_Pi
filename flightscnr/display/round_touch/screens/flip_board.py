@@ -25,7 +25,7 @@ import time
 
 import pygame
 
-from display.round_touch import draw, flip_tiles, nav, settings, theme
+from display.round_touch import draw, flap_sound, flip_tiles, nav, settings, theme
 
 FOOTER_BUTTONS = ("pin", "prev", "radar", "next")
 
@@ -106,6 +106,7 @@ def restart_animation(*, keep_ident: bool = False) -> None:
     """
     ident = _flap_rows.get(_IDENT_FLAP_ROW) if keep_ident else None
     _flap_rows.clear()
+    flap_sound.reset()
     if ident is not None:
         _flap_rows[_IDENT_FLAP_ROW] = ident
 
@@ -130,6 +131,24 @@ def is_animating(now: float | None = None) -> bool:
         if now < _row_settled_at(row, len(entry["text"])):
             return True
     return False
+
+
+def turning_tile_count(now: float | None = None) -> int:
+    """How many tiles are mid-flip, which sets the clatter density.
+
+    Blank slots never flap (see ``_flap_text``), so they are not counted —
+    a mostly empty board should sound sparse, not full.
+    """
+    now = time.time() if now is None else now
+    count = 0
+    for row, entry in _flap_rows.items():
+        started = entry["started"] + _FLAP_ROW_STAGGER_S * row
+        for col, char in enumerate(entry["text"]):
+            if not char.strip():
+                continue
+            if now < started + _FLAP_COL_STAGGER_S * col + _FLAP_SETTLE_S:
+                count += 1
+    return count
 
 
 def _flap_text(row: int, target: str, now: float) -> str:
