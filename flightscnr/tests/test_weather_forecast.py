@@ -69,15 +69,19 @@ class TestForecastDayRollover:
         def fake_grab_forecast(_tag, **kw):
             return [_interval(calls["day"])]
 
-        monkeypatch.setitem(
-            sys.modules,
-            "utilities.temperature",
-            type(sys)("utilities.temperature"),
-        )
-        import utilities.temperature as temp_mod
-
+        # Build the stub and attach the fakes to it directly. Re-importing
+        # here would bind the name through the ``utilities`` package
+        # attribute, which points at the real module once any earlier test has
+        # imported it — so the fakes landed on the real module while
+        # ``from utilities.temperature import ...`` still resolved to the empty
+        # stub. That passed alone and failed in a full run.
+        temp_mod = type(sys)("utilities.temperature")
         temp_mod.grab_forecast = fake_grab_forecast
         temp_mod.grab_temperature_and_humidity = lambda **kw: (70, 40)
+        monkeypatch.setitem(sys.modules, "utilities.temperature", temp_mod)
+        import utilities
+
+        monkeypatch.setattr(utilities, "temperature", temp_mod, raising=False)
 
         def unit_symbol():
             return "F"
@@ -85,11 +89,10 @@ class TestForecastDayRollover:
         def temperature_units():
             return "imperial"
 
-        monkeypatch.setitem(sys.modules, "weather_prefs", type(sys)("weather_prefs"))
-        import weather_prefs
-
-        weather_prefs.temperature_units = temperature_units
-        weather_prefs.unit_symbol = unit_symbol
+        prefs_mod = type(sys)("weather_prefs")
+        prefs_mod.temperature_units = temperature_units
+        prefs_mod.unit_symbol = unit_symbol
+        monkeypatch.setitem(sys.modules, "weather_prefs", prefs_mod)
 
         first = weather_data.refresh(force=True)
         assert first is not None
