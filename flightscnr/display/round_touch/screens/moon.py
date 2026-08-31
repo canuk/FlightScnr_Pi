@@ -35,7 +35,10 @@ from utilities import sun_moon
 REFRESH_S = 3600.0
 # Shadow alpha: dark enough to read as night side, light enough to keep
 # the topography faintly visible — like the real thing.
-_SHADOW_RGBA = (6, 8, 14, 216)
+# Near-opaque: at 85% the unlit limb still showed enough of the texture to
+# read as a shaded full disc rather than a crescent. A trace of the disc is
+# left behind deliberately, which is roughly what earthshine looks like.
+_SHADOW_RGBA = (2, 3, 7, 246)
 MOON_DIAMETER_FRAC = 0.92  # of the visible radius (disc nearly fills the dial)
 _STAR_SEED = 0x20260827
 # Stars live in the visible annulus around the moon limb (the disc hides the
