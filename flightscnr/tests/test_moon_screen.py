@@ -402,16 +402,17 @@ class TestCrescentReadsAsACrescent:
                 if a < 200:
                     continue
                 inside += 1
-                if r > 128:
+                if r > 200:
                     lit += 1
         return lit / max(1, inside)
 
-    def test_the_shadow_is_near_opaque(self):
+    def test_the_shadow_keeps_some_texture(self):
+        """Deliberately not opaque — the unlit limb should still be visible,
+        the way earthshine is."""
         from display.round_touch.screens import moon
 
-        assert moon._SHADOW_RGBA[3] >= 240, (
-            "a translucent shadow reads as a shaded disc, not a crescent"
-        )
+        alpha = moon._SHADOW_RGBA[3]
+        assert 160 <= alpha <= 200, f"shadow alpha {alpha} is outside ~70%"
 
     def test_a_thin_crescent_is_mostly_dark(self):
         assert self._lit_fraction(0.10) < 0.3
