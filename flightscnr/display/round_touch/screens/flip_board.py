@@ -25,7 +25,7 @@ import time
 
 import pygame
 
-from display.round_touch import draw, flip_tiles, nav, theme
+from display.round_touch import draw, flip_tiles, nav, settings, theme
 
 FOOTER_BUTTONS = ("prev", "radar", "next")
 
@@ -202,7 +202,8 @@ def row_width() -> int:
 
 
 def _id_time_gap() -> int:
-    return max(2, theme.s(8))
+    # A terminal board leaves a clear channel between flight and time.
+    return max(4, theme.s(16))
 
 
 def _separator_width() -> int:
@@ -220,10 +221,31 @@ def row_positions() -> list[int]:
     return [top + index * step for index in range(ROWS)]
 
 
+def _header_height() -> int:
+    """Airport code flaps, the field name, and the direction line."""
+    name_font = draw.load_font(max(8, theme.s(10)))
+    label_font = draw.load_font(theme.s(13), bold=True)
+    return (
+        flip_tiles.tile_height() + max(1, theme.s(3))
+        + name_font.get_height() + max(1, theme.s(2))
+        + label_font.get_height()
+    )
+
+
+def _header_gap() -> int:
+    return max(3, theme.s(8))
+
+
 def _rows_top() -> int:
+    """Top of the flap block, with the header stacked above it.
+
+    Derived rather than nudged: the header grew an airport-code row and a
+    field name, and the old fixed offset put the direction line straight
+    through the first row of flaps.
+    """
     block = ROWS * row_step() - max(1, theme.s(3))
-    # Sit the block just below centre so the heading has room up top.
-    return theme.CENTER_Y - block // 2 + max(2, theme.s(10))
+    header = _header_height() + _header_gap()
+    return theme.CENTER_Y - (block + header) // 2 + header
 
 
 def fits_in_circle() -> bool:
@@ -242,32 +264,84 @@ def fits_in_circle() -> bool:
 # -- drawing ---------------------------------------------------------------
 
 
-def _draw_heading(surface: pygame.Surface, airport: dict, y: int) -> int:
-    ident = str(airport.get("ident") or "").upper()
-    font = draw.load_font(theme.s(24), bold=True)
-    glyph = draw.render_text_cached(font, ident, theme.LABEL)
-    surface.blit(glyph, ((theme.SIZE - glyph.get_width()) // 2, y))
-    y += glyph.get_height() + max(1, theme.s(2))
+def _draw_direction_icon(
+    surface: pygame.Surface, cx: int, cy: int, size: int, color
+) -> None:
+    """Departures climb away, arrivals descend toward the field."""
+    import math as _math
 
-    # Show both directions, the inactive one dimmed, so it is obvious the
-    # board has another side and that tapping turns it over.
+    from display.round_touch import aircraft
+
+    angle = -30.0 if _direction == DEPARTURES else 30.0
+    aircraft.draw_plane_icon(
+        surface, int(cx), int(cy), 90.0 + angle, color, compact=True,
+    )
+    # Ground line under the nose, the way a terminal board marks the two.
+    half = max(2, size // 2)
+    y = cy + half - max(1, theme.s(1))
+    pygame.draw.line(
+        surface, color, (cx - half, y), (cx + half, y), max(1, theme.s(1))
+    )
+
+
+def _draw_heading(surface: pygame.Surface, airport: dict, y: int) -> int:
+    # Airport code as its own row of flaps, in the board's yellow.
+    ident = str(airport.get("ident") or "").upper()[:4]
+    ident_w = flip_tiles.row_width(len(ident)) if ident else 0
+    flip_tiles.draw_tiles(
+        surface, ident, (theme.SIZE - ident_w) // 2, y,
+        slots=len(ident) or 1, ink=flip_tiles.YELLOW,
+    )
+    y += flip_tiles.tile_height() + max(1, theme.s(3))
+
+    # Full airport name beneath the code.
+    name = str(airport.get("facility") or airport.get("name") or "").strip()
+    if name:
+        name_font = draw.load_font(max(8, theme.s(10)))
+        img = draw.render_text_cached(name_font, name[:28], theme.MUTED)
+        surface.blit(img, ((theme.SIZE - img.get_width()) // 2, y))
+        y += img.get_height() + max(1, theme.s(2))
+
+    # Direction, with its icon, and the other side dimmed beside it so it is
+    # obvious the board turns over.
     label_font = draw.load_font(theme.s(13), bold=True)
     active = draw.render_text_cached(
         label_font, _TITLES[_direction], flip_tiles.HEADING
     )
     other = DEPARTURES if _direction == ARRIVALS else ARRIVALS
-    inactive = draw.render_text_cached(
-        label_font, _TITLES[other], theme.HINT
+    inactive = draw.render_text_cached(label_font, _TITLES[other], theme.HINT)
+    sep = draw.render_text_cached(label_font, "  /  ", theme.HINT)
+    icon = max(8, theme.s(13))
+    icon_gap = max(3, theme.s(5))
+    total = (
+        icon + icon_gap
+        + active.get_width() + sep.get_width() + inactive.get_width()
     )
-    gap = draw.render_text_cached(label_font, "  /  ", theme.HINT)
-    total = active.get_width() + gap.get_width() + inactive.get_width()
     x = (theme.SIZE - total) // 2
-    surface.blit(active, (x, y))
-    x += active.get_width()
-    surface.blit(gap, (x, y))
-    x += gap.get_width()
-    surface.blit(inactive, (x, y))
+    _draw_direction_icon(
+        surface, x + icon // 2, y + active.get_height() // 2, icon,
+        flip_tiles.HEADING,
+    )
+    x += icon + icon_gap
+    for img in (active, sep, inactive):
+        surface.blit(img, (x, y))
+        x += img.get_width()
     return y + active.get_height()
+
+
+def _draw_board_clock(surface: pygame.Surface) -> None:
+    """Current time as a red seven-segment readout, top right of the board."""
+    now = time.localtime()
+    if settings.use_12hr_clock():
+        hour = now.tm_hour % 12 or 12
+        text = f"{hour:2d}:{now.tm_min:02d}"
+    else:
+        text = f"{now.tm_hour:02d}:{now.tm_min:02d}"
+    width, height = flip_tiles.segment_clock_size(text)
+    # Sit it inside the rim, up and to the right, clear of the breadcrumb.
+    cx = theme.CENTER_X + int(theme.VISIBLE_RADIUS * 0.30)
+    cy = theme.CENTER_Y - int(theme.VISIBLE_RADIUS * 0.62)
+    flip_tiles.draw_segment_clock(surface, text, cx - width // 2, cy - height // 2)
 
 
 def _draw_row(
@@ -320,6 +394,7 @@ def draw_flip_board(surface: pygame.Surface) -> None:
         return
 
     _draw_heading(surface, airport, _heading_top())
+    _draw_board_clock(surface)
     rows = rows_for(airport)
     now = time.time()
     if rows:
@@ -343,7 +418,7 @@ def draw_flip_board(surface: pygame.Surface) -> None:
 
 
 def _heading_top() -> int:
-    return _rows_top() - max(6, theme.s(46))
+    return _rows_top() - _header_gap() - _header_height()
 
 
 def dots_y() -> int:

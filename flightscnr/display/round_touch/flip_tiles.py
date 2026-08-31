@@ -24,18 +24,23 @@ import pygame
 
 from display.round_touch import draw, theme
 
-# Palette from the reference board: deep blue flaps, white glyphs, amber
-# accents for headings and status chips.
-FLAP_TOP = (26, 58, 138)
-FLAP_BOTTOM = (42, 74, 154)
-FLAP_EMPTY_TOP = (10, 26, 74)
-FLAP_EMPTY_BOTTOM = (26, 42, 90)
+# Palette from a real terminal board: near-black flaps in two greys, white
+# glyphs, and yellow reserved for the header and the airport code.
+FLAP_TOP = (32, 33, 36)
+FLAP_BOTTOM = (52, 54, 58)
+FLAP_EMPTY_TOP = (22, 23, 25)
+FLAP_EMPTY_BOTTOM = (34, 35, 38)
 FLAP_ACCENT_TOP = (204, 102, 0)
 FLAP_ACCENT_BOTTOM = (255, 140, 0)
-GLYPH = (255, 255, 255)
-HINGE = (0, 0, 0, 90)
-HEADING = (255, 140, 0)
-SEPARATOR = (120, 130, 150)
+GLYPH = (245, 246, 248)
+# The board's own yellow, for the header and the airport code tiles.
+YELLOW = (255, 206, 0)
+HINGE = (0, 0, 0, 120)
+HEADING = YELLOW
+SEPARATOR = (120, 124, 132)
+# Segment display for the clock, like the red readout on a terminal board.
+SEGMENT_ON = (255, 64, 42)
+SEGMENT_OFF = (48, 22, 20)
 
 # Tile proportions in REF_SIZE units; height is a little over 1.3x the width,
 # like a real flap.
@@ -79,12 +84,15 @@ def _palette(empty: bool, accent: bool) -> tuple:
     return FLAP_TOP, FLAP_BOTTOM
 
 
-def render_tile(char: str, *, accent: bool = False) -> pygame.Surface:
+def render_tile(
+    char: str, *, accent: bool = False, ink: tuple[int, int, int] | None = None
+) -> pygame.Surface:
     """One split-flap tile bearing ``char`` (blank when char is empty)."""
     char = (char or "")[:1].upper()
     width = tile_width()
     height = tile_height()
-    key = (char, width, height, accent)
+    ink = tuple(ink) if ink else GLYPH
+    key = (char, width, height, accent, ink)
     cached = _tile_cache.get(key)
     if cached is not None:
         return cached
@@ -109,7 +117,7 @@ def render_tile(char: str, *, accent: bool = False) -> pygame.Surface:
 
     if char:
         font = draw.load_font(max(8, int(height * 0.62)), bold=True)
-        glyph = font.render(char, True, GLYPH)
+        glyph = font.render(char, True, ink)
         tile.blit(
             glyph,
             (
@@ -130,6 +138,7 @@ def draw_tiles(
     *,
     slots: int | None = None,
     accent: bool = False,
+    ink: tuple[int, int, int] | None = None,
 ) -> pygame.Rect:
     """Lay ``text`` out as tiles from the top-left corner ``(x, y)``.
 
@@ -143,7 +152,7 @@ def draw_tiles(
     cursor = int(x)
     for index in range(count):
         char = text[index] if index < len(text) else ""
-        surface.blit(render_tile(char, accent=accent), (cursor, int(y)))
+        surface.blit(render_tile(char, accent=accent, ink=ink), (cursor, int(y)))
         cursor += width + gap
     return pygame.Rect(int(x), int(y), row_width(count), tile_height())
 
@@ -161,3 +170,85 @@ def draw_separator(
             int(y) + (tile_height() - glyph.get_height()) // 2,
         ),
     )
+
+
+# -- seven-segment clock ---------------------------------------------------
+
+# Segment order: top, upper-left, upper-right, middle, lower-left,
+# lower-right, bottom.
+_SEGMENTS = {
+    "0": (1, 1, 1, 0, 1, 1, 1),
+    "1": (0, 0, 1, 0, 0, 1, 0),
+    "2": (1, 0, 1, 1, 1, 0, 1),
+    "3": (1, 0, 1, 1, 0, 1, 1),
+    "4": (0, 1, 1, 1, 0, 1, 0),
+    "5": (1, 1, 0, 1, 0, 1, 1),
+    "6": (1, 1, 0, 1, 1, 1, 1),
+    "7": (1, 0, 1, 0, 0, 1, 0),
+    "8": (1, 1, 1, 1, 1, 1, 1),
+    "9": (1, 1, 1, 1, 0, 1, 1),
+    " ": (0, 0, 0, 0, 0, 0, 0),
+}
+
+
+def segment_digit_size() -> tuple[int, int]:
+    """(width, height) of one seven-segment digit."""
+    height = max(9, theme.s(17))
+    return int(height * 0.58), height
+
+
+def _draw_segment_digit(
+    surface: pygame.Surface, char: str, x: int, y: int, *, show_off: bool = True
+) -> None:
+    on = _SEGMENTS.get(char, _SEGMENTS[" "])
+    w, h = segment_digit_size()
+    t = max(2, h // 8)          # segment thickness
+    inset = t // 2
+    mid = y + h // 2
+
+    def bar(px, py, pw, ph, lit):
+        color = SEGMENT_ON if lit else SEGMENT_OFF
+        if not lit and not show_off:
+            return
+        pygame.draw.rect(surface, color, pygame.Rect(int(px), int(py), int(pw), int(ph)))
+
+    bar(x + inset, y, w - t, t, on[0])                       # top
+    bar(x, y + inset, t, (h // 2) - inset, on[1])            # upper left
+    bar(x + w - t, y + inset, t, (h // 2) - inset, on[2])    # upper right
+    bar(x + inset, mid - t // 2, w - t, t, on[3])            # middle
+    bar(x, mid, t, (h // 2) - inset, on[4])                  # lower left
+    bar(x + w - t, mid, t, (h // 2) - inset, on[5])          # lower right
+    bar(x + inset, y + h - t, w - t, t, on[6])               # bottom
+
+
+def segment_clock_size(text: str) -> tuple[int, int]:
+    w, h = segment_digit_size()
+    gap = max(1, theme.s(2))
+    colon = max(2, w // 3)
+    total = 0
+    for ch in text:
+        total += colon if ch == ":" else w
+        total += gap
+    return max(0, total - gap), h
+
+
+def draw_segment_clock(
+    surface: pygame.Surface, text: str, x: int, y: int
+) -> pygame.Rect:
+    """Red seven-segment readout, the way a terminal board carries the time."""
+    w, h = segment_digit_size()
+    gap = max(1, theme.s(2))
+    colon_w = max(2, w // 3)
+    cursor = int(x)
+    for ch in text:
+        if ch == ":":
+            r = max(1, h // 12)
+            cx = cursor + colon_w // 2
+            for cy in (y + h // 3, y + 2 * h // 3):
+                pygame.draw.circle(surface, SEGMENT_ON, (int(cx), int(cy)), r)
+            cursor += colon_w + gap
+            continue
+        _draw_segment_digit(surface, ch, cursor, int(y))
+        cursor += w + gap
+    width, height = segment_clock_size(text)
+    return pygame.Rect(int(x), int(y), width, height)
