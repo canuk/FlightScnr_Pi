@@ -91,12 +91,29 @@ class _FingerTrack:
 _MAX_TRACKED_FINGERS = 4
 _STALE_FINGER_S = 12.0
 
+# Chatter: a failing digitizer fires complete down/up pairs at one spot, over
+# and over, for as long as it is faulty. Each pair is far too short to look
+# "stuck", so the jitter heuristics above never see it, yet the stream resets
+# gesture state continuously and nothing the user does registers.
+#
+# A human cannot tap the same pixel this fast for this long: the taps here
+# landed within a pixel of each other, several a second, for minutes, while
+# nobody was touching the screen.
+_CHATTER_RADIUS_PX = 8.0
+_CHATTER_WINDOW_S = 4.0
+_CHATTER_TAPS = 10
+_CHATTER_MUTE_S = 15.0
+
 
 class GhostTouchFilter:
     """Drop micro-jitter and stuck contacts before TouchInput sees them."""
 
     def __init__(self) -> None:
         self._fingers: dict[int, _FingerTrack] = {}
+        # [(x, y, t)] of recent presses, and muted zones {(x, y): expiry}.
+        self._recent_downs: list[tuple[int, int, float]] = []
+        self._muted_zones: dict[tuple[int, int], float] = {}
+        self._logged_chatter: set[tuple[int, int]] = set()
         self._tracking = False
         self._phantom = False
         self._anchor: tuple[int, int] | None = None
@@ -367,6 +384,42 @@ class GhostTouchFilter:
 
         return True
 
+    def _chatter_muted(self, pos: tuple[int, int], now: float) -> bool:
+        """True while this spot is disqualified for chattering."""
+        for zone, expiry in list(self._muted_zones.items()):
+            if expiry <= now:
+                del self._muted_zones[zone]
+                self._logged_chatter.discard(zone)
+                continue
+            if math.hypot(pos[0] - zone[0], pos[1] - zone[1]) <= _CHATTER_RADIUS_PX:
+                return True
+        return False
+
+    def _note_press(self, pos: tuple[int, int], now: float) -> bool:
+        """Record a press; True if this spot is now chattering."""
+        cutoff = now - _CHATTER_WINDOW_S
+        self._recent_downs = [d for d in self._recent_downs if d[2] >= cutoff]
+        self._recent_downs.append((pos[0], pos[1], now))
+        if len(self._recent_downs) > 200:
+            del self._recent_downs[:-200]
+        near = sum(
+            1
+            for x, y, _t in self._recent_downs
+            if math.hypot(pos[0] - x, pos[1] - y) <= _CHATTER_RADIUS_PX
+        )
+        if near < _CHATTER_TAPS:
+            return False
+        zone = (pos[0], pos[1])
+        self._muted_zones[zone] = now + _CHATTER_MUTE_S
+        if zone not in self._logged_chatter:
+            self._logged_chatter.add(zone)
+            logger.warning(
+                "ghost chatter: muting logical=(%d,%d) for %.0fs after %d "
+                "presses within %.0fs — the panel is firing on its own here",
+                zone[0], zone[1], _CHATTER_MUTE_S, near, _CHATTER_WINDOW_S,
+            )
+        return True
+
     def allow(
         self,
         event: pygame.event.Event,
@@ -380,6 +433,17 @@ class GhostTouchFilter:
             return True
 
         now = time.time()
+        # Chatter check first: these arrive as complete, well-formed presses,
+        # so every heuristic below happily passes them through.
+        if event.type in (pygame.MOUSEBUTTONDOWN, pygame.FINGERDOWN):
+            pos = _logical_xy(event)
+            if self._chatter_muted(pos, now):
+                return False
+            if self._note_press(pos, now):
+                return False
+        elif event.type in (pygame.MOUSEBUTTONUP, pygame.FINGERUP):
+            if self._chatter_muted(_logical_xy(event), now):
+                return False
         if _is_finger_event(event):
             return self._allow_finger(
                 event, cancel_gesture, is_dragging, now, allow_intentional_hold
