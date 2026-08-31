@@ -762,9 +762,16 @@ def curved_footer_segments(kinds: list[str]) -> list[tuple[str, float, float]]:
             # Standalone back pill sits at the exact bottom of the rim.
             out.append((kind, bottom, side_half))
         elif kind == "pin":
-            # Outboard of prev, clear of it: prev's own span plus a gap,
-            # otherwise the two pills merge into one long blob.
-            out.append((kind, bottom + offset + side_half * 2 + gap, side_half))
+            # Icon-sized rather than pill-sized, and outboard of prev's own
+            # span plus a gap, so the two never run together.
+            pin_half = side_half * 0.42
+            out.append(
+                (
+                    kind,
+                    bottom + offset + side_half + pin_half + gap * 3.0,
+                    pin_half,
+                )
+            )
     return out
 
 

@@ -377,18 +377,23 @@ def draw(surface: pygame.Surface) -> pygame.Rect | None:
     btn_w = max(18, theme.s(30))
     btn_x = width - pad - btn_w
     btn_y = height - pad - btn_h + max(1, theme.s(2))
+    # Composite the pill on its own surface and blit it. Drawing a
+    # part-transparent colour straight onto the SRCALPHA panel replaces the
+    # pixels instead of blending, which punched a translucent hole through
+    # the tile and showed the map underneath.
+    pill = pygame.Surface((btn_w, btn_h), pygame.SRCALPHA)
     pygame.draw.rect(
-        panel, (*accent_rgb, 40), pygame.Rect(btn_x, btn_y, btn_w, btn_h),
-        border_radius=btn_h // 2,
+        pill, (*accent_rgb, 38), pill.get_rect(), border_radius=btn_h // 2
     )
     pygame.draw.rect(
-        panel, (*accent_rgb, 170), pygame.Rect(btn_x, btn_y, btn_w, btn_h),
+        pill, (*accent_rgb, 190), pill.get_rect(),
         width=max(1, theme.s(1)), border_radius=btn_h // 2,
     )
     flip_tiles.draw_direction_icon(
-        panel, btn_x + btn_w // 2, btn_y + btn_h // 2,
-        int(btn_h * 0.72), accent_rgb, departing=False,
+        pill, btn_w // 2, btn_h // 2, int(btn_h * 0.72), accent_rgb,
+        departing=False,
     )
+    panel.blit(pill, (btn_x, btn_y))
     _panel_button = pygame.Rect(btn_x, btn_y, btn_w, btn_h)
 
     anchor_xy = None
