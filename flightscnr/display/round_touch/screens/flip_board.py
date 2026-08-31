@@ -37,9 +37,12 @@ ROWS = 5
 # as far as the dial allows. Five flight rows, the field name, the direction
 # line, the page dots and the footer all have to coexist inside the circle,
 # so this is solved against the space left over rather than picked.
-IDENT_TILE_SCALE_MAX = 2.4
-# Segment clock sized to sit against those oversized flaps.
-CLOCK_SCALE = 1.8
+IDENT_TILE_SCALE_MAX = 3.2
+# Flight rows sit slightly under full size. Five of them at full size ate the
+# height the airport code needed, and the code is what identifies the board.
+ROW_TILE_SCALE = 0.82
+# Small beside the code, the way a board's clock is secondary to its title.
+CLOCK_SCALE = 0.85
 
 ARRIVALS = "arrivals"
 DEPARTURES = "departures"
@@ -202,11 +205,11 @@ def format_clock(epoch: float, *, twelve_hour: bool | None = None) -> str:
 def row_width() -> int:
     """Full pixel width of one board row (id tiles, gap, then HH:MM)."""
     return (
-        flip_tiles.row_width(ID_SLOTS)
+        flip_tiles.row_width(ID_SLOTS, ROW_TILE_SCALE)
         + _id_time_gap()
-        + flip_tiles.row_width(2)
+        + flip_tiles.row_width(2, ROW_TILE_SCALE)
         + _separator_width()
-        + flip_tiles.row_width(2)
+        + flip_tiles.row_width(2, ROW_TILE_SCALE)
     )
 
 
@@ -220,7 +223,7 @@ def _separator_width() -> int:
 
 
 def row_step() -> int:
-    return flip_tiles.tile_height() + max(1, theme.s(3))
+    return flip_tiles.tile_height(ROW_TILE_SCALE) + max(1, theme.s(3))
 
 
 def row_positions() -> list[int]:
@@ -231,20 +234,21 @@ def row_positions() -> list[int]:
 
 
 def _header_text_height() -> int:
-    """Everything in the header except the airport-code flaps."""
+    """Everything in the header except the airport-code flaps.
+
+    Just the field name now — the direction line moved down to the dots row
+    so the code could have that height instead.
+    """
     name_font = draw.load_font(max(8, theme.s(10)))
-    label_font = draw.load_font(theme.s(13), bold=True)
-    return (
-        max(1, theme.s(4))
-        + name_font.get_height() + max(2, theme.s(4))
-        + label_font.get_height() + max(2, theme.s(4))
-    )
+    return max(1, theme.s(3)) + name_font.get_height() + max(2, theme.s(4))
 
 
 def ident_scale() -> float:
     """Largest airport-code flap that still leaves room for everything else."""
     block = ROWS * row_step() - max(1, theme.s(3))
-    dots_reach = (ROWS - 1) * row_step() + flip_tiles.tile_height() + _dots_gap()
+    dots_reach = (
+        (ROWS - 1) * row_step() + flip_tiles.tile_height(ROW_TILE_SCALE) + _dots_gap()
+    )
     available = nav.content_bottom_y() - nav.content_top_y(has_dots=True)
     margin = max(2, theme.s(2))
     spare = (
@@ -277,7 +281,9 @@ def _rows_top() -> int:
     # Clamp against the footer: the airport-code flaps grew and pushed the
     # page dots down onto it. Derived from the bottom, so a further header
     # change moves the block rather than overrunning the chrome.
-    dots_reach = (ROWS - 1) * row_step() + flip_tiles.tile_height() + _dots_gap()
+    dots_reach = (
+        (ROWS - 1) * row_step() + flip_tiles.tile_height(ROW_TILE_SCALE) + _dots_gap()
+    )
     latest = nav.content_bottom_y() - dots_reach - max(2, theme.s(2))
     return min(top, latest)
 
@@ -285,7 +291,7 @@ def _rows_top() -> int:
 def fits_in_circle() -> bool:
     """True when every row corner clears the bezel."""
     half = row_width() / 2.0
-    height = flip_tiles.tile_height()
+    height = flip_tiles.tile_height(ROW_TILE_SCALE)
     limit = float(theme.VISIBLE_RADIUS)
     for top in row_positions():
         for corner_y in (top, top + height):
@@ -322,22 +328,26 @@ def _draw_heading(surface: pygame.Surface, airport: dict, y: int) -> int:
     # Airport code as its own row of oversized flaps in the board's yellow,
     # with the local time on segments beside it, centred against that block.
     ident = str(airport.get("ident") or "").upper()[:4]
-    clock = _local_clock_text()
-    ident_w = flip_tiles.row_width(len(ident), scale=ident_scale()) if ident else 0
-    clock_w, clock_h = flip_tiles.segment_clock_size(clock, CLOCK_SCALE)
-    gap = max(4, theme.s(12))
-    block_w = ident_w + gap + clock_w
-    x = (theme.SIZE - block_w) // 2
-    tile_h = flip_tiles.tile_height(scale=ident_scale())
+    scale = ident_scale()
+    ident_w = flip_tiles.row_width(len(ident), scale=scale) if ident else 0
+    tile_h = flip_tiles.tile_height(scale=scale)
+    # The code is the board's title, so it is centred on the screen. The clock
+    # rides in the space to its right rather than sharing a centred block.
+    x = (theme.SIZE - ident_w) // 2
     shown_ident = _flap_text(_IDENT_FLAP_ROW, ident, time.time())
     flip_tiles.draw_tiles(
         surface, shown_ident, x, y,
-        slots=len(ident) or 1, ink=flip_tiles.YELLOW, scale=ident_scale(),
+        slots=len(ident) or 1, ink=flip_tiles.YELLOW, scale=scale,
     )
-    flip_tiles.draw_segment_clock(
-        surface, clock, x + ident_w + gap, y + (tile_h - clock_h) // 2, CLOCK_SCALE
-    )
-    y += tile_h + max(1, theme.s(4))
+
+    clock = _local_clock_text()
+    clock_w, clock_h = flip_tiles.segment_clock_size(clock, CLOCK_SCALE)
+    clock_x = x + ident_w + max(4, theme.s(14))
+    clock_y = y + (tile_h - clock_h) // 2
+    # Only if it clears the bezel at that height.
+    if theme.in_visible_circle(clock_x + clock_w, clock_y + clock_h // 2):
+        flip_tiles.draw_segment_clock(surface, clock, clock_x, clock_y, CLOCK_SCALE)
+    y += tile_h + max(1, theme.s(3))
 
     # Full airport name beneath the code.
     name = str(airport.get("facility") or airport.get("name") or "").strip()
@@ -345,10 +355,14 @@ def _draw_heading(surface: pygame.Surface, airport: dict, y: int) -> int:
         name_font = draw.load_font(max(8, theme.s(10)))
         img = draw.render_text_cached(name_font, name[:28], theme.MUTED)
         surface.blit(img, ((theme.SIZE - img.get_width()) // 2, y))
-        y += img.get_height() + max(2, theme.s(4))
+        y += img.get_height() + max(1, theme.s(2))
 
-    # Direction, with its icon, and the other side dimmed beside it so it is
-    # obvious the board turns over.
+    return y
+
+
+def _draw_direction_line(surface: pygame.Surface, y: int) -> int:
+    """Direction and its icon, with the other side dimmed beside it so it is
+    obvious the board turns over."""
     label_font = draw.load_font(theme.s(13), bold=True)
     active = draw.render_text_cached(
         label_font, _TITLES[_direction], flip_tiles.HEADING
@@ -371,7 +385,7 @@ def _draw_heading(surface: pygame.Surface, airport: dict, y: int) -> int:
     for img in (active, sep, inactive):
         surface.blit(img, (x, y))
         x += img.get_width()
-    return y + active.get_height() + max(2, theme.s(4))
+    return y + active.get_height()
 
 
 def _local_clock_text() -> str:
@@ -404,14 +418,16 @@ def _draw_row(
     minutes = shown[ID_SLOTS + 2:ID_SLOTS + 4].strip()
 
     x = (theme.SIZE - row_width()) // 2
-    flip_tiles.draw_tiles(surface, ident_text, x, y, slots=ID_SLOTS)
-    x += flip_tiles.row_width(ID_SLOTS) + _id_time_gap()
-    flip_tiles.draw_tiles(surface, hours, x, y, slots=2)
-    x += flip_tiles.row_width(2)
+    flip_tiles.draw_tiles(
+        surface, ident_text, x, y, slots=ID_SLOTS, scale=ROW_TILE_SCALE
+    )
+    x += flip_tiles.row_width(ID_SLOTS, ROW_TILE_SCALE) + _id_time_gap()
+    flip_tiles.draw_tiles(surface, hours, x, y, slots=2, scale=ROW_TILE_SCALE)
+    x += flip_tiles.row_width(2, ROW_TILE_SCALE)
     if event:
         flip_tiles.draw_separator(surface, x, y, _separator_width())
     x += _separator_width()
-    flip_tiles.draw_tiles(surface, minutes, x, y, slots=2)
+    flip_tiles.draw_tiles(surface, minutes, x, y, slots=2, scale=ROW_TILE_SCALE)
 
 
 def _draw_empty_state(surface: pygame.Surface, message: str) -> None:
@@ -450,6 +466,7 @@ def draw_flip_board(surface: pygame.Surface) -> None:
 
     # Straight dots under the board, not curved ones on the rim: the rim is
     # already carrying the breadcrumb and the two would overlap.
+    _draw_direction_line(surface, _direction_line_y())
     nav.draw_page_dots(surface, _airport_index, len(airports), dots_y())
     nav.draw_curved_footer(surface, list(FOOTER_BUTTONS))
 
@@ -458,13 +475,29 @@ def _heading_top() -> int:
     return _rows_top() - _header_gap() - _header_height()
 
 
+def _direction_line_height() -> int:
+    return draw.load_font(theme.s(13), bold=True).get_height()
+
+
+def _direction_line_y() -> int:
+    """Under the last flap row."""
+    return (
+        row_positions()[-1] + flip_tiles.tile_height(ROW_TILE_SCALE)
+        + max(2, theme.s(4))
+    )
+
+
 def _dots_gap() -> int:
-    return max(4, theme.s(14))
+    return (
+        max(2, theme.s(4)) + _direction_line_height() + max(3, theme.s(5))
+    )
 
 
 def dots_y() -> int:
     """Row of airport dots, between the last flap row and the footer."""
-    return row_positions()[-1] + flip_tiles.tile_height() + _dots_gap()
+    return (
+        row_positions()[-1] + flip_tiles.tile_height(ROW_TILE_SCALE) + _dots_gap()
+    )
 
 
 # -- input -----------------------------------------------------------------
@@ -482,5 +515,7 @@ def tap_board(x: int, y: int) -> bool:
     if not theme.in_visible_circle(x, y):
         return False
     top = row_positions()[0] - theme.s(30)
-    bottom = row_positions()[-1] + flip_tiles.tile_height() + theme.s(6)
+    bottom = (
+        row_positions()[-1] + flip_tiles.tile_height(ROW_TILE_SCALE) + theme.s(6)
+    )
     return top <= y <= bottom

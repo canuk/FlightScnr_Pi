@@ -92,7 +92,9 @@ class TestGeometry(ScreenTestCase):
         from display.round_touch.screens import flip_board as screen
 
         positions = screen.row_positions()
-        height = flip_tiles.tile_height()
+        # Flight rows are drawn slightly under full size so the airport code
+        # can be large, so measure the tile the rows actually use.
+        height = flip_tiles.tile_height(screen.ROW_TILE_SCALE)
         for earlier, later in zip(positions, positions[1:]):
             self.assertGreaterEqual(later, earlier + height)
 
