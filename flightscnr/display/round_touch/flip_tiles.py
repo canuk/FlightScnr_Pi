@@ -56,24 +56,24 @@ def invalidate_cache() -> None:
     _tile_cache.clear()
 
 
-def tile_width() -> int:
-    return max(6, theme.s(TILE_W))
+def tile_width(scale: float = 1.0) -> int:
+    return max(6, int(round(theme.s(TILE_W) * scale)))
 
 
-def tile_height() -> int:
-    return max(8, theme.s(TILE_H))
+def tile_height(scale: float = 1.0) -> int:
+    return max(8, int(round(theme.s(TILE_H) * scale)))
 
 
-def tile_gap() -> int:
-    return max(1, theme.s(TILE_GAP))
+def tile_gap(scale: float = 1.0) -> int:
+    return max(1, int(round(theme.s(TILE_GAP) * scale)))
 
 
-def row_width(count: int) -> int:
+def row_width(count: int, scale: float = 1.0) -> int:
     """Pixel width of ``count`` tiles laid out on the standard pitch."""
     count = max(0, int(count))
     if count == 0:
         return 0
-    return count * tile_width() + (count - 1) * tile_gap()
+    return count * tile_width(scale) + (count - 1) * tile_gap(scale)
 
 
 def _palette(empty: bool, accent: bool) -> tuple:
@@ -85,12 +85,16 @@ def _palette(empty: bool, accent: bool) -> tuple:
 
 
 def render_tile(
-    char: str, *, accent: bool = False, ink: tuple[int, int, int] | None = None
+    char: str,
+    *,
+    accent: bool = False,
+    ink: tuple[int, int, int] | None = None,
+    scale: float = 1.0,
 ) -> pygame.Surface:
     """One split-flap tile bearing ``char`` (blank when char is empty)."""
     char = (char or "")[:1].upper()
-    width = tile_width()
-    height = tile_height()
+    width = tile_width(scale)
+    height = tile_height(scale)
     ink = tuple(ink) if ink else GLYPH
     key = (char, width, height, accent, ink)
     cached = _tile_cache.get(key)
@@ -139,6 +143,7 @@ def draw_tiles(
     slots: int | None = None,
     accent: bool = False,
     ink: tuple[int, int, int] | None = None,
+    scale: float = 1.0,
 ) -> pygame.Rect:
     """Lay ``text`` out as tiles from the top-left corner ``(x, y)``.
 
@@ -147,12 +152,14 @@ def draw_tiles(
     """
     text = (text or "").upper()
     count = int(slots) if slots is not None else len(text)
-    width = tile_width()
-    gap = tile_gap()
+    width = tile_width(scale)
+    gap = tile_gap(scale)
     cursor = int(x)
     for index in range(count):
         char = text[index] if index < len(text) else ""
-        surface.blit(render_tile(char, accent=accent, ink=ink), (cursor, int(y)))
+        surface.blit(
+            render_tile(char, accent=accent, ink=ink, scale=scale), (cursor, int(y))
+        )
         cursor += width + gap
     return pygame.Rect(int(x), int(y), row_width(count), tile_height())
 
@@ -191,17 +198,18 @@ _SEGMENTS = {
 }
 
 
-def segment_digit_size() -> tuple[int, int]:
+def segment_digit_size(scale: float = 1.0) -> tuple[int, int]:
     """(width, height) of one seven-segment digit."""
-    height = max(9, theme.s(17))
+    height = max(9, int(round(theme.s(17) * scale)))
     return int(height * 0.58), height
 
 
 def _draw_segment_digit(
-    surface: pygame.Surface, char: str, x: int, y: int, *, show_off: bool = True
+    surface: pygame.Surface, char: str, x: int, y: int, *,
+    show_off: bool = True, scale: float = 1.0
 ) -> None:
     on = _SEGMENTS.get(char, _SEGMENTS[" "])
-    w, h = segment_digit_size()
+    w, h = segment_digit_size(scale)
     t = max(2, h // 8)          # segment thickness
     inset = t // 2
     mid = y + h // 2
@@ -221,8 +229,8 @@ def _draw_segment_digit(
     bar(x + inset, y + h - t, w - t, t, on[6])               # bottom
 
 
-def segment_clock_size(text: str) -> tuple[int, int]:
-    w, h = segment_digit_size()
+def segment_clock_size(text: str, scale: float = 1.0) -> tuple[int, int]:
+    w, h = segment_digit_size(scale)
     gap = max(1, theme.s(2))
     colon = max(2, w // 3)
     total = 0
@@ -233,10 +241,10 @@ def segment_clock_size(text: str) -> tuple[int, int]:
 
 
 def draw_segment_clock(
-    surface: pygame.Surface, text: str, x: int, y: int
+    surface: pygame.Surface, text: str, x: int, y: int, scale: float = 1.0
 ) -> pygame.Rect:
     """Red seven-segment readout, the way a terminal board carries the time."""
-    w, h = segment_digit_size()
+    w, h = segment_digit_size(scale)
     gap = max(1, theme.s(2))
     colon_w = max(2, w // 3)
     cursor = int(x)
@@ -248,7 +256,7 @@ def draw_segment_clock(
                 pygame.draw.circle(surface, SEGMENT_ON, (int(cx), int(cy)), r)
             cursor += colon_w + gap
             continue
-        _draw_segment_digit(surface, ch, cursor, int(y))
+        _draw_segment_digit(surface, ch, cursor, int(y), scale=scale)
         cursor += w + gap
-    width, height = segment_clock_size(text)
+    width, height = segment_clock_size(text, scale)
     return pygame.Rect(int(x), int(y), width, height)

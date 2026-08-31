@@ -60,6 +60,14 @@ MOVEMENT_CEILING_AGL_FT = 500
 # Vertical rate gates (feet per minute).
 CLIMB_FPM = 300
 DESCENT_FPM = -300
+# A landing is only confirmed inside the half-mile box, but a ground station
+# usually loses an aircraft on short final long before it gets there — terrain
+# and buildings take the line of sight. So arm a pending arrival from a wider
+# approach window: descending, close, and low. If the track then goes quiet,
+# that is the landing. Overflights are rejected because they are not descending
+# through this window toward the field.
+APPROACH_RADIUS_NM = 3.0
+APPROACH_CEILING_AGL_FT = 2500
 # Rows the board keeps per airport per direction.
 MAX_ROWS = 5
 # Forget movements older than this.
@@ -313,9 +321,28 @@ class FlipBoardTracker:
                 )
             return
 
-        if not ident or not low:
-            # Away from every field, or too high to be in the pattern.
+        # Pending arrival comes from the wider approach window, so a track
+        # lost on short final still lands on the board.
+        approach = nearest_airport(flight, airports, APPROACH_RADIUS_NM)
+        approach_agl = (
+            height_above_field_ft(alt, approach) if approach else None
+        )
+        in_approach = (
+            approach_agl is not None and approach_agl <= APPROACH_CEILING_AGL_FT
+        )
+        approach_ident = (
+            str(approach.get("ident") or "").upper() if approach else ""
+        )
+        if vs <= DESCENT_FPM and in_approach and approach_ident:
+            if track.get("arriving_at") != approach_ident:
+                track["arriving_at"] = approach_ident
+                track["arriving_since"] = now
+        elif vs >= CLIMB_FPM or not in_approach:
             track["arriving_at"] = ""
+
+        if not ident or not low:
+            # Outside the confirmation box: the pending arrival above is all
+            # we can say until the track lands, climbs away, or goes quiet.
             return
 
         if on_ground and track.get("arriving_at") == ident:
@@ -342,10 +369,6 @@ class FlipBoardTracker:
                 new_events.append(
                     self._record(ident, "departures", track, now)
                 )
-        elif vs <= DESCENT_FPM:
-            if track.get("arriving_at") != ident:
-                track["arriving_at"] = ident
-                track["arriving_since"] = now
 
     def _retire_gone(
         self, present: set[str], now: float, new_events: list[dict]

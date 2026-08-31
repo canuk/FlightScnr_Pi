@@ -576,3 +576,64 @@ class TestNearestAirportShortcut(unittest.TestCase):
                 plane(plane_latitude=34.5, plane_longitude=-117.5), fields
             )
         )
+
+
+class TestApproachWindow(unittest.TestCase):
+    """A ground station usually loses an aircraft on short final, well before
+    the half-mile confirmation box. Reuben heard N2425M land at KHMT while it
+    was on his radar, and the board stayed empty."""
+
+    def setUp(self):
+        self.tracker = flip_board.FlipBoardTracker()
+
+    def test_lost_on_final_still_records_the_arrival(self):
+        # 1.5 nm out, 900 ft above the field, descending — then the feed
+        # loses it, which is what a rooftop antenna does at that height.
+        out = plane(
+            plane_latitude=KHWD["lat"] + 0.025,
+            plane_longitude=KHWD["lon"],
+            altitude=KHWD["elevation_ft"] + 900,
+            vertical_speed=-600,
+        )
+        self.tracker.observe([out], AIRPORTS, now=1000.0)
+        self.tracker.observe([], AIRPORTS, now=1000.0 + flip_board.GONE_S + 1)
+        board = self.tracker.board("KHWD")
+        self.assertEqual(len(board["arrivals"]), 1)
+        self.assertEqual(board["arrivals"][0]["ident"], "KHWD")
+
+    def test_a_high_overflight_is_still_not_an_arrival(self):
+        high = plane(
+            altitude=KHWD["elevation_ft"] + 9000, vertical_speed=-600
+        )
+        self.tracker.observe([high], AIRPORTS, now=1000.0)
+        self.tracker.observe([], AIRPORTS, now=1000.0 + flip_board.GONE_S + 1)
+        self.assertEqual(self.tracker.board("KHWD")["arrivals"], [])
+
+    def test_descending_far_away_is_still_not_an_arrival(self):
+        far = plane(
+            plane_latitude=KHWD["lat"] + 0.5,
+            plane_longitude=KHWD["lon"],
+            altitude=KHWD["elevation_ft"] + 900,
+            vertical_speed=-600,
+        )
+        self.tracker.observe([far], AIRPORTS, now=1000.0)
+        self.tracker.observe([], AIRPORTS, now=1000.0 + flip_board.GONE_S + 1)
+        self.assertEqual(self.tracker.board("KHWD")["arrivals"], [])
+
+    def test_climbing_out_of_the_window_clears_the_pending_arrival(self):
+        approach = plane(
+            plane_latitude=KHWD["lat"] + 0.025,
+            plane_longitude=KHWD["lon"],
+            altitude=KHWD["elevation_ft"] + 900,
+            vertical_speed=-600,
+        )
+        self.tracker.observe([approach], AIRPORTS, now=1000.0)
+        climb = plane(
+            plane_latitude=KHWD["lat"] + 0.025,
+            plane_longitude=KHWD["lon"],
+            altitude=KHWD["elevation_ft"] + 1500,
+            vertical_speed=900,
+        )
+        self.tracker.observe([climb], AIRPORTS, now=1010.0)
+        self.tracker.observe([], AIRPORTS, now=1010.0 + flip_board.GONE_S + 1)
+        self.assertEqual(self.tracker.board("KHWD")["arrivals"], [])

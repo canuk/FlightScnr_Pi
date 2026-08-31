@@ -33,6 +33,10 @@ FOOTER_BUTTONS = ("prev", "radar", "next")
 # and an airline callsign (SWA221); longer ids are truncated.
 ID_SLOTS = 6
 ROWS = 5
+# The airport code reads as the board's title, so its flaps are oversized.
+IDENT_TILE_SCALE = 2.4
+# Segment clock sized to sit against those oversized flaps.
+CLOCK_SCALE = 1.8
 
 ARRIVALS = "arrivals"
 DEPARTURES = "departures"
@@ -52,6 +56,8 @@ _FLAP_ROW_STAGGER_S = 0.08
 _FLAP_RATE = 22.0
 
 # row index -> {"text": settled text, "started": monotonic start}
+# The airport code animates too, on its own row above the flight rows.
+_IDENT_FLAP_ROW = -1
 _flap_rows: dict[int, dict] = {}
 
 
@@ -226,9 +232,9 @@ def _header_height() -> int:
     name_font = draw.load_font(max(8, theme.s(10)))
     label_font = draw.load_font(theme.s(13), bold=True)
     return (
-        flip_tiles.tile_height() + max(1, theme.s(3))
-        + name_font.get_height() + max(1, theme.s(2))
-        + label_font.get_height()
+        flip_tiles.tile_height(scale=IDENT_TILE_SCALE) + max(1, theme.s(4))
+        + name_font.get_height() + max(2, theme.s(4))
+        + label_font.get_height() + max(2, theme.s(4))
     )
 
 
@@ -285,14 +291,25 @@ def _draw_direction_icon(
 
 
 def _draw_heading(surface: pygame.Surface, airport: dict, y: int) -> int:
-    # Airport code as its own row of flaps, in the board's yellow.
+    # Airport code as its own row of oversized flaps in the board's yellow,
+    # with the local time on segments beside it, centred against that block.
     ident = str(airport.get("ident") or "").upper()[:4]
-    ident_w = flip_tiles.row_width(len(ident)) if ident else 0
+    clock = _local_clock_text()
+    ident_w = flip_tiles.row_width(len(ident), scale=IDENT_TILE_SCALE) if ident else 0
+    clock_w, clock_h = flip_tiles.segment_clock_size(clock, CLOCK_SCALE)
+    gap = max(4, theme.s(12))
+    block_w = ident_w + gap + clock_w
+    x = (theme.SIZE - block_w) // 2
+    tile_h = flip_tiles.tile_height(scale=IDENT_TILE_SCALE)
+    shown_ident = _flap_text(_IDENT_FLAP_ROW, ident, time.time())
     flip_tiles.draw_tiles(
-        surface, ident, (theme.SIZE - ident_w) // 2, y,
-        slots=len(ident) or 1, ink=flip_tiles.YELLOW,
+        surface, shown_ident, x, y,
+        slots=len(ident) or 1, ink=flip_tiles.YELLOW, scale=IDENT_TILE_SCALE,
     )
-    y += flip_tiles.tile_height() + max(1, theme.s(3))
+    flip_tiles.draw_segment_clock(
+        surface, clock, x + ident_w + gap, y + (tile_h - clock_h) // 2, CLOCK_SCALE
+    )
+    y += tile_h + max(1, theme.s(4))
 
     # Full airport name beneath the code.
     name = str(airport.get("facility") or airport.get("name") or "").strip()
@@ -300,7 +317,7 @@ def _draw_heading(surface: pygame.Surface, airport: dict, y: int) -> int:
         name_font = draw.load_font(max(8, theme.s(10)))
         img = draw.render_text_cached(name_font, name[:28], theme.MUTED)
         surface.blit(img, ((theme.SIZE - img.get_width()) // 2, y))
-        y += img.get_height() + max(1, theme.s(2))
+        y += img.get_height() + max(2, theme.s(4))
 
     # Direction, with its icon, and the other side dimmed beside it so it is
     # obvious the board turns over.
@@ -326,22 +343,15 @@ def _draw_heading(surface: pygame.Surface, airport: dict, y: int) -> int:
     for img in (active, sep, inactive):
         surface.blit(img, (x, y))
         x += img.get_width()
-    return y + active.get_height()
+    return y + active.get_height() + max(2, theme.s(4))
 
 
-def _draw_board_clock(surface: pygame.Surface) -> None:
-    """Current time as a red seven-segment readout, top right of the board."""
+def _local_clock_text() -> str:
     now = time.localtime()
     if settings.use_12hr_clock():
         hour = now.tm_hour % 12 or 12
-        text = f"{hour:2d}:{now.tm_min:02d}"
-    else:
-        text = f"{now.tm_hour:02d}:{now.tm_min:02d}"
-    width, height = flip_tiles.segment_clock_size(text)
-    # Sit it inside the rim, up and to the right, clear of the breadcrumb.
-    cx = theme.CENTER_X + int(theme.VISIBLE_RADIUS * 0.30)
-    cy = theme.CENTER_Y - int(theme.VISIBLE_RADIUS * 0.62)
-    flip_tiles.draw_segment_clock(surface, text, cx - width // 2, cy - height // 2)
+        return f"{hour:2d}:{now.tm_min:02d}"
+    return f"{now.tm_hour:02d}:{now.tm_min:02d}"
 
 
 def _draw_row(
@@ -394,7 +404,6 @@ def draw_flip_board(surface: pygame.Surface) -> None:
         return
 
     _draw_heading(surface, airport, _heading_top())
-    _draw_board_clock(surface)
     rows = rows_for(airport)
     now = time.time()
     if rows:
