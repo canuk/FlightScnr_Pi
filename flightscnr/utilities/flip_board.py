@@ -251,6 +251,7 @@ class FlipBoardTracker:
     ) -> None:
         alt = _int_field(flight, "altitude")
         vs = _int_field(flight, "vertical_speed")
+        on_ground = bool(flight.get("on_ground"))
         airport = nearest_airport(flight, airports, self.radius_nm)
         ident = str(airport.get("ident") or "").upper() if airport else ""
         low = bool(airport) and in_movement_band(alt, airport)
@@ -276,6 +277,16 @@ class FlipBoardTracker:
         if not ident or not low:
             # Away from every field, or too high to be in the pattern.
             track["arriving_at"] = ""
+            return
+
+        if on_ground and track.get("arriving_at") == ident:
+            # Wheels down. Record it now — waiting for the feed to drop the
+            # aircraft misses every field where it keeps transmitting while
+            # taxiing, and a later takeoff would cancel the pending arrival.
+            track["arriving_at"] = ""
+            track["born_at"] = ident
+            track["departed_from"] = ""
+            new_events.append(self._record(ident, "arrivals", track, now))
             return
 
         if vs >= CLIMB_FPM:

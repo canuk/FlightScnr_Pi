@@ -249,6 +249,60 @@ class TestArrivalDetection(unittest.TestCase):
         self.tracker.observe([], AIRPORTS, now=1000.0 + flip_board.GONE_S + 1)
         self.assertEqual(self.tracker.board("KHWD")["arrivals"], [])
 
+    def test_touchdown_records_the_arrival_without_waiting(self):
+        """A field where the aircraft keeps transmitting while it taxis must
+        still post the arrival — the feed never goes quiet."""
+        self.tracker.observe(
+            [plane(altitude=300, vertical_speed=-600)], AIRPORTS, now=1000.0
+        )
+        self.tracker.observe(
+            [plane(altitude=0, vertical_speed=0, on_ground=True)],
+            AIRPORTS,
+            now=1010.0,
+        )
+        board = self.tracker.board("KHWD")
+        self.assertEqual(len(board["arrivals"]), 1)
+        self.assertEqual(board["arrivals"][0]["at"], 1010.0)
+
+    def test_touchdown_is_recorded_once_while_it_taxis(self):
+        self.tracker.observe(
+            [plane(altitude=300, vertical_speed=-600)], AIRPORTS, now=1000.0
+        )
+        for t in (1010.0, 1015.0, 1020.0):
+            self.tracker.observe(
+                [plane(altitude=0, vertical_speed=0, on_ground=True)],
+                AIRPORTS,
+                now=t,
+            )
+        self.assertEqual(len(self.tracker.board("KHWD")["arrivals"]), 1)
+
+    def test_landing_then_departing_records_both(self):
+        """Regression: a later takeoff used to cancel the pending arrival, so
+        a turnaround showed a departure and no arrival."""
+        self.tracker.observe(
+            [plane(altitude=300, vertical_speed=-600)], AIRPORTS, now=1000.0
+        )
+        self.tracker.observe(
+            [plane(altitude=0, vertical_speed=0, on_ground=True)],
+            AIRPORTS,
+            now=1010.0,
+        )
+        self.tracker.observe(
+            [plane(altitude=200, vertical_speed=800)], AIRPORTS, now=2000.0
+        )
+        board = self.tracker.board("KHWD")
+        self.assertEqual(len(board["arrivals"]), 1)
+        self.assertEqual(len(board["departures"]), 1)
+
+    def test_sitting_on_the_ground_alone_is_not_an_arrival(self):
+        """We only claim a landing we actually watched happen."""
+        self.tracker.observe(
+            [plane(altitude=0, vertical_speed=0, on_ground=True)],
+            AIRPORTS,
+            now=1000.0,
+        )
+        self.assertEqual(self.tracker.board("KHWD")["arrivals"], [])
+
     def test_arrival_lands_on_the_nearest_field(self):
         near_oak = plane(
             plane_latitude=KOAK["lat"],
