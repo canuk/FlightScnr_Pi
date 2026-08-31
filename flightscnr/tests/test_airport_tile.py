@@ -348,3 +348,23 @@ class TestLightHudInk:
         white = (255, 255, 255)
         assert self._contrast(theme.TAG_TYPE, white) < 2.0
         assert self._contrast(theme.MUTED, white) < 2.0
+
+
+class TestLightHudOpacity:
+    def test_light_tile_is_floored_more_opaque(self, monkeypatch):
+        from display.round_touch import airport_tile, settings
+
+        monkeypatch.setattr(settings, "radar_hud_dark", lambda: False)
+        assert airport_tile._tile_fill((255, 255, 255, 120))[3] >= 242
+
+    def test_a_more_opaque_setting_is_left_alone(self, monkeypatch):
+        from display.round_touch import airport_tile, settings
+
+        monkeypatch.setattr(settings, "radar_hud_dark", lambda: False)
+        assert airport_tile._tile_fill((255, 255, 255, 255))[3] == 255
+
+    def test_dark_tile_keeps_the_hud_setting(self, monkeypatch):
+        from display.round_touch import airport_tile, settings
+
+        monkeypatch.setattr(settings, "radar_hud_dark", lambda: True)
+        assert airport_tile._tile_fill((28, 30, 34, 120))[3] == 120

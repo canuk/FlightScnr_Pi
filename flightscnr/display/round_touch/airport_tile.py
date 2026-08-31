@@ -219,6 +219,22 @@ _ACCENT_ON_LIGHT = (150, 105, 0)
 _MUTED_ON_LIGHT = (92, 99, 108)
 
 
+# Minimum opacity for the white tile. Dark text on a translucent white pill
+# over the moving map is far harder to read than light text on a translucent
+# dark one, so the light tile stays more solid than the HUD setting alone.
+_LIGHT_TILE_MIN_ALPHA = 242
+
+
+def _tile_fill(fill_rgba: tuple[int, int, int, int]) -> tuple[int, int, int, int]:
+    """Pill fill, floored to stay readable in the light HUD style."""
+    from display.round_touch import settings
+
+    if settings.radar_hud_dark():
+        return fill_rgba
+    r, g, b, a = fill_rgba
+    return (r, g, b, max(a, _LIGHT_TILE_MIN_ALPHA))
+
+
 def _tile_ink() -> tuple[tuple[int, int, int], tuple[int, int, int]]:
     """(accent, muted) for the current HUD style."""
     from display.round_touch import settings
@@ -238,6 +254,7 @@ def draw(surface: pygame.Surface) -> pygame.Rect | None:
 
     glyph_rgb, fill_rgba = radar_hud._hud_chrome()
     accent_rgb, muted_rgb = _tile_ink()
+    fill_rgba = _tile_fill(fill_rgba)
     ident_font = _load(theme.s(15), bold=True)
     name_font = _load(max(8, theme.s(9)))
     label_font = _load(max(8, theme.s(9)), bold=True)
