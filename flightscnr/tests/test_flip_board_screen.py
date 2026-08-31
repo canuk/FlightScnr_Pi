@@ -333,3 +333,65 @@ class TestDrawing(ScreenTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestSplitFlapAnimation:
+    """Rows turn over on arrival and when a movement lands."""
+
+    def setup_method(self):
+        from display.round_touch.screens import flip_board
+
+        self.flip_board = flip_board
+        flip_board._reset_for_tests()
+
+    def test_a_fresh_row_scrambles_then_settles(self):
+        target = "N12345"
+        mid = self.flip_board._flap_text(0, target, 1000.0)
+        assert mid != target, "row should be mid-flip immediately"
+        settled = self.flip_board._flap_text(0, target, 1000.0 + 5.0)
+        assert settled == target
+
+    def test_blanks_never_scramble(self):
+        shown = self.flip_board._flap_text(0, "      ", 1000.0)
+        assert shown.strip() == ""
+
+    def test_is_animating_reports_the_window(self):
+        self.flip_board._flap_text(0, "N12345", 1000.0)
+        assert self.flip_board.is_animating(1000.1)
+        assert not self.flip_board.is_animating(1000.0 + 10.0)
+
+    def test_a_changed_row_flips_again(self):
+        self.flip_board._flap_text(0, "N12345", 1000.0)
+        assert self.flip_board._flap_text(0, "N12345", 1005.0) == "N12345"
+        # A new movement lands in that row.
+        assert self.flip_board._flap_text(0, "N99999", 1005.0) != "N99999"
+        assert self.flip_board.is_animating(1005.1)
+
+    def test_restart_animation_flips_everything_again(self):
+        self.flip_board._flap_text(0, "N12345", 1000.0)
+        assert not self.flip_board.is_animating(1010.0)
+        self.flip_board.restart_animation()
+        self.flip_board._flap_text(0, "N12345", 1010.0)
+        assert self.flip_board.is_animating(1010.1)
+
+    def test_rows_cascade_top_to_bottom(self):
+        a = self.flip_board._row_settled_at(0, 10)
+        self.flip_board._flap_text(0, "N12345    ", 1000.0)
+        self.flip_board._flap_text(3, "N54321    ", 1000.0)
+        assert self.flip_board._row_settled_at(3, 10) > self.flip_board._row_settled_at(0, 10)
+
+
+    def test_toggling_direction_restarts_the_flip(self):
+        self.flip_board._flap_text(0, "N12345", 1000.0)
+        assert not self.flip_board.is_animating(1010.0)
+        self.flip_board.toggle_direction()
+        self.flip_board._flap_text(0, "N12345", 1010.0)
+        assert self.flip_board.is_animating(1010.1)
+
+class HeadingDirectionTests(ScreenTestCase):
+    def test_heading_names_both_directions(self):
+        from display.round_touch.screens import flip_board
+        from display.round_touch import theme as th
+
+        surface = pygame.Surface((th.SIZE, th.SIZE))
+        flip_board._draw_heading(surface, {"ident": "KHMT"}, th.s(60))

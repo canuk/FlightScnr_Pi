@@ -4377,6 +4377,8 @@ class RoundTouchDisplay:
             and self.screen == SCREEN_MOON
             and settings.show_flip_board()
         ):
+            # Every row turns over on arrival, the way a real board catches up.
+            flip_board.restart_animation()
             self._open_screen(SCREEN_FLIP_BOARD)
             self._safe_draw()
         elif swipe == input_handler.SWIPE_RIGHT and self.screen == SCREEN_FLIP_BOARD:
@@ -4908,6 +4910,13 @@ class RoundTouchDisplay:
         now = time.time()
         # Analog needs ~30fps for sweeping hands + drum snap-scroll.
         if self.screen in (SCREEN_ANALOG_CLOCK, SCREEN_ANALOG_NIGHT, SCREEN_FLIEGER_CLOCK):
+            if (now - self._last_clock_draw) >= (theme.SWEEP_FRAME_MS / 1000.0):
+                self._last_clock_draw = now
+                self._safe_draw()
+            return
+        if self.screen == SCREEN_FLIP_BOARD and flip_board.is_animating(now):
+            # Split-flap needs real frames; the 2s clock cadence would show
+            # two stills instead of tiles turning.
             if (now - self._last_clock_draw) >= (theme.SWEEP_FRAME_MS / 1000.0):
                 self._last_clock_draw = now
                 self._safe_draw()

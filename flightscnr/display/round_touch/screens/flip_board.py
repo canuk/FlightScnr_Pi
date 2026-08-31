@@ -42,12 +42,74 @@ _TITLES = {ARRIVALS: "ARRIVALS", DEPARTURES: "DEPARTURES"}
 _airport_index = 0
 _direction = ARRIVALS
 
+# Split-flap animation. Characters settle left to right, rows top to bottom,
+# so opening the page reads like a real board catching up. The same mechanism
+# flips a single row when a new movement lands, which is what keeps it live.
+_FLAP_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+_FLAP_SETTLE_S = 0.45
+_FLAP_COL_STAGGER_S = 0.05
+_FLAP_ROW_STAGGER_S = 0.08
+_FLAP_RATE = 22.0
+
+# row index -> {"text": settled text, "started": monotonic start}
+_flap_rows: dict[int, dict] = {}
+
 
 def _reset_for_tests() -> None:
     global _airport_index, _direction
     _airport_index = 0
     _direction = ARRIVALS
+    _flap_rows.clear()
     flip_tiles.invalidate_cache()
+
+
+def restart_animation() -> None:
+    """Flip every row again — used when the page is opened or switched."""
+    _flap_rows.clear()
+
+
+def _row_settled_at(row: int, columns: int) -> float:
+    entry = _flap_rows.get(row)
+    if not entry:
+        return 0.0
+    last_col = max(0, columns - 1)
+    return (
+        entry["started"]
+        + _FLAP_ROW_STAGGER_S * row
+        + _FLAP_COL_STAGGER_S * last_col
+        + _FLAP_SETTLE_S
+    )
+
+
+def is_animating(now: float | None = None) -> bool:
+    """True while any row is still turning, so the loop keeps painting."""
+    now = time.time() if now is None else now
+    for row, entry in _flap_rows.items():
+        if now < _row_settled_at(row, len(entry["text"])):
+            return True
+    return False
+
+
+def _flap_text(row: int, target: str, now: float) -> str:
+    """The characters to show for ``target`` right now.
+
+    A slot that has not settled shows a passing flap. Blanks stay blank —
+    scrambling empty rows would turn a quiet field into noise.
+    """
+    entry = _flap_rows.get(row)
+    if entry is None or entry["text"] != target:
+        entry = {"text": target, "started": now}
+        _flap_rows[row] = entry
+    started = entry["started"] + _FLAP_ROW_STAGGER_S * row
+    out = []
+    for col, char in enumerate(target):
+        settle = started + _FLAP_COL_STAGGER_S * col + _FLAP_SETTLE_S
+        if now >= settle or not char.strip():
+            out.append(char)
+            continue
+        step = int((now - started) * _FLAP_RATE + col * 3)
+        out.append(_FLAP_ALPHABET[step % len(_FLAP_ALPHABET)])
+    return "".join(out)
 
 
 # -- state -----------------------------------------------------------------
@@ -81,6 +143,7 @@ def step_airport(delta: int) -> None:
         _airport_index = 0
         return
     _airport_index = (_airport_index + int(delta)) % len(airports)
+    restart_animation()
 
 
 def direction() -> str:
@@ -91,6 +154,7 @@ def toggle_direction() -> str:
     """Flip the board between arrivals and departures."""
     global _direction
     _direction = DEPARTURES if _direction == ARRIVALS else ARRIVALS
+    restart_animation()
     return _direction
 
 
@@ -185,25 +249,51 @@ def _draw_heading(surface: pygame.Surface, airport: dict, y: int) -> int:
     surface.blit(glyph, ((theme.SIZE - glyph.get_width()) // 2, y))
     y += glyph.get_height() + max(1, theme.s(2))
 
+    # Show both directions, the inactive one dimmed, so it is obvious the
+    # board has another side and that tapping turns it over.
     label_font = draw.load_font(theme.s(13), bold=True)
-    label = draw.render_text_cached(
+    active = draw.render_text_cached(
         label_font, _TITLES[_direction], flip_tiles.HEADING
     )
-    surface.blit(label, ((theme.SIZE - label.get_width()) // 2, y))
-    return y + label.get_height()
+    other = DEPARTURES if _direction == ARRIVALS else ARRIVALS
+    inactive = draw.render_text_cached(
+        label_font, _TITLES[other], theme.HINT
+    )
+    gap = draw.render_text_cached(label_font, "  /  ", theme.HINT)
+    total = active.get_width() + gap.get_width() + inactive.get_width()
+    x = (theme.SIZE - total) // 2
+    surface.blit(active, (x, y))
+    x += active.get_width()
+    surface.blit(gap, (x, y))
+    x += gap.get_width()
+    surface.blit(inactive, (x, y))
+    return y + active.get_height()
 
 
-def _draw_row(surface: pygame.Surface, event: dict | None, y: int) -> None:
-    x = (theme.SIZE - row_width()) // 2
+def _draw_row(
+    surface: pygame.Surface, event: dict | None, y: int, row: int = 0,
+    now: float | None = None,
+) -> None:
+    now = time.time() if now is None else now
     ident_text = str((event or {}).get("id") or "")[:ID_SLOTS]
+    clock = format_clock(event.get("at") or 0) if event else ""
+    hours, _, minutes = clock.partition(":")
+
+    # One flap sequence per row: pad each field so column positions — and so
+    # the left-to-right cascade — line up with what is drawn.
+    target = (
+        ident_text.ljust(ID_SLOTS)
+        + hours.rjust(2)
+        + minutes.ljust(2)
+    )
+    shown = _flap_text(row, target, now)
+    ident_text = shown[:ID_SLOTS].rstrip()
+    hours = shown[ID_SLOTS:ID_SLOTS + 2].strip()
+    minutes = shown[ID_SLOTS + 2:ID_SLOTS + 4].strip()
+
+    x = (theme.SIZE - row_width()) // 2
     flip_tiles.draw_tiles(surface, ident_text, x, y, slots=ID_SLOTS)
     x += flip_tiles.row_width(ID_SLOTS) + _id_time_gap()
-
-    if event:
-        clock = format_clock(event.get("at") or 0)
-    else:
-        clock = ""
-    hours, _, minutes = clock.partition(":")
     flip_tiles.draw_tiles(surface, hours, x, y, slots=2)
     x += flip_tiles.row_width(2)
     if event:
@@ -231,12 +321,19 @@ def draw_flip_board(surface: pygame.Surface) -> None:
 
     _draw_heading(surface, airport, _heading_top())
     rows = rows_for(airport)
+    now = time.time()
     if rows:
         for index, y in enumerate(row_positions()):
-            _draw_row(surface, rows[index] if index < len(rows) else None, y)
+            _draw_row(
+                surface,
+                rows[index] if index < len(rows) else None,
+                y,
+                row=index,
+                now=now,
+            )
     else:
-        for y in row_positions():
-            _draw_row(surface, None, y)
+        for index, y in enumerate(row_positions()):
+            _draw_row(surface, None, y, row=index, now=now)
         _draw_empty_state(surface, "Watching for traffic")
 
     # Straight dots under the board, not curved ones on the rim: the rim is

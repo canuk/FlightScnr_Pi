@@ -212,6 +212,22 @@ def draw_tile(surface: pygame.Surface) -> pygame.Rect | None:
     return draw(surface)
 
 
+# Ink for the light HUD. The dark-tile colours are a bright amber ident and a
+# pale blue-grey label, and both wash out on the white pill — TAG_TYPE lands
+# near 1.7:1 against white and MUTED near 1.5:1.
+_ACCENT_ON_LIGHT = (150, 105, 0)
+_MUTED_ON_LIGHT = (92, 99, 108)
+
+
+def _tile_ink() -> tuple[tuple[int, int, int], tuple[int, int, int]]:
+    """(accent, muted) for the current HUD style."""
+    from display.round_touch import settings
+
+    if settings.radar_hud_dark():
+        return theme.TAG_TYPE, theme.MUTED
+    return _ACCENT_ON_LIGHT, _MUTED_ON_LIGHT
+
+
 def draw(surface: pygame.Surface) -> pygame.Rect | None:
     """Draw the tile; returns its rect or None when closed."""
     global _last_rect
@@ -221,7 +237,7 @@ def draw(surface: pygame.Surface) -> pygame.Rect | None:
     from utilities import metar as metar_mod
 
     glyph_rgb, fill_rgba = radar_hud._hud_chrome()
-    accent_rgb = theme.TAG_TYPE
+    accent_rgb, muted_rgb = _tile_ink()
     ident_font = _load(theme.s(15), bold=True)
     name_font = _load(max(8, theme.s(9)))
     label_font = _load(max(8, theme.s(9)), bold=True)
@@ -318,11 +334,11 @@ def draw(surface: pygame.Surface) -> pygame.Rect | None:
         y += name_img.get_height()
     y += theme.s(4)
     for lbl, value in rows:
-        panel.blit(label_font.render(lbl, True, theme.MUTED), (pad, y))
+        panel.blit(label_font.render(lbl, True, muted_rgb), (pad, y))
         panel.blit(value_font.render(value, True, glyph_rgb), (pad + label_w, y))
         y += row_h
     if footer:
-        panel.blit(name_font.render(footer, True, theme.MUTED), (pad, y + gap))
+        panel.blit(name_font.render(footer, True, muted_rgb), (pad, y + gap))
 
     anchor_xy = None
     try:

@@ -299,3 +299,52 @@ class TestTilePlacement:
         ):
             rect = airport_tile.place_rect((220, 160), (ax, ay))
             assert self._corners_in_circle(rect), (ax, ay, rect)
+
+
+class TestLightHudInk:
+    """The METAR tile is drawn on a white pill when the HUD style is Light,
+    so the dark-tile amber ident and pale labels have to darken with it."""
+
+    @staticmethod
+    def _contrast(a, b) -> float:
+        def lum(c):
+            def ch(v):
+                v /= 255.0
+                return v / 12.92 if v <= 0.03928 else ((v + 0.055) / 1.055) ** 2.4
+            r, g, bl = (ch(x) for x in c[:3])
+            return 0.2126 * r + 0.7152 * g + 0.0722 * bl
+        la, lb = sorted((lum(a), lum(b)))
+        return (lb + 0.05) / (la + 0.05)
+
+    def test_dark_hud_keeps_the_original_ink(self, monkeypatch):
+        from display.round_touch import airport_tile, settings, theme
+
+        monkeypatch.setattr(settings, "radar_hud_dark", lambda: True)
+        accent, muted = airport_tile._tile_ink()
+        assert accent == theme.TAG_TYPE
+        assert muted == theme.MUTED
+
+    def test_light_hud_darkens_the_ink(self, monkeypatch):
+        from display.round_touch import airport_tile, settings, theme
+
+        monkeypatch.setattr(settings, "radar_hud_dark", lambda: False)
+        accent, muted = airport_tile._tile_ink()
+        assert accent != theme.TAG_TYPE
+        assert muted != theme.MUTED
+
+    def test_light_ink_is_actually_readable_on_white(self, monkeypatch):
+        from display.round_touch import airport_tile, settings
+
+        monkeypatch.setattr(settings, "radar_hud_dark", lambda: False)
+        accent, muted = airport_tile._tile_ink()
+        white = (255, 255, 255)
+        assert self._contrast(accent, white) >= 4.5
+        assert self._contrast(muted, white) >= 4.5
+
+    def test_the_old_colours_were_the_problem(self):
+        """Guards the reason for the change, not just the change."""
+        from display.round_touch import theme
+
+        white = (255, 255, 255)
+        assert self._contrast(theme.TAG_TYPE, white) < 2.0
+        assert self._contrast(theme.MUTED, white) < 2.0
