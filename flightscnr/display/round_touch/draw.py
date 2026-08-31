@@ -36,8 +36,27 @@ def render_text_cached(font: "pygame.font.Font", text: str, color) -> pygame.Sur
     return surf
 
 
+def reset_font_cache() -> None:
+    """Drop cached Font objects before pygame tears the font module down.
+
+    ``pygame.quit()`` frees the freetype faces behind every Font, but the
+    Python objects survive in this cache. Rendering through one afterwards
+    dereferences freed memory and segfaults the interpreter — no exception,
+    no traceback. Call this before any quit that may be followed by more
+    drawing (see ``video.init_display``'s driver fallback).
+    """
+    _font_cache.clear()
+    _text_cache.clear()
+
+
 def load_font(size: int, bold=False) -> pygame.font.Font:
     from display.round_touch.ui_fonts import resolve_font_path
+
+    if not pygame.font.get_init():
+        # Someone tore the font module down. Anything still cached points at
+        # freed faces, so rebuild rather than hand back a crash.
+        pygame.font.init()
+        reset_font_cache()
 
     key = (size, bold)
     if key not in _font_cache:
