@@ -27,6 +27,7 @@ hundreds of forked processes here.
 from __future__ import annotations
 
 import logging
+import math
 import random
 
 from display.round_touch import settings
@@ -35,16 +36,19 @@ logger = logging.getLogger("flightscnr.display")
 
 SAMPLE_RATE = 44100
 
-# A real board is busy but not a buzz. Sixteen a second reads as mechanical
-# clatter; past about twenty five it turns into noise.
-MAX_CLICKS_PER_S = 16.0
+# A whole board turning over should sound like a whole board. Twenty eight a
+# second is dense mechanical clatter without turning into a buzz.
+MAX_CLICKS_PER_S = 28.0
 # Ceiling for one frame, so a hitch cannot pay out as a machine-gun burst
 # and cannot ask for more channels than are reserved.
-MAX_PER_FRAME = 3
+MAX_PER_FRAME = 4
 # Clicks per second contributed by each turning tile, before the cap.
-_RATE_PER_TILE = 0.9
+_RATE_PER_TILE = 1.1
 # Channels kept for the clatter, leaving the rest for alerts and the chime.
-_CHANNELS = (5, 6, 7)
+_CHANNELS = (3, 4, 5, 6, 7)
+# Tiles turning at which the clatter reaches full weight. One row is about
+# six, a full board about fifty.
+_FULL_BOARD_TILES = 34.0
 
 _VARIANTS = 6
 _CLICK_MS = 9.0
@@ -133,7 +137,8 @@ def build_click_samples() -> list:
             body[n] = carry
         wave = body * envelope
         peak = float(np.max(np.abs(wave))) or 1.0
-        # Headroom so three overlapping clicks cannot clip the mix.
+        # Headroom: clicks overlap up to MAX_PER_FRAME deep, and they are
+        # short enough that peaks rarely align, but leave room anyway.
         wave = wave / peak * 0.42
         mono = (wave * 32767.0).astype(np.int16)
         samples.append(np.column_stack((mono, mono)))
@@ -166,7 +171,7 @@ def _ready() -> bool:
     return _bank() is not None
 
 
-def _play_click() -> None:
+def _play_click(active_tiles: int = 1) -> None:
     sounds = _bank()
     if not sounds:
         return
@@ -178,7 +183,7 @@ def _play_click() -> None:
             if channel.get_busy():
                 continue
             sound = random.choice(sounds)
-            sound.set_volume(_volume())
+            sound.set_volume(_volume(active_tiles))
             channel.play(sound)
             return
         # Every reserved channel busy: drop the click rather than queue it.
@@ -186,13 +191,28 @@ def _play_click() -> None:
         logger.debug("flap sound: click would not play", exc_info=True)
 
 
-def _volume() -> float:
-    """Master gain, with a little random weight so tiles differ."""
+def density_gain(active_tiles: int) -> float:
+    """How much weight the clatter carries for this many turning tiles.
+
+    A single row changing is a quiet ripple; the whole board resetting is
+    the sound the screen is worth having. Rises quickly at first so one
+    tile is still clearly audible, then flattens near a full board.
+    """
+    tiles = max(0, int(active_tiles))
+    if tiles <= 0:
+        return 0.0
+    share = min(1.0, tiles / _FULL_BOARD_TILES)
+    return round(min(1.0, 0.34 + 0.66 * math.sqrt(share)), 4)
+
+
+def _volume(active_tiles: int) -> float:
+    """Master gain, weighted by density, with a little per-click variation."""
     try:
         gain = settings.apply_master_gain(100) / 100.0
     except Exception:
         gain = 1.0
-    return max(0.0, min(1.0, gain * random.uniform(0.55, 1.0)))
+    gain *= density_gain(active_tiles)
+    return max(0.0, min(1.0, gain * random.uniform(0.72, 1.0)))
 
 
 def tick(*, active_tiles: int, now: float) -> None:
@@ -207,4 +227,4 @@ def tick(*, active_tiles: int, now: float) -> None:
         # First frame of an animation: no elapsed time to credit yet.
         return
     for _ in range(_budget.due(active_tiles=active_tiles, dt=now - previous)):
-        _play_click()
+        _play_click(active_tiles)

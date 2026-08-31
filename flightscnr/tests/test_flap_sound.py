@@ -76,6 +76,31 @@ class TestTheClatterBudget:
         assert budget.due(active_tiles=50, dt=1 / 60) <= flap_sound.MAX_PER_FRAME
 
 
+class TestAFullBoardIsLouder:
+    """A whole board turning over should sound like more than one row."""
+
+    def test_gain_rises_with_the_number_of_tiles(self):
+        one_row = flap_sound.density_gain(6)
+        full_board = flap_sound.density_gain(50)
+        assert full_board > one_row
+
+    def test_gain_never_exceeds_full_scale(self):
+        assert flap_sound.density_gain(500) <= 1.0
+
+    def test_a_single_tile_is_still_audible(self):
+        assert flap_sound.density_gain(1) > 0.2
+
+    def test_a_full_board_is_near_full_scale(self):
+        assert flap_sound.density_gain(50) > 0.9
+
+    def test_a_full_board_clatters_faster_than_one_row(self):
+        def per_second(tiles):
+            budget = flap_sound.ClickBudget()
+            return sum(budget.due(active_tiles=tiles, dt=1 / 60) for _ in range(60))
+
+        assert per_second(50) > per_second(6)
+
+
 class TestWhenItStaysSilent:
     def test_master_mute_silences_it(self, monkeypatch):
         monkeypatch.setattr(flap_sound.settings, "master_sound_enabled", lambda: False)
@@ -176,7 +201,7 @@ class TestTicking:
     def test_a_silent_board_plays_nothing(self, monkeypatch):
         played = []
         monkeypatch.setattr(flap_sound, "enabled", lambda: False)
-        monkeypatch.setattr(flap_sound, "_play_click", lambda: played.append(1))
+        monkeypatch.setattr(flap_sound, "_play_click", lambda tiles=1: played.append(tiles))
         flap_sound.reset()
         flap_sound.tick(active_tiles=40, now=1000.0)
         flap_sound.tick(active_tiles=40, now=1000.5)
@@ -186,7 +211,7 @@ class TestTicking:
         played = []
         monkeypatch.setattr(flap_sound, "enabled", lambda: True)
         monkeypatch.setattr(flap_sound, "_ready", lambda: True)
-        monkeypatch.setattr(flap_sound, "_play_click", lambda: played.append(1))
+        monkeypatch.setattr(flap_sound, "_play_click", lambda tiles=1: played.append(tiles))
         flap_sound.reset()
         flap_sound.tick(active_tiles=40, now=1000.0)
         for step in range(1, 31):
@@ -198,7 +223,7 @@ class TestTicking:
         played = []
         monkeypatch.setattr(flap_sound, "enabled", lambda: True)
         monkeypatch.setattr(flap_sound, "_ready", lambda: True)
-        monkeypatch.setattr(flap_sound, "_play_click", lambda: played.append(1))
+        monkeypatch.setattr(flap_sound, "_play_click", lambda tiles=1: played.append(tiles))
         flap_sound.reset()
         flap_sound.tick(active_tiles=50, now=9999.0)
         assert len(played) <= flap_sound.MAX_PER_FRAME

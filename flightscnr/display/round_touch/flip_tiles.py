@@ -47,6 +47,8 @@ GLYPH = (245, 246, 248)
 # The board's own yellow, for the header and the airport code tiles.
 YELLOW = (255, 206, 0)
 HINGE = (0, 0, 0, 120)
+# The visible split between the two cards, drawn over the glyph.
+SEAM = (118, 122, 130, 205)
 HEADING = YELLOW
 SEPARATOR = (120, 124, 132)
 # Segment display for the clock, like the red readout on a terminal board.
@@ -125,7 +127,7 @@ def render_tile(
         lower, bottom_color, pygame.Rect(0, 0, width, height), border_radius=radius
     )
     tile.blit(lower, (0, half), pygame.Rect(0, half, width, height - half))
-    # The hinge: the seam the flaps rotate about.
+    # Shadow under the seam, giving the upper card an edge to sit on.
     hinge = pygame.Surface((width, max(1, theme.s(1))), pygame.SRCALPHA)
     hinge.fill(HINGE)
     tile.blit(hinge, (0, half))
@@ -140,6 +142,13 @@ def render_tile(
                 (height - glyph.get_height()) // 2,
             ),
         )
+
+    # The seam goes on last, over the glyph. A letter interrupted by the
+    # split is what says "two cards"; one painted intact just looks like a
+    # tile with a line behind it.
+    seam = pygame.Surface((width, max(1, theme.s(1))), pygame.SRCALPHA)
+    seam.fill(SEAM)
+    tile.blit(seam, (0, half))
 
     _tile_cache[key] = tile
     return tile
