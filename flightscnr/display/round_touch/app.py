@@ -823,7 +823,10 @@ class RoundTouchDisplay:
             events = flip_board_data.tracker().observe(flights, airports, now)
             if events and self.screen == SCREEN_FLIP_BOARD:
                 self._safe_draw()
-            if events or now - self._flip_board_saved_at >= self._FLIP_BOARD_SAVE_S:
+            # Write only when something actually landed or left. The old
+            # timer rewrote an unchanged file every two minutes, which is
+            # ~720 pointless SD writes a day on a quiet field.
+            if events:
                 self._flip_board_saved_at = now
                 flip_board_data.save()
         except Exception:

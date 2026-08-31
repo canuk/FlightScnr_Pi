@@ -264,6 +264,9 @@ LIST_PICKER_KINDS = frozenset(
         "airport_icon_style",
         "airport_size",
         "zoom_position",
+        # Missing here meant the Display > Rim targets row opened a picker
+        # with a title, a close button, and no choices in it.
+        "rim_style",
     }
 )
 _LIST_PICKER_TITLES = {

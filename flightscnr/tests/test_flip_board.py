@@ -512,3 +512,67 @@ class TestPersistence(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestNearestAirportShortcut(unittest.TestCase):
+    """The degree-box reject must not change which field is chosen.
+
+    Every aircraft is compared with every field in view, which at a wide zoom
+    was ~18k haversines per sample and 48 ms on the display thread. The box
+    discards nearly all of them first, so it has to agree with the slow scan
+    everywhere — including across the antimeridian and at high latitude.
+    """
+
+    @staticmethod
+    def _brute(flight, airports, max_nm):
+        lat = flight["plane_latitude"]
+        lon = flight["plane_longitude"]
+        best, best_nm = None, float(max_nm)
+        for a in airports:
+            d = flip_board.distance_nm(lat, lon, a["lat"], a["lon"])
+            if d <= best_nm:
+                best_nm, best = d, a
+        return best
+
+    def _check(self, lat, lon, airports, max_nm=flip_board.DEFAULT_RADIUS_NM):
+        f = plane(plane_latitude=lat, plane_longitude=lon)
+        fast = flip_board.nearest_airport(f, airports, max_nm)
+        slow = self._brute(f, airports, max_nm)
+        self.assertEqual(
+            (fast or {}).get("ident"), (slow or {}).get("ident"),
+            f"box and scan disagree at {lat},{lon}",
+        )
+
+    def test_matches_a_full_scan_around_a_field(self):
+        fields = [
+            {"ident": "A", "lat": 33.734, "lon": -117.023},
+            {"ident": "B", "lat": 33.744, "lon": -117.023},
+            {"ident": "C", "lat": 34.500, "lon": -117.500},
+        ]
+        for dlat in (-0.02, -0.008, 0.0, 0.008, 0.02):
+            for dlon in (-0.02, -0.008, 0.0, 0.008, 0.02):
+                self._check(33.734 + dlat, -117.023 + dlon, fields)
+
+    def test_matches_a_full_scan_across_the_antimeridian(self):
+        fields = [
+            {"ident": "W", "lat": 0.0, "lon": 179.995},
+            {"ident": "E", "lat": 0.0, "lon": -179.995},
+        ]
+        for lon in (179.99, 179.999, 180.0, -179.999, -179.99):
+            self._check(0.0, lon, fields)
+
+    def test_matches_a_full_scan_at_high_latitude(self):
+        fields = [
+            {"ident": "N1", "lat": 78.0, "lon": 15.0},
+            {"ident": "N2", "lat": 78.0, "lon": 15.2},
+        ]
+        for dlon in (-0.2, -0.05, 0.0, 0.05, 0.2):
+            self._check(78.0, 15.0 + dlon, fields)
+
+    def test_still_rejects_everything_out_of_range(self):
+        fields = [{"ident": "A", "lat": 33.734, "lon": -117.023}]
+        self.assertIsNone(
+            flip_board.nearest_airport(
+                plane(plane_latitude=34.5, plane_longitude=-117.5), fields
+            )
+        )

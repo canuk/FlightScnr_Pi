@@ -164,18 +164,35 @@ def in_movement_band(altitude_ft: float, airport: dict) -> bool:
 def nearest_airport(
     flight: dict, airports: Iterable[dict], max_nm: float = DEFAULT_RADIUS_NM
 ) -> dict | None:
-    """Closest airport within ``max_nm`` of the aircraft, else None."""
+    """Closest airport within ``max_nm`` of the aircraft, else None.
+
+    Rejects on a degree box before measuring. Every aircraft is compared with
+    every field in view, so at a wide zoom that was ~18k haversines every
+    sample — 48 ms on the display thread. The box discards nearly all of them
+    with two subtractions, since the radius is well under a nautical mile.
+    """
     pos = _coords(flight)
     if pos is None:
         return None
     lat, lon = pos
     best: dict | None = None
     best_nm = float(max_nm)
+    # A degree of latitude is 60 nm; longitude shrinks with the cosine.
+    lat_window = best_nm / 60.0
+    cos_lat = max(0.01, math.cos(math.radians(lat)))
+    lon_window = lat_window / cos_lat
     for airport in airports or []:
         try:
             alat = float(airport["lat"])
             alon = float(airport["lon"])
         except (KeyError, TypeError, ValueError):
+            continue
+        if abs(alat - lat) > lat_window:
+            continue
+        dlon = abs(alon - lon)
+        if dlon > 180.0:
+            dlon = 360.0 - dlon
+        if dlon > lon_window:
             continue
         dist = distance_nm(lat, lon, alat, alon)
         if dist <= best_nm:
