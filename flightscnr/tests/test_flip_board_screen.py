@@ -531,3 +531,61 @@ class DirectionTapTests(ScreenTestCase):
     def test_a_tap_away_from_the_words_is_not_a_direction(self):
         screen = self._draw()
         self.assertIsNone(screen.tap_direction(4, 4))
+
+
+class MeridiemTests(ScreenTestCase):
+    """Times carry an A or P on a 12-hour clock.
+
+    The board holds twelve hours of movements, so "07:41" alone is ambiguous
+    once the history wraps past noon.
+    """
+
+    def test_morning_and_afternoon(self):
+        import time as _time
+
+        from display.round_touch.screens import flip_board
+
+        morning = _time.mktime((2026, 8, 31, 7, 41, 0, 0, 0, -1))
+        evening = _time.mktime((2026, 8, 31, 19, 41, 0, 0, 0, -1))
+        self.assertEqual(flip_board.clock_meridiem(morning, twelve_hour=True), "A")
+        self.assertEqual(flip_board.clock_meridiem(evening, twelve_hour=True), "P")
+
+    def test_noon_and_midnight_fall_the_right_way(self):
+        import time as _time
+
+        from display.round_touch.screens import flip_board
+
+        noon = _time.mktime((2026, 8, 31, 12, 0, 0, 0, 0, -1))
+        midnight = _time.mktime((2026, 8, 31, 0, 0, 0, 0, 0, -1))
+        self.assertEqual(flip_board.clock_meridiem(noon, twelve_hour=True), "P")
+        self.assertEqual(flip_board.clock_meridiem(midnight, twelve_hour=True), "A")
+
+    def test_a_24_hour_clock_has_no_suffix(self):
+        from display.round_touch.screens import flip_board
+
+        self.assertEqual(flip_board.clock_meridiem(0, twelve_hour=False), "")
+
+    def test_the_row_makes_room_for_it(self):
+        from display.round_touch import settings
+        from display.round_touch.screens import flip_board
+
+        saved = settings.use_12hr_clock
+        try:
+            settings.use_12hr_clock = lambda: True
+            wide = flip_board.row_width()
+            settings.use_12hr_clock = lambda: False
+            narrow = flip_board.row_width()
+        finally:
+            settings.use_12hr_clock = saved
+        self.assertGreater(wide, narrow, "no room reserved for the A/P tile")
+
+    def test_rows_still_fit_the_dial_with_the_suffix(self):
+        from display.round_touch import settings
+        from display.round_touch.screens import flip_board
+
+        saved = settings.use_12hr_clock
+        try:
+            settings.use_12hr_clock = lambda: True
+            self.assertTrue(flip_board.fits_in_circle())
+        finally:
+            settings.use_12hr_clock = saved

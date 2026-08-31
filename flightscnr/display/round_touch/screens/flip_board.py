@@ -237,15 +237,31 @@ def rows_for(airport: dict | None) -> list[dict]:
     return board.get(_direction, [])[:ROWS]
 
 
+def clock_meridiem(epoch: float, *, twelve_hour: bool | None = None) -> str:
+    """``A`` or ``P`` for a 12-hour time, empty on a 24-hour clock.
+
+    A board showing "07:41" with no meridiem is ambiguous once the day is
+    long enough for the twelve-hour history to wrap.
+    """
+    if twelve_hour is None:
+        # settings.clock_12hr does not exist — the old call fell into the
+        # except and forced 12-hour regardless of the user's setting.
+        twelve_hour = bool(settings.use_12hr_clock())
+    if not twelve_hour:
+        return ""
+    try:
+        stamp = time.localtime(float(epoch))
+    except (TypeError, ValueError, OSError):
+        return ""
+    return "A" if stamp.tm_hour < 12 else "P"
+
+
 def format_clock(epoch: float, *, twelve_hour: bool | None = None) -> str:
     """``HH:MM`` in local time, matching the user's clock preference."""
     if twelve_hour is None:
-        try:
-            from display.round_touch import settings
-
-            twelve_hour = bool(settings.clock_12hr())
-        except Exception:
-            twelve_hour = True
+        # settings.clock_12hr does not exist — the old call fell into the
+        # except and forced 12-hour regardless of the user's setting.
+        twelve_hour = bool(settings.use_12hr_clock())
     try:
         stamp = time.localtime(float(epoch))
     except (TypeError, ValueError, OSError):
@@ -256,14 +272,26 @@ def format_clock(epoch: float, *, twelve_hour: bool | None = None) -> str:
 # -- geometry --------------------------------------------------------------
 
 
+def meridiem_slots() -> int:
+    """One extra tile for the A/P suffix on a 12-hour clock."""
+    return 1 if settings.use_12hr_clock() else 0
+
+
 def row_width() -> int:
-    """Full pixel width of one board row (id tiles, gap, then HH:MM)."""
+    """Full pixel width of one board row (id tiles, gap, then HH:MM A)."""
+    extra = meridiem_slots()
     return (
         flip_tiles.row_width(ID_SLOTS, ROW_TILE_SCALE)
         + _id_time_gap()
         + flip_tiles.row_width(2, ROW_TILE_SCALE)
         + _separator_width()
         + flip_tiles.row_width(2, ROW_TILE_SCALE)
+        + (
+            flip_tiles.tile_gap(ROW_TILE_SCALE)
+            + flip_tiles.row_width(extra, ROW_TILE_SCALE)
+            if extra
+            else 0
+        )
     )
 
 
@@ -513,6 +541,8 @@ def _draw_row(
     ident_text = str((event or {}).get("id") or "")[:ID_SLOTS]
     clock = format_clock(event.get("at") or 0) if event else ""
     hours, _, minutes = clock.partition(":")
+    extra = meridiem_slots()
+    suffix = clock_meridiem(event.get("at") or 0) if (event and extra) else ""
 
     # One flap sequence per row: pad each field so column positions — and so
     # the left-to-right cascade — line up with what is drawn.
@@ -520,11 +550,13 @@ def _draw_row(
         ident_text.ljust(ID_SLOTS)
         + hours.rjust(2)
         + minutes.ljust(2)
+        + (suffix.ljust(extra) if extra else "")
     )
     shown = _flap_text(row, target, now)
     ident_text = shown[:ID_SLOTS].rstrip()
     hours = shown[ID_SLOTS:ID_SLOTS + 2].strip()
     minutes = shown[ID_SLOTS + 2:ID_SLOTS + 4].strip()
+    suffix = shown[ID_SLOTS + 4:ID_SLOTS + 4 + extra].strip() if extra else ""
 
     x = (theme.SIZE - row_width()) // 2
     flip_tiles.draw_tiles(
@@ -537,6 +569,13 @@ def _draw_row(
         flip_tiles.draw_separator(surface, x, y, _separator_width())
     x += _separator_width()
     flip_tiles.draw_tiles(surface, minutes, x, y, slots=2, scale=ROW_TILE_SCALE)
+    if extra:
+        x += flip_tiles.row_width(2, ROW_TILE_SCALE) + flip_tiles.tile_gap(
+            ROW_TILE_SCALE
+        )
+        flip_tiles.draw_tiles(
+            surface, suffix, x, y, slots=extra, scale=ROW_TILE_SCALE
+        )
 
 
 def _draw_empty_state(surface: pygame.Surface, message: str) -> None:
