@@ -11,7 +11,9 @@
 
 from __future__ import annotations
 
+import json
 import logging
+import os
 import time
 from datetime import date, datetime, timedelta
 
@@ -21,6 +23,64 @@ _CACHE: dict = {"ts": 0.0, "payload": None, "date": None}
 _CACHE_TTL_S = 1800  # Match half-hour current-weather cadence
 _FAIL_RETRY_S = 120
 _last_current_slot_key: str | None = None
+
+DATA_DIR = os.environ.get("FLIGHTSCNR_DATA_DIR", "/var/lib/flightscnr")
+CACHE_PATH = os.path.join(DATA_DIR, "weather_cache.json")
+# Keep a disk copy so a restart does not blank the weather. Tomorrow.io is
+# rate limited to one call every half hour, so an in-memory-only cache meant
+# every restart — and every OTA update — left the clock and forecast screens
+# empty until that window reopened.
+_DISK_MAX_AGE_S = 6 * 3600
+
+
+def _save_cache() -> None:
+    payload = _CACHE.get("payload")
+    if not payload:
+        return
+    try:
+        os.makedirs(DATA_DIR, exist_ok=True)
+        tmp = CACHE_PATH + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(
+                {
+                    "ts": float(_CACHE.get("ts") or 0.0),
+                    "date": str(_CACHE.get("date") or ""),
+                    "payload": payload,
+                },
+                fh,
+                separators=(",", ":"),
+            )
+        os.replace(tmp, CACHE_PATH)
+    except (OSError, TypeError, ValueError) as exc:
+        logger.debug("Could not persist weather cache: %s", exc)
+
+
+def _load_cache() -> None:
+    """Seed the cache from disk at startup, if it is recent enough."""
+    try:
+        with open(CACHE_PATH, encoding="utf-8") as fh:
+            saved = json.load(fh)
+    except (OSError, json.JSONDecodeError, TypeError):
+        return
+    if not isinstance(saved, dict):
+        return
+    payload = saved.get("payload")
+    if not isinstance(payload, dict):
+        return
+    stamp = float(saved.get("ts") or 0.0)
+    if stamp <= 0 or (time.time() - stamp) > _DISK_MAX_AGE_S:
+        return
+    _CACHE["payload"] = payload
+    _CACHE["date"] = saved.get("date") or None
+    # Deliberately keep the original timestamp: the reading is shown right
+    # away, and its age still drives the next refresh.
+    _CACHE["ts"] = stamp
+    logger.info(
+        "Weather restored from disk (%.0f min old)", (time.time() - stamp) / 60
+    )
+
+
+_load_cache()
 
 
 def _today() -> date:
@@ -247,6 +307,7 @@ def refresh(force: bool = False) -> dict | None:
         _CACHE["ts"] = now
         _CACHE["date"] = today
         _CACHE["payload"] = payload
+        _save_cache()
         return payload
 
     temp, humidity = temp_hum if temp_hum else (None, None)
@@ -277,6 +338,7 @@ def refresh(force: bool = False) -> dict | None:
     _CACHE["ts"] = now
     _CACHE["date"] = today
     _CACHE["payload"] = payload
+    _save_cache()
     return payload
 
 
@@ -414,6 +476,7 @@ def refresh_current(force: bool = False) -> dict | None:
     _CACHE["ts"] = now
     _CACHE["date"] = today
     _CACHE["payload"] = payload
+    _save_cache()
     return payload
 
 
