@@ -80,8 +80,32 @@ class TestAScrollDoesNotTap:
 
     def test_a_scroll_just_over_the_deadzone_emits_no_tap(self):
         touch = input_handler.TouchInput()
-        _slow_drag(touch, 300, 400, dy=-(input_handler.SCROLL_TAP_DEADZONE_PX + 3))
+        _slow_drag(touch, 300, 400, dy=-(input_handler.scroll_tap_deadzone_px() + 3))
         assert touch.consume_tap() is None
+
+
+class TestTheDeadzoneLeavesRoomForAFinger:
+    """A fixed 6 px killed taps on the device.
+
+    A tap may travel up to the swipe threshold, which is 70 px at a 1080
+    framebuffer. A 6 px deadzone is 8% of that, so an ordinary finger roll
+    suppressed the tap on every screen.
+    """
+
+    def test_it_scales_with_the_swipe_threshold(self):
+        deadzone = input_handler.scroll_tap_deadzone_px()
+        threshold = input_handler.gesture_threshold_px()
+        assert deadzone < threshold, "a scroll cannot be stricter than a swipe"
+        assert deadzone >= threshold * 0.2, f"{deadzone}px is finger noise"
+
+    def test_it_never_drops_below_a_usable_floor(self):
+        assert input_handler.scroll_tap_deadzone_px() >= 10
+
+    def test_a_finger_roll_still_taps(self):
+        """Ten pixels of drift on a press is a tap, not a scroll."""
+        touch = input_handler.TouchInput()
+        _drag(touch, [(300, 400), (302, 404), (301, 408), (300, 409)])
+        assert touch.consume_tap() is not None
 
 
 class TestARealTapStillWorks:
@@ -98,7 +122,7 @@ class TestARealTapStillWorks:
 
     def test_a_tap_at_the_deadzone_edge_still_taps(self):
         touch = input_handler.TouchInput()
-        _slow_drag(touch, 300, 400, dy=input_handler.SCROLL_TAP_DEADZONE_PX - 2, steps=2)
+        _slow_drag(touch, 300, 400, dy=input_handler.scroll_tap_deadzone_px() - 2, steps=2)
         assert touch.consume_tap() is not None
 
 
