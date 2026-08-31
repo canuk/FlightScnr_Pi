@@ -501,7 +501,13 @@ def _composited_bg_surface() -> pygame.Surface | None:
     composite = pygame.Surface((theme.SIZE, theme.SIZE))
     composite.fill(theme.BG)
     composite.blit(tile, (0, 0))
-    _composite_bg = composite.convert()
+    try:
+        # Display format blits fastest, but convert() needs a live display —
+        # it raises after a pygame.quit(), same trap as the font cache.
+        composite = composite.convert()
+    except pygame.error:
+        pass
+    _composite_bg = composite
     _composite_bg_key = key
     return _composite_bg
 
