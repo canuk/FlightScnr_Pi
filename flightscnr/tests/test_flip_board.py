@@ -37,7 +37,7 @@ def plane(**kwargs) -> dict:
         "plane": "C172",
         "plane_latitude": KHWD["lat"],
         "plane_longitude": KHWD["lon"],
-        "altitude": 1200,
+        "altitude": 300,
         "vertical_speed": 0,
         "ground_speed": 90,
     }
@@ -77,18 +77,27 @@ class TestGeometry(unittest.TestCase):
             flip_board.nearest_airport({"altitude": 500}, AIRPORTS)
         )
 
-    def test_ceiling_uses_field_elevation_when_present(self):
+    def test_height_is_measured_above_the_field(self):
         high = {"ident": "KABQ", "lat": 35.0, "lon": -106.6, "elevation_ft": 5355}
-        self.assertEqual(
-            flip_board.airport_ceiling_ft(high),
-            5355 + flip_board.PATTERN_CEILING_FT,
+        self.assertEqual(flip_board.height_above_field_ft(5600, high), 245.0)
+        self.assertTrue(flip_board.in_movement_band(5600, high))
+        # The same MSL altitude is a mile up over a sea-level field.
+        self.assertFalse(
+            flip_board.in_movement_band(5600, {"ident": "X", "elevation_ft": 0})
         )
 
-    def test_ceiling_falls_back_to_sea_level(self):
-        self.assertEqual(
-            flip_board.airport_ceiling_ft({"ident": "X"}),
-            flip_board.PATTERN_CEILING_FT,
-        )
+    def test_elevated_field_landing_is_not_judged_against_sea_level(self):
+        """Regression: KHMT sits at 1512 ft, so an MSL test never sees a
+        landing there. 1800 ft MSL is under 300 ft above that field."""
+        khmt = {"ident": "KHMT", "lat": 33.734, "lon": -117.023, "elevation_ft": 1512}
+        self.assertTrue(flip_board.in_movement_band(1800, khmt))
+
+    def test_unknown_elevation_is_not_guessed(self):
+        """A cache built before elevation was parsed must not be read as sea
+        level — that would misjudge every elevated field."""
+        self.assertIsNone(flip_board.field_elevation_ft({"ident": "X"}))
+        self.assertIsNone(flip_board.height_above_field_ft(300, {"ident": "X"}))
+        self.assertFalse(flip_board.in_movement_band(300, {"ident": "X"}))
 
 
 class TestFlightLabel(unittest.TestCase):
@@ -123,7 +132,7 @@ class TestDepartureDetection(unittest.TestCase):
 
     def test_first_contact_climbing_over_the_field_is_a_departure(self):
         events = self.tracker.observe(
-            [plane(altitude=1100, vertical_speed=800)], AIRPORTS, now=1000.0
+            [plane(altitude=200, vertical_speed=800)], AIRPORTS, now=1000.0
         )
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0]["bucket"], "departures")
@@ -132,13 +141,13 @@ class TestDepartureDetection(unittest.TestCase):
 
     def test_departure_is_recorded_only_once(self):
         self.tracker.observe(
-            [plane(altitude=1100, vertical_speed=800)], AIRPORTS, now=1000.0
+            [plane(altitude=200, vertical_speed=800)], AIRPORTS, now=1000.0
         )
         self.tracker.observe(
-            [plane(altitude=1600, vertical_speed=800)], AIRPORTS, now=1005.0
+            [plane(altitude=400, vertical_speed=800)], AIRPORTS, now=1005.0
         )
         self.tracker.observe(
-            [plane(altitude=2100, vertical_speed=800)], AIRPORTS, now=1010.0
+            [plane(altitude=900, vertical_speed=800)], AIRPORTS, now=1010.0
         )
         board = self.tracker.board("KHWD")
         self.assertEqual(len(board["departures"]), 1)
@@ -158,18 +167,18 @@ class TestDepartureDetection(unittest.TestCase):
 
     def test_level_traffic_over_the_field_is_not_a_departure(self):
         self.tracker.observe(
-            [plane(altitude=1200, vertical_speed=0)], AIRPORTS, now=1000.0
+            [plane(altitude=300, vertical_speed=0)], AIRPORTS, now=1000.0
         )
         self.assertEqual(self.tracker.board("KHWD")["departures"], [])
 
-    def test_a_climb_above_the_pattern_ceiling_is_ignored(self):
+    def test_a_climb_above_the_movement_band_is_ignored(self):
         high = plane(altitude=20000, vertical_speed=1500)
         self.tracker.observe([high], AIRPORTS, now=1000.0)
         self.assertEqual(self.tracker.board("KHWD")["departures"], [])
 
     def test_departure_records_the_aircraft_type(self):
         self.tracker.observe(
-            [plane(altitude=1100, vertical_speed=800, plane="P28A")],
+            [plane(altitude=200, vertical_speed=800, plane="P28A")],
             AIRPORTS,
             now=1000.0,
         )
@@ -181,7 +190,7 @@ class TestArrivalDetection(unittest.TestCase):
         self.tracker = flip_board.FlipBoardTracker()
 
     def _land(self, now=1000.0, **kwargs):
-        descending = plane(altitude=1100, vertical_speed=-600, **kwargs)
+        descending = plane(altitude=300, vertical_speed=-600, **kwargs)
         self.tracker.observe([descending], AIRPORTS, now=now)
         # Feed goes quiet: the aircraft dropped below the altitude filter.
         self.tracker.observe([], AIRPORTS, now=now + flip_board.GONE_S + 1)
@@ -199,20 +208,20 @@ class TestArrivalDetection(unittest.TestCase):
 
     def test_a_short_feed_gap_is_not_an_arrival(self):
         self.tracker.observe(
-            [plane(altitude=1100, vertical_speed=-600)], AIRPORTS, now=1000.0
+            [plane(altitude=300, vertical_speed=-600)], AIRPORTS, now=1000.0
         )
         self.tracker.observe([], AIRPORTS, now=1000.0 + flip_board.GONE_S - 5)
         self.assertEqual(self.tracker.board("KHWD")["arrivals"], [])
 
     def test_a_descent_that_levels_off_and_leaves_is_not_an_arrival(self):
         self.tracker.observe(
-            [plane(altitude=1400, vertical_speed=-600)], AIRPORTS, now=1000.0
+            [plane(altitude=400, vertical_speed=-600)], AIRPORTS, now=1000.0
         )
         # Levels off and flies away from the field.
         away = plane(
             plane_latitude=KHWD["lat"] + 0.5,
             plane_longitude=KHWD["lon"],
-            altitude=1400,
+            altitude=400,
             vertical_speed=0,
         )
         self.tracker.observe([away], AIRPORTS, now=1010.0)
@@ -221,10 +230,10 @@ class TestArrivalDetection(unittest.TestCase):
 
     def test_a_go_around_cancels_the_pending_arrival(self):
         self.tracker.observe(
-            [plane(altitude=1100, vertical_speed=-600)], AIRPORTS, now=1000.0
+            [plane(altitude=300, vertical_speed=-600)], AIRPORTS, now=1000.0
         )
         self.tracker.observe(
-            [plane(altitude=1400, vertical_speed=900)], AIRPORTS, now=1010.0
+            [plane(altitude=900, vertical_speed=900)], AIRPORTS, now=1010.0
         )
         self.tracker.observe([], AIRPORTS, now=1010.0 + flip_board.GONE_S + 1)
         self.assertEqual(self.tracker.board("KHWD")["arrivals"], [])
@@ -244,7 +253,7 @@ class TestArrivalDetection(unittest.TestCase):
         near_oak = plane(
             plane_latitude=KOAK["lat"],
             plane_longitude=KOAK["lon"],
-            altitude=900,
+            altitude=300,
             vertical_speed=-600,
         )
         self.tracker.observe([near_oak], AIRPORTS, now=1000.0)
@@ -263,7 +272,7 @@ class TestBoardHousekeeping(unittest.TestCase):
                 plane(
                     icao_hex=f"HEX{tail}",
                     registration=tail,
-                    altitude=1100,
+                    altitude=200,
                     vertical_speed=800,
                 )
             ],
@@ -319,7 +328,7 @@ class TestBoardHousekeeping(unittest.TestCase):
 
     def test_airports_without_ident_are_skipped(self):
         self.tracker.observe(
-            [plane(altitude=1100, vertical_speed=800)],
+            [plane(altitude=200, vertical_speed=800)],
             [{"lat": KHWD["lat"], "lon": KHWD["lon"]}],
             now=1000.0,
         )
@@ -330,7 +339,7 @@ class TestPersistence(unittest.TestCase):
     def test_round_trips_through_a_dict(self):
         tracker = flip_board.FlipBoardTracker()
         tracker.observe(
-            [plane(altitude=1100, vertical_speed=800)], AIRPORTS, now=1000.0
+            [plane(altitude=200, vertical_speed=800)], AIRPORTS, now=1000.0
         )
         blob = tracker.to_dict()
 
@@ -354,7 +363,7 @@ class TestPersistence(unittest.TestCase):
     def test_save_writes_the_state_file(self):
         tracker = flip_board.FlipBoardTracker()
         tracker.observe(
-            [plane(altitude=1100, vertical_speed=800)], AIRPORTS, now=1000.0
+            [plane(altitude=200, vertical_speed=800)], AIRPORTS, now=1000.0
         )
         flip_board.save(tracker)
         self.assertTrue(os.path.isfile(flip_board.STATE_PATH))

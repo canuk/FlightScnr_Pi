@@ -49,10 +49,14 @@ DATA_DIR = os.environ.get("FLIGHTSCNR_DATA_DIR", "/var/lib/flightscnr")
 STATE_PATH = os.path.join(DATA_DIR, "flip_board.json")
 STATE_VERSION = 1
 
-# How close an aircraft must be to the field to count as its traffic.
-DEFAULT_RADIUS_NM = 5.0
-# Height above field inside which a climb/descent is a movement, not an overflight.
-PATTERN_CEILING_FT = 5000
+# How close an aircraft must be to the field to count as its traffic. Half a
+# mile keeps the box over the runway environment, so only traffic actually
+# using the field qualifies.
+DEFAULT_RADIUS_NM = 0.5
+# Height ABOVE THE FIELD inside which a climb or descent is a movement rather
+# than an overflight. Compared against field elevation, not sea level: KHMT
+# sits at 1512 ft, so an MSL test would never see a landing there.
+MOVEMENT_CEILING_AGL_FT = 500
 # Vertical rate gates (feet per minute).
 CLIMB_FPM = 300
 DESCENT_FPM = -300
@@ -125,13 +129,36 @@ def _int_field(flight: dict, key: str) -> int:
         return 0
 
 
-def airport_ceiling_ft(airport: dict) -> float:
-    """Altitude below which traffic near this field counts as a movement."""
+def field_elevation_ft(airport: dict) -> float | None:
+    """Field elevation, or None when this airport record does not carry one.
+
+    Caches built before elevation was parsed have no value. Guessing sea level
+    there would silently misjudge every elevated field, so callers skip the
+    airport instead and wait for the cache to refresh.
+    """
+    if not airport or "elevation_ft" not in airport:
+        return None
     try:
-        elevation = float(airport.get("elevation_ft") or 0.0)
+        return float(airport["elevation_ft"])
     except (TypeError, ValueError):
-        elevation = 0.0
-    return elevation + PATTERN_CEILING_FT
+        return None
+
+
+def height_above_field_ft(altitude_ft: float, airport: dict) -> float | None:
+    """Aircraft height above this field, or None when elevation is unknown."""
+    elevation = field_elevation_ft(airport)
+    if elevation is None:
+        return None
+    try:
+        return float(altitude_ft) - elevation
+    except (TypeError, ValueError):
+        return None
+
+
+def in_movement_band(altitude_ft: float, airport: dict) -> bool:
+    """True when the aircraft is low enough over the field to be a movement."""
+    agl = height_above_field_ft(altitude_ft, airport)
+    return agl is not None and agl <= MOVEMENT_CEILING_AGL_FT
 
 
 def nearest_airport(
@@ -226,7 +253,7 @@ class FlipBoardTracker:
         vs = _int_field(flight, "vertical_speed")
         airport = nearest_airport(flight, airports, self.radius_nm)
         ident = str(airport.get("ident") or "").upper() if airport else ""
-        low = bool(airport) and alt <= airport_ceiling_ft(airport)
+        low = bool(airport) and in_movement_band(alt, airport)
 
         track = self._tracks.get(key)
         if track is None:

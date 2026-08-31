@@ -36,7 +36,7 @@ CSV_URL     = "https://raw.githubusercontent.com/datasets/airport-codes/master/d
 # v4: persist OurAirports ``type`` for radar major-airport filtering
 # v3: store municipality name for route labels
 # v2: confirmed coordinates field is "latitude, longitude" order
-CACHE_VERSION = 5
+CACHE_VERSION = 6   # 6: field elevation_ft, needed for height above field
 
 # Types drawn on the radar when "show airports" is on (no labels / no runways).
 # Include small public fields — many GA strips are tagged small_airport but still
