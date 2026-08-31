@@ -129,6 +129,13 @@ def apply(action: str) -> None:
             lofi_audio.disable_track(name, skip=True)
 
 
+def stamp_key():
+    """What the drawn tile depends on, so a stamp can be cached per frame."""
+    from utilities import lofi_audio
+
+    return (_track, lofi_audio.is_paused())
+
+
 def display_name(filename: str | None) -> str:
     """Track name without its extension."""
     name = str(filename or "")
@@ -139,7 +146,8 @@ def display_name(filename: str | None) -> str:
 
 # -- drawing ---------------------------------------------------------------
 
-_FILL = (16, 18, 22, 245)
+# Opaque: the radar behind must not read through the panel.
+_FILL = (16, 18, 22, 255)
 _DANGER = (188, 64, 52)
 
 

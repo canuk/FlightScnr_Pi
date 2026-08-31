@@ -262,12 +262,15 @@ class TestWiring:
         assert "lofi_controls.hit_title" in source
         assert "lofi_tile.open_tile" in source
 
-    def test_the_radar_draws_the_tile(self):
+    def test_the_radar_screen_does_not_paint_it_to_the_draw_surface(self):
+        """That surface is not what the radar presents. See TestItReachesThePanel."""
         import inspect
 
         from display.round_touch import app as app_mod
 
-        assert "lofi_tile.draw" in inspect.getsource(app_mod.RoundTouchDisplay._draw)
+        assert "lofi_tile.draw" not in inspect.getsource(
+            app_mod.RoundTouchDisplay._draw
+        )
 
     def test_the_tile_is_ticked(self):
         import inspect
@@ -276,3 +279,87 @@ class TestWiring:
 
         source = inspect.getsource(app_mod.RoundTouchDisplay)
         assert "lofi_tile.tick" in source
+
+
+def _real_rotation():
+    """The rotation module loaded from file.
+
+    test_gesture_handler replaces display.round_touch.rotation with a stub in
+    sys.modules at import time and never restores it, so a plain import here
+    returns that stub. Loading from the path sidesteps it without disturbing
+    the stub those tests rely on.
+    """
+    import importlib.util
+    import pathlib
+
+    path = (
+        pathlib.Path(__file__).resolve().parent.parent
+        / "display" / "round_touch" / "rotation.py"
+    )
+    spec = importlib.util.spec_from_file_location("rotation_under_test", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class TestItReachesThePanel:
+    """The tile is stamped by rotation, the way every radar overlay is.
+
+    The radar present path shows a cached frame layer plus the sweep, not
+    the drawing surface. A tile painted onto that surface was repainted
+    every frame and never reached the panel. Suppressing the fast path
+    instead cost a full-frame rotate per frame: 100% of one core, and the
+    display stopped updating. rotation stamps the pill and the METAR tile
+    for exactly this reason.
+    """
+
+    def test_rotation_stamps_it(self):
+        assert hasattr(_real_rotation(), "_blit_lofi_tile")
+
+    def test_the_radar_present_path_calls_the_stamp(self):
+        import inspect
+
+        source = inspect.getsource(_real_rotation().present_radar_sweep)
+        assert "_blit_lofi_tile" in source
+
+    def test_the_fast_path_is_left_alone(self):
+        """Suppressing it froze the display at full CPU."""
+        import inspect
+
+        from display.round_touch import app as app_mod
+
+        source = inspect.getsource(app_mod.RoundTouchDisplay._present)
+        assert "lofi_tile" not in source
+
+    def test_a_closed_tile_stamps_nothing(self):
+        from display.round_touch import theme
+
+        lofi_tile.dismiss()
+        display = pygame.Surface((theme.SIZE, theme.SIZE))
+        assert _real_rotation()._blit_lofi_tile(display, (0, 0), 0) is None
+
+    def test_an_open_tile_stamps_a_rect(self):
+        from display.round_touch import theme
+
+        lofi_tile.open_tile()
+        display = pygame.Surface((theme.SIZE, theme.SIZE))
+        dirty = _real_rotation()._blit_lofi_tile(display, (0, 0), 0)
+        assert dirty is not None and dirty.width > 0
+
+    def test_it_stamps_under_rotation_too(self):
+        """The device runs at 90 degrees."""
+        from display.round_touch import theme
+
+        lofi_tile.open_tile()
+        display = pygame.Surface((theme.SIZE, theme.SIZE))
+        assert _real_rotation()._blit_lofi_tile(display, (0, 0), 90) is not None
+
+    def test_the_stamp_puts_pixels_on_the_display(self):
+        from display.round_touch import theme
+
+        lofi_tile.open_tile()
+        display = pygame.Surface((theme.SIZE, theme.SIZE))
+        display.fill((0, 0, 0))
+        before = pygame.image.tostring(display, "RGB")
+        _real_rotation()._blit_lofi_tile(display, (0, 0), 90)
+        assert pygame.image.tostring(display, "RGB") != before

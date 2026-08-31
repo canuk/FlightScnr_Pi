@@ -1017,7 +1017,6 @@ class RoundTouchDisplay:
                 pan_release_to_save=self._long_press_pan.from_long_press,
                 pan_commit_choice=self._pan_commit_choice,
             )
-            lofi_tile.draw(self.surface)
             if FRAME_DEBUG:
                 self._stage("2_radar", time.perf_counter() - _t)
         elif self.screen == SCREEN_FLIGHT:
