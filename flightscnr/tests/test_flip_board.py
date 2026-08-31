@@ -704,3 +704,77 @@ class TestDepartureWithoutAReportedRate(unittest.TestCase):
                 [self._out(1.7, agl, vertical_speed=700)], AIRPORTS, now=t
             )
         self.assertEqual(len(self.tracker.board("KHWD")["departures"]), 1)
+
+
+class TestNoDuplicateMovements(unittest.TestCase):
+    """A rebuilt track must not post the same movement twice.
+
+    The per-track guards cannot survive the track itself being retired. A
+    brief gap in the feed drops it, and the aircraft is still climbing near
+    the field when it returns — which put N29AF on the KHMT board twice and
+    N76VY twice at KF70.
+    """
+
+    def setUp(self):
+        self.tracker = flip_board.FlipBoardTracker()
+
+    def _climb_out(self, t):
+        return plane(
+            plane_latitude=KHWD["lat"] + 1.2 / 60.0,
+            plane_longitude=KHWD["lon"],
+            altitude=KHWD["elevation_ft"] + 600,
+            vertical_speed=700,
+        )
+
+    def test_a_feed_gap_does_not_double_post_a_departure(self):
+        self.tracker.observe([self._climb_out(1000.0)], AIRPORTS, now=1000.0)
+        # Feed drops it long enough to retire the track, then it is back.
+        self.tracker.observe([], AIRPORTS, now=1000.0 + flip_board.GONE_S + 1)
+        self.tracker.observe([self._climb_out(1100.0)], AIRPORTS, now=1100.0)
+        self.assertEqual(len(self.tracker.board("KHWD")["departures"]), 1)
+
+    def test_the_same_aircraft_can_depart_again_much_later(self):
+        self.tracker.observe([self._climb_out(1000.0)], AIRPORTS, now=1000.0)
+        later = 1000.0 + flip_board.REPEAT_WINDOW_S + 60
+        self.tracker.observe([], AIRPORTS, now=later - 100)
+        self.tracker.observe([self._climb_out(later)], AIRPORTS, now=later)
+        self.assertEqual(len(self.tracker.board("KHWD")["departures"]), 2)
+
+    def test_different_aircraft_are_not_deduplicated(self):
+        for tail in ("N11111", "N22222"):
+            self.tracker.observe(
+                [
+                    plane(
+                        icao_hex=f"HEX{tail}",
+                        registration=tail,
+                        plane_latitude=KHWD["lat"] + 1.2 / 60.0,
+                        plane_longitude=KHWD["lon"],
+                        altitude=KHWD["elevation_ft"] + 600,
+                        vertical_speed=700,
+                    )
+                ],
+                AIRPORTS,
+                now=1000.0,
+            )
+        ids = [e["id"] for e in self.tracker.board("KHWD")["departures"]]
+        self.assertEqual(sorted(ids), ["N11111", "N22222"])
+
+    def test_rows_stay_newest_first(self):
+        for i, t in enumerate((1000.0, 3000.0, 5000.0)):
+            self.tracker.observe(
+                [
+                    plane(
+                        icao_hex=f"HEX{i}",
+                        registration=f"N{i}",
+                        plane_latitude=KHWD["lat"] + 1.2 / 60.0,
+                        plane_longitude=KHWD["lon"],
+                        altitude=KHWD["elevation_ft"] + 600,
+                        vertical_speed=700,
+                    )
+                ],
+                AIRPORTS,
+                now=t,
+            )
+        rows = self.tracker.board("KHWD")["departures"]
+        stamps = [e["at"] for e in rows]
+        self.assertEqual(stamps, sorted(stamps, reverse=True))

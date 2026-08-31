@@ -77,6 +77,12 @@ DEPARTURE_CEILING_AGL_FT = 2500
 # so derive one from consecutive altitudes when the field is missing.
 DERIVED_RATE_MIN_FT = 200
 DERIVED_RATE_MAX_GAP_S = 60.0
+# A repeat inside this window means the track was rebuilt mid-movement, not
+# that the aircraft did it again. Sized to the failure it guards: a track is
+# retired after GONE_S of silence and re-acquired moments later, so the
+# duplicate lands about a minute apart. A real circuit takes longer than
+# this, which is what keeps touch-and-go work showing every landing.
+REPEAT_WINDOW_S = 120.0
 # Rows the board keeps per airport per direction.
 MAX_ROWS = 5
 # Forget movements older than this.
@@ -336,9 +342,7 @@ class FlipBoardTracker:
             track["arrived_at"] = ""
             if track.get("departed_from") != ground_at:
                 track["departed_from"] = ground_at
-                new_events.append(
-                    self._record(ground_at, "departures", track, now)
-                )
+                self._emit(new_events, ground_at, "departures", track, now)
             return
 
         # Pending arrival comes from the wider approach window, so a track
@@ -378,9 +382,7 @@ class FlipBoardTracker:
             ):
                 track["departed_from"] = approach_ident
                 track["arriving_at"] = ""
-                new_events.append(
-                    self._record(approach_ident, "departures", track, now)
-                )
+                self._emit(new_events, approach_ident, "departures", track, now)
                 return
 
         if not ident or not low:
@@ -400,7 +402,7 @@ class FlipBoardTracker:
             # guard lifts when it departs, so a touch and go still logs both.
             if track.get("arrived_at") != ident:
                 track["arrived_at"] = ident
-                new_events.append(self._record(ident, "arrivals", track, now))
+                self._emit(new_events, ident, "arrivals", track, now)
             return
 
         if vs >= CLIMB_FPM:
@@ -409,9 +411,7 @@ class FlipBoardTracker:
             track["arriving_at"] = ""
             if track.get("born_at") == ident and track.get("departed_from") != ident:
                 track["departed_from"] = ident
-                new_events.append(
-                    self._record(ident, "departures", track, now)
-                )
+                self._emit(new_events, ident, "departures", track, now)
 
     @staticmethod
     def _derived_rate(track: dict, alt: int, now: float) -> int:
@@ -444,24 +444,50 @@ class FlipBoardTracker:
             ident = str(track.get("arriving_at") or "")
             if ident and track.get("arrived_at") != ident:
                 # Stamp the landing at last contact, not at the timeout.
-                new_events.append(
-                    self._record(ident, "arrivals", track, float(track.get("last") or now))
+                self._emit(
+                    new_events, ident, "arrivals", track,
+                    float(track.get("last") or now),
                 )
             if silent_for >= self.gone_s:
                 del self._tracks[key]
 
+    def _emit(
+        self, events: list, ident: str, bucket: str, track: dict, at: float
+    ) -> None:
+        """Record a movement and report it, unless it was a duplicate."""
+        event = self._record(ident, bucket, track, at)
+        if event is not None:
+            events.append(event)
+
     def _record(
         self, ident: str, bucket: str, track: dict, at: float
-    ) -> dict:
+    ) -> dict | None:
+        """Add a movement, unless the board already has this one.
+
+        The per-track guards cannot survive the track itself being rebuilt.
+        A brief gap in the feed retires a track, and the aircraft is still
+        climbing near the field when it returns — which is how N29AF landed
+        on the KHMT board twice, and N76VY twice at KF70. Deduplicate on the
+        board, where the answer actually lives.
+        """
+        label = str(track.get("label") or "").upper()
+        board = self._boards.setdefault(ident, {"arrivals": [], "departures": []})
+        rows = board.setdefault(bucket, [])
+        for existing in rows:
+            if (
+                str(existing.get("id") or "") == label
+                and abs(float(at) - float(existing.get("at") or 0.0)) <= REPEAT_WINDOW_S
+            ):
+                return None
+
         event = {
-            "id": str(track.get("label") or "").upper(),
+            "id": label,
             "type": str(track.get("type") or ""),
             "at": float(at),
             "ident": ident,
         }
-        board = self._boards.setdefault(ident, {"arrivals": [], "departures": []})
-        rows = board.setdefault(bucket, [])
         rows.insert(0, event)
+        rows.sort(key=lambda e: float(e.get("at") or 0.0), reverse=True)
         del rows[self.max_rows :]
         return dict(event, bucket=bucket)
 
