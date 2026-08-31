@@ -811,9 +811,14 @@ class RoundTouchDisplay:
     _FLIP_BOARD_SAVE_S = 120.0
 
     def _update_flip_board(self, flights: list) -> None:
-        """Fold the current radar snapshot into the arrival / departure board."""
-        if not settings.show_flip_board():
-            return
+        """Fold the current radar snapshot into the arrival / departure board.
+
+        Runs whether or not the board screen is switched on. The Layers
+        toggle gates reaching the screen; gating collection too meant
+        switching the board on gave you an empty one. Measured on the
+        device at 0.47 ms per sample for 25 aircraft over 6 airports, and
+        4.3 ms for 120 over 30, once every four seconds.
+        """
         now = time.time()
         if now - self._flip_board_sampled_at < self._FLIP_BOARD_SAMPLE_S:
             return
