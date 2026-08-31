@@ -53,6 +53,7 @@ from display.round_touch import (
     touch_debug,
     follow_zoom,
     lofi_controls,
+    lofi_tile,
     radial_menu,
     video,
     wildfire_overlay,
@@ -1016,6 +1017,7 @@ class RoundTouchDisplay:
                 pan_release_to_save=self._long_press_pan.from_long_press,
                 pan_commit_choice=self._pan_commit_choice,
             )
+            lofi_tile.draw(self.surface)
             if FRAME_DEBUG:
                 self._stage("2_radar", time.perf_counter() - _t)
         elif self.screen == SCREEN_FLIGHT:
@@ -4590,10 +4592,22 @@ class RoundTouchDisplay:
                             zoom_action := zoom_buttons.hit_button(tap[0], tap[1])
                         ) is not None:
                             self._apply_zoom_button(zoom_action)
+                        elif lofi_tile.is_open():
+                            # While the tile is up it owns the tap: a button
+                            # on it, or anywhere else to dismiss.
+                            button = lofi_tile.hit_button(tap[0], tap[1])
+                            if button is not None:
+                                lofi_tile.apply(button)
+                            else:
+                                lofi_tile.dismiss()
+                            self._safe_draw()
                         elif (
                             lofi_action := lofi_controls.hit_button(tap[0], tap[1])
                         ) is not None:
                             self._apply_lofi_skip(lofi_action)
+                        elif lofi_controls.hit_title(tap[0], tap[1]):
+                            lofi_tile.open_tile()
+                            self._safe_draw()
                         elif self._open_flight_or_fire_at(tap[0], tap[1]):
                             self._safe_draw()
         elif tap and self.screen == SCREEN_FLIGHT:
@@ -6104,6 +6118,8 @@ class RoundTouchDisplay:
 
                         atc_audio.enforce_quiet_hours()
                         lofi_audio.app_tick()
+                        if lofi_tile.tick():
+                            self._safe_draw()
                     except Exception:
                         logger.debug("Audio tick failed", exc_info=True)
                     hourly_chime.tick()
