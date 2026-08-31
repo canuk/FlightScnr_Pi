@@ -828,6 +828,25 @@ def _build_flat_black_background() -> pygame.Surface:
     return _apply_circle_mask(canvas)
 
 
+def _scalable(tile: pygame.Surface) -> pygame.Surface:
+    """A tile smoothscale will accept.
+
+    smoothscale takes 24-bit and 32-bit surfaces only. Tile servers hand back
+    palettised PNGs for the flat styles, which decode to 8-bit. Scaling used
+    to apply to VFR alone, whose tiles are full colour, so the depth never
+    mattered. Covering every style exposed it: the fetch worker raised
+    ValueError and the background was never built.
+
+    convert_alpha needs a live display and this runs on a worker thread, so a
+    plain 32-bit copy is the dependable route.
+    """
+    if tile.get_bitsize() >= 24:
+        return tile
+    out = pygame.Surface(tile.get_size(), pygame.SRCALPHA, 32)
+    out.blit(tile, (0, 0))
+    return out
+
+
 def _build_background(scale_index: int, style: str | None = None) -> pygame.Surface | None:
     try:
         from config import LOCATION_HOME, location_configured
@@ -886,7 +905,9 @@ def _build_background(scale_index: int, style: str | None = None) -> pygame.Surf
             px = center + int(round((tile_px - home_px) * render_scale))
             py = center + int(round((tile_py - home_py) * render_scale))
             if scaled:
-                tile = pygame.transform.smoothscale(tile, (scaled_side, scaled_side))
+                tile = pygame.transform.smoothscale(
+                    _scalable(tile), (scaled_side, scaled_side)
+                )
             canvas.blit(tile, (px, py))
 
     logger.info(
