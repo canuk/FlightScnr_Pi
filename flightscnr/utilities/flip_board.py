@@ -264,6 +264,8 @@ class FlipBoardTracker:
                 "departed_from": "",
                 "arriving_at": "",
                 "arriving_since": 0.0,
+                "ground_at": "",
+                "arrived_at": "",
             }
             self._tracks[key] = track
         track["last"] = now
@@ -273,6 +275,26 @@ class FlipBoardTracker:
         plane = str(flight.get("plane") or "").strip().upper()
         if plane:
             track["type"] = plane
+
+        if on_ground and ident:
+            track["ground_at"] = ident
+
+        ground_at = str(track.get("ground_at") or "")
+        if ground_at and not on_ground and vs >= CLIMB_FPM:
+            # We watched this aircraft sit on the ground at that field and it
+            # is airborne and climbing now, so it took off — record it without
+            # needing to catch the climb inside the box. An airliner is
+            # through 500 ft in seconds, and at KSAN that missed every single
+            # departure while arrivals came through fine.
+            track["ground_at"] = ""
+            track["arriving_at"] = ""
+            track["arrived_at"] = ""
+            if track.get("departed_from") != ground_at:
+                track["departed_from"] = ground_at
+                new_events.append(
+                    self._record(ground_at, "departures", track, now)
+                )
+            return
 
         if not ident or not low:
             # Away from every field, or too high to be in the pattern.
@@ -286,7 +308,12 @@ class FlipBoardTracker:
             track["arriving_at"] = ""
             track["born_at"] = ident
             track["departed_from"] = ""
-            new_events.append(self._record(ident, "arrivals", track, now))
+            # One landing per visit. The ground flag flaps during rollout, and
+            # a Skyhawk at KMYF posted the same arrival twice 11s apart. The
+            # guard lifts when it departs, so a touch and go still logs both.
+            if track.get("arrived_at") != ident:
+                track["arrived_at"] = ident
+                new_events.append(self._record(ident, "arrivals", track, now))
             return
 
         if vs >= CLIMB_FPM:
@@ -313,7 +340,7 @@ class FlipBoardTracker:
             if silent_for < self.gone_s:
                 continue
             ident = str(track.get("arriving_at") or "")
-            if ident:
+            if ident and track.get("arrived_at") != ident:
                 # Stamp the landing at last contact, not at the timeout.
                 new_events.append(
                     self._record(ident, "arrivals", track, float(track.get("last") or now))

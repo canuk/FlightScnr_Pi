@@ -152,6 +152,41 @@ class TestDepartureDetection(unittest.TestCase):
         board = self.tracker.board("KHWD")
         self.assertEqual(len(board["departures"]), 1)
 
+    def test_takeoff_after_sitting_on_the_ground_is_a_departure(self):
+        """The climb is caught above the box: an airliner is through 500 ft in
+        seconds, so a departure must not depend on sampling it in there."""
+        self.tracker.observe(
+            [plane(altitude=0, vertical_speed=0, on_ground=True)],
+            AIRPORTS,
+            now=1000.0,
+        )
+        events = self.tracker.observe(
+            [plane(altitude=3000, vertical_speed=2800)], AIRPORTS, now=1030.0
+        )
+        self.assertEqual([e["bucket"] for e in events], ["departures"])
+        self.assertEqual(events[0]["ident"], "KHWD")
+
+    def test_ground_departure_is_recorded_once(self):
+        self.tracker.observe(
+            [plane(altitude=0, vertical_speed=0, on_ground=True)],
+            AIRPORTS,
+            now=1000.0,
+        )
+        for t, a in ((1030.0, 3000), (1035.0, 5000), (1040.0, 8000)):
+            self.tracker.observe(
+                [plane(altitude=a, vertical_speed=2800)], AIRPORTS, now=t
+            )
+        self.assertEqual(len(self.tracker.board("KHWD")["departures"]), 1)
+
+    def test_a_taxiing_aircraft_is_not_a_departure(self):
+        for t in (1000.0, 1005.0, 1010.0):
+            self.tracker.observe(
+                [plane(altitude=0, vertical_speed=0, on_ground=True)],
+                AIRPORTS,
+                now=t,
+            )
+        self.assertEqual(self.tracker.board("KHWD")["departures"], [])
+
     def test_a_climbing_overflight_is_not_a_departure(self):
         # First heard far away and high, then passes over the field climbing.
         far = plane(
@@ -275,6 +310,51 @@ class TestArrivalDetection(unittest.TestCase):
                 now=t,
             )
         self.assertEqual(len(self.tracker.board("KHWD")["arrivals"]), 1)
+
+    def test_a_flapping_ground_flag_records_one_arrival(self):
+        """Regression from live KSAN data: a Skyhawk at KMYF logged the same
+        arrival twice 11s apart because the ground flag dropped and returned
+        during rollout."""
+        self.tracker.observe(
+            [plane(altitude=300, vertical_speed=-600)], AIRPORTS, now=1000.0
+        )
+        self.tracker.observe(
+            [plane(altitude=0, vertical_speed=0, on_ground=True)],
+            AIRPORTS,
+            now=1010.0,
+        )
+        # Feed briefly says airborne and still descending, then ground again.
+        self.tracker.observe(
+            [plane(altitude=100, vertical_speed=-600)], AIRPORTS, now=1015.0
+        )
+        self.tracker.observe(
+            [plane(altitude=0, vertical_speed=0, on_ground=True)],
+            AIRPORTS,
+            now=1021.0,
+        )
+        self.assertEqual(len(self.tracker.board("KHWD")["arrivals"]), 1)
+
+    def test_a_touch_and_go_logs_both_circuits(self):
+        """The once-per-visit guard must lift on departure, or a second
+        landing in the pattern goes unrecorded."""
+        def land(t):
+            self.tracker.observe(
+                [plane(altitude=300, vertical_speed=-600)], AIRPORTS, now=t
+            )
+            self.tracker.observe(
+                [plane(altitude=0, vertical_speed=0, on_ground=True)],
+                AIRPORTS,
+                now=t + 10,
+            )
+
+        land(1000.0)
+        self.tracker.observe(
+            [plane(altitude=900, vertical_speed=700)], AIRPORTS, now=1030.0
+        )
+        land(1200.0)
+        board = self.tracker.board("KHWD")
+        self.assertEqual(len(board["arrivals"]), 2)
+        self.assertEqual(len(board["departures"]), 1)
 
     def test_landing_then_departing_records_both(self):
         """Regression: a later takeoff used to cancel the pending arrival, so
