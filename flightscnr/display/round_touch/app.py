@@ -4595,6 +4595,10 @@ class RoundTouchDisplay:
                             # While the tile is up it owns the tap: a button
                             # on it, or anywhere else to dismiss.
                             button = lofi_tile.hit_button(tap[0], tap[1])
+                            logger.info(
+                                "lofi tile tap (%s,%s) button=%s hits=%s",
+                                tap[0], tap[1], button, dict(lofi_tile._hits),
+                            )
                             if button is not None:
                                 lofi_tile.apply(button)
                             else:

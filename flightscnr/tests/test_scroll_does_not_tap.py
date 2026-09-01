@@ -208,3 +208,51 @@ class TestTheHighlightOnlyMeansPressed:
 
         source = inspect.getsource(info.draw_atc_picker)
         assert "_CARD_FILL_FOCUS" in source, "picker selection was removed too"
+
+
+class TestPanelJitterIsNotAScroll:
+    """A still finger on a noisy panel must still tap.
+
+    The deadzone counted the sum of every vertical step. A panel reporting
+    small oscillations reached it without the finger going anywhere, so a
+    press on a button was discarded as a scroll. It now measures how far
+    the finger travelled from where it landed.
+    """
+
+    def _jitter(self, steps, amplitude):
+        points = [(300, 400)]
+        for i in range(steps):
+            points.append((300, 400 + (amplitude if i % 2 == 0 else -amplitude)))
+        points.append((300, 400))
+        return points
+
+    def test_a_still_press_with_jitter_still_taps(self):
+        touch = input_handler.TouchInput()
+        _drag(touch, self._jitter(steps=20, amplitude=3))
+        assert touch.consume_tap() is not None, "jitter was read as a scroll"
+
+    def test_even_heavy_jitter_still_taps(self):
+        touch = input_handler.TouchInput()
+        _drag(touch, self._jitter(steps=40, amplitude=5))
+        assert touch.consume_tap() is not None
+
+    def test_the_summed_travel_would_have_exceeded_the_deadzone(self):
+        """Guard the premise: the old measure would have suppressed these."""
+        total = sum(
+            abs(b[1] - a[1])
+            for a, b in zip(self._jitter(20, 3), self._jitter(20, 3)[1:])
+        )
+        assert total > input_handler.scroll_tap_deadzone_px()
+
+    def test_a_real_scroll_is_still_caught(self):
+        """Travel away from the press point, not oscillation around it."""
+        touch = input_handler.TouchInput()
+        _slow_drag(touch, 300, 400, dy=-(input_handler.scroll_tap_deadzone_px() + 6))
+        assert touch.consume_tap() is None
+
+    def test_a_scroll_that_returns_to_its_start_is_still_a_scroll(self):
+        """The finger went somewhere and came back; that is not a tap."""
+        touch = input_handler.TouchInput()
+        far = input_handler.scroll_tap_deadzone_px() + 15
+        _drag(touch, [(300, 400), (300, 400 - far), (300, 400)])
+        assert touch.consume_tap() is None

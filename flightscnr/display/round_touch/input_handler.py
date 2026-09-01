@@ -165,14 +165,18 @@ class TouchInput:
         dist = math.hypot(pos[0] - sx, pos[1] - sy)
         self._max_dist = max(self._max_dist, dist)
         self._drag_end = pos
+        if self._max_dist < _gesture_threshold_px():
+            # Furthest the finger got from where it landed, recorded on every
+            # sample. Summing each step let a noisy panel reach the deadzone
+            # without the finger going anywhere, which discarded taps on a
+            # still press; skipping the first sample lost a drag that came
+            # back to its origin.
+            self._scrolled_px = max(self._scrolled_px, abs(pos[1] - sy))
         if self._last_motion is not None and self._max_dist < _gesture_threshold_px():
             dx = pos[0] - self._last_motion[0]
             dy = pos[1] - self._last_motion[1]
             if abs(dy) >= abs(dx):
                 self._pending_scroll_dy += dy
-                # Remember that this gesture moved a list, so the release
-                # does not also count as a tap on whatever is underneath.
-                self._scrolled_px += abs(dy)
         self._last_motion = pos
 
     def _register_swipe(self, dx: float, dy: float):

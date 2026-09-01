@@ -457,12 +457,13 @@ class CrossfadeScheduler:
         otherwise count toward the current track, so the bed would fade, or
         jump several tracks, the moment it resumed.
         """
-        if self._paused_at is None:
-            return
-        held = self._clock() - self._paused_at
-        self._paused_at = None
-        if self._started_at is not None:
-            self._started_at += held
+        if self._paused_at is not None:
+            held = self._clock() - self._paused_at
+            self._paused_at = None
+            if self._started_at is not None:
+                self._started_at += held
+        # Unconditional: returning early when this scheduler holds no pause
+        # of its own left a player paused with nothing able to start it.
         self._set_players_paused(False)
 
     def _set_players_paused(self, paused: bool) -> None:
@@ -685,16 +686,18 @@ def pause() -> None:
     _paused = True
     if _scheduler is not None:
         _scheduler.pause()
+    logger.info("[Lofi] pause (scheduler=%s)", _scheduler is not None)
 
 
 def resume() -> None:
     """Start the bed again from where it stopped."""
     global _paused
-    if not _paused:
-        return
+    was_paused = _paused
     _paused = False
     if _scheduler is not None:
         _scheduler.resume()
+    logger.info("[Lofi] resume (was_paused=%s scheduler=%s)",
+                was_paused, _scheduler is not None)
 
 
 def toggle_pause() -> bool:
