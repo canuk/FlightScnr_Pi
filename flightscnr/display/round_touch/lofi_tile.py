@@ -60,12 +60,20 @@ def open_tile(track_name: str | None = None) -> None:
 
     _track = track_name or lofi_audio.current_track_filename()
     if not _track:
-        if not lofi_audio.is_paused():
+        if not lofi_audio.is_paused() and not lofi_audio.playback_block():
             return
-        # Held with nothing to name it: still open, so play stays reachable.
+        # Held, or blocked with nothing to name: open anyway, so play stays
+        # reachable and the reason has somewhere to appear.
         _track = ""
     _open = True
     _opened_at = time.monotonic()
+
+
+def blocked_reason() -> str | None:
+    """Why the bed cannot start, or None when play is available."""
+    from utilities import lofi_audio
+
+    return lofi_audio.playback_block()
 
 
 def is_open() -> bool:
@@ -128,6 +136,9 @@ def apply(action: str) -> None:
     from utilities import lofi_audio
 
     if action == BUTTON_PLAY:
+        if lofi_audio.playback_block():
+            # Nothing to start; the tile should not be offering this.
+            return
         lofi_audio.toggle_pause()
         note_activity()
         return
@@ -183,6 +194,7 @@ def _play_glyph(size: int, color, paused: bool) -> pygame.Surface:
 def _slash_glyph(size: int, color) -> pygame.Surface:
     """A circle with a bar through it: this track is out."""
     icon = pygame.Surface((size, size), pygame.SRCALPHA)
+
     width = max(2, int(size * 0.1))
     radius = int(size * 0.36)
     centre = (size // 2, size // 2)
@@ -209,16 +221,38 @@ def draw(surface: pygame.Surface) -> pygame.Rect | None:
     name_font = draw_mod.load_font(theme.s(13), bold=True)
     label_font = draw_mod.load_font(max(8, theme.s(9)), bold=True)
 
-    name = display_name(_track) or "Paused"
+    block = blocked_reason()
+    name = display_name(_track) or ("Lofi" if block else "Paused")
     pad = theme.s(12)
     gap = theme.s(10)
     button = theme.s(44)
 
     name_text = draw_mod.fit_text(name, name_font, theme.s(210))
     name_img = name_font.render(name_text, True, theme.LABEL)
-    width = max(theme.s(190), name_img.get_width() + pad * 2, button * 2 + gap + pad * 2)
+    note = block or "Undo in the web portal"
+
+    buttons = []
+    if not block:
+        buttons.append(
+            (BUTTON_PLAY, _play_glyph(button, theme.LABEL, paused),
+             "PLAY" if paused else "PAUSE", theme.MUTED)
+        )
+    # "Disable" read like an on/off switch. This drops the track for good,
+    # and only the web portal puts it back.
+    buttons.append(
+        (BUTTON_DISABLE, _slash_glyph(button, _DANGER), "NEVER PLAY", _DANGER)
+    )
+    buttons = tuple(buttons)
+
+    width = max(
+        theme.s(190),
+        name_img.get_width() + pad * 2,
+        label_font.size(note)[0] + pad * 2,
+        button * len(buttons) + gap * (len(buttons) - 1) + pad * 2,
+    )
     height = (
-        pad + name_img.get_height() + theme.s(10)
+        pad + name_img.get_height() + theme.s(2)
+        + label_font.get_height() + theme.s(8)
         + button + theme.s(4) + label_font.get_height() + pad
     )
 
@@ -232,14 +266,12 @@ def draw(surface: pygame.Surface) -> pygame.Rect | None:
 
     y = pad
     panel.blit(name_img, ((width - name_img.get_width()) // 2, y))
-    y += name_img.get_height() + theme.s(10)
+    y += name_img.get_height() + theme.s(2)
+    note_img = label_font.render(note, True, theme.HINT)
+    panel.blit(note_img, ((width - note_img.get_width()) // 2, y))
+    y += note_img.get_height() + theme.s(8)
 
     rect = panel.get_rect(center=(theme.CENTER_X, theme.CENTER_Y))
-    buttons = (
-        (BUTTON_PLAY, _play_glyph(button, theme.LABEL, paused),
-         "PLAY" if paused else "PAUSE", theme.MUTED),
-        (BUTTON_DISABLE, _slash_glyph(button, _DANGER), "DISABLE", _DANGER),
-    )
     total = button * len(buttons) + gap * (len(buttons) - 1)
     bx = (width - total) // 2
     for action, glyph, label, ink in buttons:

@@ -757,6 +757,33 @@ def remember_track(name: str | None) -> None:
         _last_track_name = str(name)
 
 
+def playback_block() -> str | None:
+    """Why the bed cannot play right now, or None when it can.
+
+    The bed runs under the ATC stream and stops with it, so quiet hours
+    silence it by design. The tile used to offer a play button anyway: it
+    cleared the pause and nothing happened, because tick() tears the
+    scheduler down whenever ATC is off.
+    """
+    try:
+        from display.round_touch import settings
+
+        if not settings.lofi_enabled():
+            return "Lofi is switched off"
+
+        from utilities import atc_audio
+
+        if settings.atc_quiet_hours_enabled() and atc_audio.in_quiet_hours():
+            end = str(settings.atc_quiet_end() or "").strip()
+            return f"Quiet hours until {end}" if end else "Quiet hours"
+        if not atc_audio.is_playing():
+            return "Plays under ATC audio"
+    except Exception:
+        logger.debug("[Lofi] block check failed", exc_info=True)
+        return None
+    return None
+
+
 def current_track_filename() -> str | None:
     """Filename of the playing track, as the disabled store records it.
 
