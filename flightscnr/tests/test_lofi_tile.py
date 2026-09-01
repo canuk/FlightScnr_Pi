@@ -40,6 +40,7 @@ from utilities import lofi_audio  # noqa: E402
 TRACK = "Attic Light.mp3"
 # Captured before the autouse fixture stubs it out.
 _REAL_CURRENT_TRACK = lofi_audio.current_track_filename
+_REAL_PLAYBACK_BLOCK = lofi_audio.playback_block
 
 
 @pytest.fixture(autouse=True)
@@ -47,6 +48,9 @@ def closed(monkeypatch):
     lofi_tile._reset_for_tests()
     lofi_audio._reset_pause_for_tests()
     monkeypatch.setattr(lofi_audio, "current_track_filename", lambda: TRACK)
+    # Baseline for most tests: the bed is able to play. Quiet hours and the
+    # other blocks are exercised in TestWhenTheBedCannotPlay.
+    monkeypatch.setattr(lofi_audio, "playback_block", lambda: None)
     yield
     lofi_tile._reset_for_tests()
     lofi_audio._reset_pause_for_tests()
@@ -460,3 +464,95 @@ class TestTheRememberedTrack:
         lofi_audio.remember_track("Old.mp3")
         monkeypatch.setattr(lofi_audio, "_scheduler", Sched())
         assert _REAL_CURRENT_TRACK() == "Now Playing.mp3"
+
+
+class TestWhenTheBedCannotPlay:
+    """The bed plays only under ATC, so quiet hours silence it by design.
+
+    The tile offered a PLAY button anyway. It cleared the pause and nothing
+    happened, because the scheduler is torn down whenever ATC is off. A
+    control that cannot work should say why instead of pretending.
+    """
+
+    def _blocked(self, monkeypatch, reason="Quiet hours until 08:00"):
+        monkeypatch.setattr(lofi_audio, "playback_block", lambda: reason)
+
+    def test_it_names_the_reason(self, monkeypatch):
+        self._blocked(monkeypatch)
+        lofi_tile.open_tile()
+        assert lofi_tile.draw(_surface()) is not None
+        assert lofi_tile.blocked_reason() == "Quiet hours until 08:00"
+
+    def test_play_is_not_offered(self, monkeypatch):
+        self._blocked(monkeypatch)
+        lofi_tile.open_tile()
+        lofi_tile.draw(_surface())
+        assert lofi_tile.BUTTON_PLAY not in lofi_tile._hits
+
+    def test_disable_is_still_offered(self, monkeypatch):
+        """Dropping a track you dislike does not need the bed running."""
+        self._blocked(monkeypatch)
+        lofi_tile.open_tile()
+        lofi_tile.draw(_surface())
+        assert lofi_tile.BUTTON_DISABLE in lofi_tile._hits
+
+    def test_play_does_nothing_if_it_is_somehow_pressed(self, monkeypatch):
+        self._blocked(monkeypatch)
+        lofi_audio.pause()
+        lofi_tile.open_tile()
+        lofi_tile.apply(lofi_tile.BUTTON_PLAY)
+        assert lofi_audio.is_paused() is True, "unpaused a bed that cannot run"
+
+    def test_it_opens_with_no_track_at_all(self, monkeypatch):
+        """Quiet hours stop the bed, so there is no track to name."""
+        self._blocked(monkeypatch)
+        monkeypatch.setattr(lofi_audio, "current_track_filename", lambda: None)
+        lofi_tile.open_tile()
+        assert lofi_tile.is_open()
+
+    def test_both_buttons_return_once_it_can_play(self, monkeypatch):
+        monkeypatch.setattr(lofi_audio, "playback_block", lambda: None)
+        lofi_tile.open_tile()
+        lofi_tile.draw(_surface())
+        assert set(lofi_tile._hits) == {
+            lofi_tile.BUTTON_PLAY,
+            lofi_tile.BUTTON_DISABLE,
+        }
+
+
+class TestWhyTheBedIsHeld:
+    def test_quiet_hours_is_named(self, monkeypatch):
+        from display.round_touch import settings
+        from utilities import atc_audio
+
+        monkeypatch.setattr(settings, "lofi_enabled", lambda: True)
+        monkeypatch.setattr(settings, "atc_quiet_hours_enabled", lambda: True)
+        monkeypatch.setattr(settings, "atc_quiet_end", lambda: "08:00")
+        monkeypatch.setattr(atc_audio, "in_quiet_hours", lambda: True)
+        assert "08:00" in _REAL_PLAYBACK_BLOCK()
+
+    def test_atc_being_off_is_named(self, monkeypatch):
+        from display.round_touch import settings
+        from utilities import atc_audio
+
+        monkeypatch.setattr(settings, "lofi_enabled", lambda: True)
+        monkeypatch.setattr(settings, "atc_quiet_hours_enabled", lambda: False)
+        monkeypatch.setattr(atc_audio, "in_quiet_hours", lambda: False)
+        monkeypatch.setattr(atc_audio, "is_playing", lambda: False)
+        assert _REAL_PLAYBACK_BLOCK()
+
+    def test_nothing_blocks_a_running_bed(self, monkeypatch):
+        from display.round_touch import settings
+        from utilities import atc_audio
+
+        monkeypatch.setattr(settings, "lofi_enabled", lambda: True)
+        monkeypatch.setattr(settings, "atc_quiet_hours_enabled", lambda: False)
+        monkeypatch.setattr(atc_audio, "in_quiet_hours", lambda: False)
+        monkeypatch.setattr(atc_audio, "is_playing", lambda: True)
+        assert _REAL_PLAYBACK_BLOCK() is None
+
+    def test_lofi_switched_off_is_named(self, monkeypatch):
+        from display.round_touch import settings
+
+        monkeypatch.setattr(settings, "lofi_enabled", lambda: False)
+        assert _REAL_PLAYBACK_BLOCK()
