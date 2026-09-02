@@ -114,3 +114,23 @@ def test_an_unwritable_directory_does_not_raise(monkeypatch, tmp_path):
     monkeypatch.setitem(weather_data._CACHE, "payload", PAYLOAD)
 
     weather_data._save_cache()
+
+
+def test_invalidate_drops_the_disk_copy(monkeypatch, tmp_path):
+    """Recenter / unit change must not restore the old reading after restart."""
+    _use_tmp(monkeypatch, tmp_path)
+    path = tmp_path / "weather_cache.json"
+    path.write_text(json.dumps({"ts": time.time(), "payload": PAYLOAD}))
+    monkeypatch.setitem(weather_data._CACHE, "payload", PAYLOAD)
+
+    weather_data.invalidate_cache()
+
+    assert weather_data._CACHE["payload"] is None
+    assert not path.exists()
+    weather_data._load_cache()
+    assert weather_data._CACHE["payload"] is None
+
+
+def test_invalidate_tolerates_a_missing_file(monkeypatch, tmp_path):
+    _use_tmp(monkeypatch, tmp_path)
+    weather_data.invalidate_cache()

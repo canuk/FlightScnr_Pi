@@ -29,7 +29,28 @@ os.environ.setdefault("HOME_LAT", "32.7157")
 os.environ.setdefault("HOME_LON", "-117.1611")
 os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
 
+import pytest  # noqa: E402
+
 from display.round_touch import settings  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def own_settings_file(tmp_path, monkeypatch):
+    """Point settings at a file this test owns.
+
+    These cases are about what a save writes, so sharing the session-wide
+    settings path made them depend on every other suite that touches it —
+    one of which removes the file, and the failure then reads as a bug in the
+    code under test rather than in the test's own setup.
+    """
+    path = tmp_path / "round_touch_settings.json"
+    monkeypatch.setattr(settings, "DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(settings, "SETTINGS_PATH", str(path))
+    monkeypatch.setattr(settings, "_state", settings._fresh_state())
+    monkeypatch.setattr(settings, "_settings_mtime", None)
+    monkeypatch.setattr(settings, "_disk_synced", True)
+    settings._save(settings._state)
+    yield
 
 
 def _disk() -> dict:

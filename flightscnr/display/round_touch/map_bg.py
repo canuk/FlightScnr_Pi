@@ -121,7 +121,9 @@ VFR_TILE_WORKERS = 4
 CACHE_TTL_S = 7 * 24 * 3600
 # Bump when map tint/placement/styles change, or when tile auth changes so
 # watermarked/unauthorized cached PNGs are not kept after an upgrade.
-CACHE_STYLE_VERSION = 23
+# 24: dark/light bands now resize to ring scale (#187). Old unscaled caches
+# would leave aircraft off the roads until the 7-day TTL expired.
+CACHE_STYLE_VERSION = 24
 
 
 _lock = threading.Lock()

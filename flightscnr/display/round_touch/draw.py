@@ -475,6 +475,7 @@ def invalidate_background_texture() -> None:
     global _texture_bg, _texture_bg_size
     _texture_bg = None
     _texture_bg_size = 0
+    _invalidate_background_cache()
 
 
 _composite_bg = None

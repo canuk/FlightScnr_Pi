@@ -117,6 +117,13 @@ class TestTheBackgroundIsCompositedOnce:
         draw._invalidate_background_cache()
         assert draw._composited_bg_surface() is not before
 
+    def test_the_public_invalidate_drops_the_composite_too(self):
+        """Toggle / theme-size callers use invalidate_background_texture, not the helper."""
+        draw.fill_background_textured(_blank())
+        before = draw._composited_bg_surface()
+        draw.invalidate_background_texture()
+        assert draw._composited_bg_surface() is not before
+
 
 class TestTheArcTrackIsCached:
     COLOR = (200, 200, 200, 180)

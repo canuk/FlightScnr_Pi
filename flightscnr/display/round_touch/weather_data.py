@@ -580,9 +580,21 @@ def tick_scheduled_refresh(
     return True
 
 
+def _drop_disk_cache() -> None:
+    """Remove the restart snapshot. Recenter / unit changes must not restore
+    the old reading after the next process start."""
+    try:
+        os.remove(CACHE_PATH)
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        logger.debug("Could not remove weather cache: %s", exc)
+
+
 def invalidate_cache() -> None:
     global _CACHE
     _CACHE = {"ts": 0.0, "payload": None, "date": None}
+    _drop_disk_cache()
     try:
         from utilities.air_quality import invalidate_cache as invalidate_aqi
 
